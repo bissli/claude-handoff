@@ -4236,6 +4236,13 @@ def _verb_supersede(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) 
     if not old_id or not new_id or old_id[0] != new_id[0]:
         print(f'hq supersede: ids must share a prefix ({old_id!r} vs {new_id!r})')
         return 1
+    # An id superseded by itself leaves no id now current for hq standing
+    # to name, and drops the item from the block with nothing replacing it.
+    if old_id == new_id:
+        print(
+            f'hq supersede: {old_id} cannot supersede itself'
+            ' - name the item that replaces it, or hq note one first')
+        return 1
     standing_path = folder / 'standing.md'
     text = standing_path.read_text(encoding='utf-8') if standing_path.exists() else ''
     items, _ = _parse_standing(text)
@@ -5128,8 +5135,12 @@ def _verb_standing(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -
     Notes
     -----
     - The block renders a decision or a dead end by its headline alone;
-      the id form is where its body is read, a superseded item carrying
-      its successor and the cycle that superseded it.
+      the id form is where its body is read.
+    - A superseded item names the id now current and the cycle that
+      made it current, never the first hop out of a chain whose own
+      successor was superseded later.
+    - The id form adds the whole chain, ``old -> mid -> current``,
+      once it runs past one hop.
     """
     standing_path = folder / 'standing.md'
     text = standing_path.read_text(encoding='utf-8') if standing_path.exists() else ''
@@ -5139,6 +5150,23 @@ def _verb_standing(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -
         for m in re.finditer(
             r'^\s*- \(c(\d+)\)\s+([dcx]\d+)\s*->\s*([dcx]\d+)', text, re.MULTILINE)
         }
+    # Notes:
+    # - A successor can itself be superseded, so the id now current
+    #   sits at the end of the walk and not one hop along it.
+    # - standing.md is append-only and hand-editable, so the seen set
+    #   stops a cycle in the edges from looping here.
+    chains: dict[str, list[str]] = {}
+    for start in successors:
+        chain = [start]
+        seen = {start}
+        while chain[-1] in successors:
+            next_id = successors[chain[-1]][0]
+            if next_id in seen:
+                break
+            seen.add(next_id)
+            chain.append(next_id)
+        if len(chain) > 1:
+            chains[start] = chain
     show_all = getattr(argv, 'all', False)
     wanted = list(getattr(argv, 'ids', None) or [])
     by_id = {item['id']: item for item in items}
@@ -5153,14 +5181,16 @@ def _verb_standing(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -
         if wanted:
             if item['id'] not in wanted:
                 continue
-            sup = ''
-            if item['id'] in successors:
-                new_id, cycle = successors[item['id']]
-                sup = f' [superseded by {new_id} in c{cycle}]'
-        elif show_all or item['id'] not in superseded_ids:
-            sup = ' [superseded]' if item['id'] in superseded_ids else ''
-        else:
+        elif not show_all and item['id'] in superseded_ids:
             continue
+        sup = ''
+        chain = chains.get(item['id'])
+        if chain:
+            cycle = successors[chain[-2]][1]
+            hops = f' - {" -> ".join(chain)}' if wanted and len(chain) > 2 else ''
+            sup = f' [superseded by {chain[-1]} in c{cycle}{hops}]'
+        elif item['id'] in superseded_ids:
+            sup = ' [superseded]'
         print(f'[{item["id"]}] (c{item["cycle"]}) **{item["headline"]}** {item["body"]}{sup}')
     return rc
 
@@ -5513,8 +5543,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
     _standing_epilog = (
         'Every unsuperseded item in full; --all adds the superseded ones.\n'
-        'With ids, the named items in full, a superseded one with its\n'
-        'successor - [d18] ... [superseded by d21 in c5]; an id not in\n'
+        'With ids, the named items in full. A superseded item names the id\n'
+        'now current and the cycle that made it current, following the\n'
+        'old -> new lines to the end of the chain: [d18] ... [superseded by\n'
+        'd21 in c5]. Past one hop the id form adds the chain itself:\n'
+        '[superseded by d21 in c5 - d18 -> d20 -> d21]. An id not in\n'
         'standing.md prints hq standing: <id> not in standing.md and exits 1.'
     )
     st = sub.add_parser(

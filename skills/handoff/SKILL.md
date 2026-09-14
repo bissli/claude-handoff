@@ -502,7 +502,7 @@ cycles expands it, `--full` all; no output means identical.
 `hq artifacts <slug>`: every live row plus unstamped files.
 `hq standing <slug>`: every unsuperseded item in full; `--all` adds
 the superseded ones; `<id> [<id> ...]` prints the named items, a
-superseded one with its successor.
+superseded one with the current id.
 
 ## The hooks
 

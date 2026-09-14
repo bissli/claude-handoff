@@ -624,6 +624,33 @@ def test_supersede_prints_the_item_it_drops_from_the_block(tmp_path, monkeypatch
     assert out.split(': ', 1)[1].rstrip('\n') == stored[2:]
 
 
+def test_supersede_refuses_an_id_that_would_supersede_itself(tmp_path, monkeypatch):
+    """An id cannot supersede itself, and nothing is appended when it tries.
+
+    Mutation: the self-edge accepted, so standing.md gains d01 -> d01 and
+    hq standing can name no id now current for d01; or the guard widened
+    to refuse two distinct ids of one kind.
+    Oracle: standing.md read back - one item line and no supersession
+    line after the refusal, while d01 -> d02 still appends its line.
+    """
+    folder = _root(tmp_path, monkeypatch)
+    _run(['begin', _SLUG])
+    _run(['note', _SLUG, 'decision', '--headline', 'Ship order fixed',
+          'Release the parser first.'])
+    _run(['note', _SLUG, 'decision', '--headline', 'Ship order reversed',
+          'Release the sweeper first.'])
+    rc, out, _ = _run(['supersede', _SLUG, 'd01', 'd01'])
+    assert rc == 1
+    assert out.splitlines() == [
+        ('hq supersede: d01 cannot supersede itself'
+         ' - name the item that replaces it, or hq note one first')]
+    lines = (folder / 'standing.md').read_text().splitlines()
+    assert [ln for ln in lines if ln.startswith('- (c')] == []
+    assert _run(['supersede', _SLUG, 'd01', 'd02'])[0] == 0
+    lines = (folder / 'standing.md').read_text().splitlines()
+    assert [ln for ln in lines if ln.startswith('- (c')] == ['- (c1) d01 -> d02']
+
+
 def test_open_names_a_folder_path_under_another_directory(tmp_path, monkeypatch):
     """Open names cursor and standing text placing the folder under an old dir.
 

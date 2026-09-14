@@ -9,6 +9,7 @@ artifacts, and standing.
 import io
 import os
 import pathlib
+import signal
 
 import pytest
 from scripts import hq
@@ -575,10 +576,114 @@ def test_standing_all_marks_the_superseded_item(tmp_path, monkeypatch, capsys):
     assert hq.main(['standing', _SLUG, '--all']) == 0
     lines = capsys.readouterr().out.splitlines()
     assert [ln for ln in lines if ln.startswith('[d01]')][0].endswith(
-        ' [superseded]')
+        ' [superseded by d02 in c1]')
     assert [ln for ln in lines if ln.startswith('[d02]')][0].endswith('Second.')
     assert hq.main(['standing', _SLUG]) == 0
     assert '[d01]' not in capsys.readouterr().out
+
+
+def _chain_of_three(tmp_path, monkeypatch):
+    """Build a d01 -> d02 -> d03 supersession chain and return the folder."""
+    folder = _root(tmp_path, monkeypatch)
+    hq.main(['begin', _SLUG])
+    for headline, body in (
+        ('Store totals per region', 'First.'),
+        ('Store totals per city', 'Second.'),
+        ('Store totals per block', 'Third.'),
+    ):
+        hq.main(['note', _SLUG, 'decision', '--headline', headline, body])
+    hq.main(['supersede', _SLUG, 'd01', 'd02'])
+    # The second edge lands in a later cycle than the first, so an
+    # assertion on the cycle number tells the edge that made d03
+    # current from the edge that opened the chain.
+    monkeypatch.setenv('HQ_CYCLE', '2')
+    hq.main(['supersede', _SLUG, 'd02', 'd03'])
+    return folder
+
+
+def test_standing_id_names_the_end_of_the_chain(tmp_path, monkeypatch, capsys):
+    """A lookup past one hop names the id now current and every hop to it.
+
+    Mutation: stopping the walk at the first edge, so d01 reports d02 -
+    itself superseded - as current; or the cycle read off the first
+    edge rather than off the edge that made d03 current.
+    Oracle: a hand-built d01 -> d02 -> d03 chain whose second edge lands
+    in c2, where the lookup of d01 must name d03 in c2 and spell the
+    chain d01 -> d02 -> d03.
+    """
+    _chain_of_three(tmp_path, monkeypatch)
+    capsys.readouterr()
+    assert hq.main(['standing', _SLUG, 'd01']) == 0
+    line = capsys.readouterr().out.splitlines()[0]
+    assert line.endswith(' [superseded by d03 in c2 - d01 -> d02 -> d03]')
+
+
+def test_standing_id_leaves_the_end_of_the_chain_live(tmp_path, monkeypatch, capsys):
+    """The id at the end of the chain reports no successor of its own.
+
+    Mutation: following an edge backwards, so a lookup of d03 reports
+    itself superseded by d01 or d02.
+    Oracle: the same d01 -> d02 -> d03 chain - d03 carries no marker, and
+    the default listing shows d03 and neither of the other two.
+    """
+    _chain_of_three(tmp_path, monkeypatch)
+    capsys.readouterr()
+    assert hq.main(['standing', _SLUG, 'd03']) == 0
+    assert 'superseded' not in capsys.readouterr().out
+    assert hq.main(['standing', _SLUG]) == 0
+    ids = [ln[:5] for ln in capsys.readouterr().out.splitlines()]
+    assert ids == ['[d03]']
+
+
+def test_standing_all_names_the_end_of_the_chain(tmp_path, monkeypatch, capsys):
+    """Every superseded item in the listing names the id now current.
+
+    Mutation: the listing printing a bare [superseded] with no id, or
+    naming each item's own first hop, so d01 points at the dead d02.
+    Oracle: the same d01 -> d02 -> d03 chain - both d01 and d02 name d03,
+    and the listing spells no chain.
+    """
+    _chain_of_three(tmp_path, monkeypatch)
+    capsys.readouterr()
+    assert hq.main(['standing', _SLUG, '--all']) == 0
+    marked = {
+        ln[:5]: ln[ln.rindex(' ['):] for ln in capsys.readouterr().out.splitlines()
+        if ln.endswith(']')
+        }
+    assert marked['[d01]'] == ' [superseded by d03 in c2]'
+    assert marked['[d02]'] == ' [superseded by d03 in c2]'
+
+
+def test_standing_chain_that_loops_back_stops(tmp_path, monkeypatch, capsys):
+    """A cycle in the hand-written edges ends the walk instead of looping.
+
+    Mutation: dropping the seen-set guard, so d01 -> d02 -> d01 walks
+    forever; or adding the repeated id before the guard reads it, so the
+    printed chain doubles back to d01.
+    Oracle: a hand-written standing.md whose edges form a cycle - the walk
+    ends at d02 under a 2-second alarm.
+    """
+    folder = _root(tmp_path, monkeypatch)
+    hq.main(['begin', _SLUG])
+    (folder / 'standing.md').write_text(
+        '- [d01] (c1) **Store totals per region** First.\n'
+        '- [d02] (c1) **Store totals per city** Second.\n'
+        '- (c1) d01 -> d02\n'
+        '- (c2) d02 -> d01\n',
+        encoding='utf-8')
+    capsys.readouterr()
+
+    def _alarm(signum, frame):
+        raise TimeoutError('standing timed out - the seen-set guard is gone')
+
+    signal.signal(signal.SIGALRM, _alarm)
+    signal.alarm(2)
+    try:
+        assert hq.main(['standing', _SLUG, 'd01']) == 0
+    finally:
+        signal.alarm(0)
+    line = capsys.readouterr().out.splitlines()[0]
+    assert line.endswith(' [superseded by d02 in c1]')
 
 
 # --- item 13: the diff cap --------------------------------------------
