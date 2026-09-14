@@ -122,13 +122,13 @@ s<n> for the heading numbered <n>.
   Title') is named by that id - F65, f65, or sF65 - and F7 never
   lands on '## 7. Seven'; a longer word such as 'Log4j:' is title
   text.
-- In the rendered read block, SPEC.md:11-13  (320 tok) is where the
-  anchor resolves today and what the span costs; a row with no
-  anchor, which only an older cycle can leave, shows (N lines, T tok)
-  and the whole file is the read; SPEC.md:? means the anchor matches
-  no heading - read the whole file, then re-stamp with a --where that
-  resolves and re-run hq open. A ? that survives means the anchor is
-  still wrong.""",
+- In the rendered read block, .handoff/<slug>/SPEC.md:11-13
+  (320 tok) is where the anchor resolves today and what the span
+  costs; a row with no anchor, which only an older cycle can leave,
+  shows (N lines, T tok) and the whole file is the read; a :? in
+  place of the span means the anchor matches no heading - read the
+  whole file, then re-stamp with a --where that resolves and re-run
+  hq open. A ? that survives means the anchor is still wrong.""",
     'kinds': """\
 hq help kinds - how stamp infers kind and read_before
 
@@ -200,18 +200,25 @@ read_before is a tier - when the file is loaded, and what belongs there:
   read_before=never reason=deferred so the file reappears in the next
   work list; it is refused for a spec or draft.
 - Read first block: one line per live always row with the size of
-  what hq read prints - specs/SPEC.md:11-13  (320 tok)  label for an
-  anchored row, notes/x.md  (186 lines, 8.2k tok)  label for a whole
-  file an older cycle left; a file that is not UTF-8 text shows bytes,
-  (35 KB), and a directory (N files). Tokens are len(text) // 4.
+  what hq read prints - .handoff/<slug>/specs/SPEC.md:11-13
+  (320 tok)  label for an anchored row, and (186 lines, 8.2k tok)
+  for a whole file an older cycle left; a file that is not UTF-8
+  text shows bytes, (35 KB), and a directory (N files). Tokens are
+  len(text) // 4.
 - Artifacts block: rows with read_before in {always, edit, mention}
   print in full, no cap; read_before=never rows collapse to counts by
   kind; rows no longer live collapse to superseded/archived/missing
-  counts. In both blocks an absolute path under the root prints
-  relative to it and one under the pinned work dir relative to the
-  pin, and the block's first line names each base in use - root
-  ~/code/proj; work dir ~/code/proj-wt. The ledger and hq artifacts
-  keep the path as stamped.
+  counts.
+- Paths in both blocks resolve from a base the block's first line
+  names. The bases are the project root and a work dir pinned
+  outside the root - root ~/code/proj; work dir ~/code/proj-wt -
+  and the line names the ones the printed rows use, which may be
+  one, both, or neither; a row under no base prints absolutely.
+  The folder's own files carry the folder,
+  .handoff/<slug>/specs/SPEC.md, so none of them reads as a repo
+  path. Where the line names both bases, one spelling can sit
+  under either. The ledger, hq artifacts, and the begin work list
+  keep the path as stamped, which stamp takes either way.
 - Standing block: constraints print in full, decisions and dead ends
   as headlines, no cap; hq standing <slug> <id> prints an item in
   full. Ids are d decision, c constraint, x dead end; (cN) is the
@@ -829,9 +836,8 @@ def render_read(
     str
         One line per row, sorted by kind then path:
         ``path:11-13  (320 tok)  label`` for an anchored row and
-        ``path  (186 lines, 8.2k tok)  label`` for a whole file. When a
-        row prints relative to the root or the pin, a first line names
-        each base in use.
+        ``path  (186 lines, 8.2k tok)  label`` for a whole file. A first
+        line names every base the printed paths resolve from.
     """
     out = []
     bases: set[str] = set()
@@ -859,8 +865,8 @@ def artifact_lines(
     walk: list[tuple[str, str]],
     rows: dict[str, Row],
     shown: dict[str, tuple[str, str]] | None = None,
-) -> tuple[list[str], dict[str, int], dict[str, int]]:
-    """Sort artifacts into full lines, a never count, and a non-live count.
+) -> tuple[list[str], dict[str, int], dict[str, int], set[str]]:
+    """Sort artifacts into full lines, a never count, a non-live count, bases.
 
     Parameters
     ----------
@@ -871,25 +877,29 @@ def artifact_lines(
         Latest ledger row per path, with the caller's ``missing`` marks
         already applied; the disk is never consulted.
     shown : dict[str, tuple[str, str]] | None, default None
-        Display path per stored path, as ``shown_paths`` returns it; a
-        path absent from it prints as stored.
+        Display path and base phrase per stored path, as ``shown_paths``
+        returns it; a path absent from it prints as stored.
 
     Returns
     -------
-    tuple[list[str], dict[str, int], dict[str, int]]
+    tuple[list[str], dict[str, int], dict[str, int], set[str]]
         The full lines, uncapped, in walk order and then ledger order for
         the rows the walk cannot see; the ``never`` rows counted by kind;
-        the rows no longer live counted by status.
+        the rows no longer live counted by status; the base phrases the
+        emitted lines print against.
 
     Notes
     -----
     - A full line is ``path  kind  read_before  cN  label`` for a live row
       with ``read_before`` in {always, edit, mention}, or
       ``path  kind?  unstamped`` for a walk entry with no row.
+    - The bases come from the lines emitted, never from the whole map, so
+      the block names a base only where a printed path resolves from it.
     """
     full_lines: list[str] = []
     kind_never: dict[str, int] = {}
     non_live: dict[str, int] = {}
+    bases: set[str] = set()
     seen: set[str] = set()
 
     def _classify(path: str, row: Row | None, inferred: str) -> None:
@@ -904,16 +914,20 @@ def artifact_lines(
         inferred : str
             Kind inferred from the walk; used only when ``row`` is ``None``.
         """
+        display, base = (shown or {}).get(path, (path, ''))
         if row is None:
-            full_lines.append(f'{path}  {inferred}?  unstamped')
+            full_lines.append(f'{display}  {inferred}?  unstamped')
+            if base:
+                bases.add(base)
             return
         status, rb = row['status'], row['read_before']
         if status != 'live':
             non_live[status] = non_live.get(status, 0) + 1
         elif rb in _FULL_RB:
-            display = (shown or {}).get(path, (path, ''))[0]
             full_lines.append(
                 f'{display}  {row["kind"]}  {rb}  c{row["cycle"]}  {row["label"]}')
+            if base:
+                bases.add(base)
         else:
             kind_never[row['kind']] = kind_never.get(row['kind'], 0) + 1
 
@@ -927,7 +941,7 @@ def artifact_lines(
     for path, row in rows.items():
         if path not in seen:
             _classify(path, row, row.get('kind', 'other'))
-    return full_lines, kind_never, non_live
+    return full_lines, kind_never, non_live, bases
 
 
 def render_artifacts(
@@ -958,15 +972,9 @@ def render_artifacts(
         Block body lines joined with newlines: every live row graded
         always, edit, or mention as a full line, then the never rows
         counted by kind and the rows no longer live counted by status.
-        When a full line prints relative to the root or the pin, a first
-        line names each base in use.
+        A first line names every base the printed paths resolve from.
     """
-    full_lines, kind_never, non_live = artifact_lines(walk, rows, shown)
-    bases = {
-        base for path, (_, base) in (shown or {}).items()
-        if path in rows and rows[path]['status'] == 'live'
-        and rows[path]['read_before'] in _FULL_RB
-        }
+    full_lines, kind_never, non_live, bases = artifact_lines(walk, rows, shown)
     out = ['; '.join(sorted(bases))] if bases else []
     out += full_lines
     if kind_never:
@@ -2268,13 +2276,16 @@ def _stored_path(
     Notes
     -----
     - One file has one stored path: ``SPEC.md``, ``./SPEC.md``,
-      ``sub/../SPEC.md``, and the folder's own absolute spelling all key
-      on ``SPEC.md``.
+      ``sub/../SPEC.md``, the folder's own absolute spelling, and the
+      ``.handoff/<slug>/SPEC.md`` a rendered block prints all key on
+      ``SPEC.md``.
     - Normalization is lexical, so a symlink in the spelling reaches the
       ledger as written.
     - An outside path stores as ``~/...`` under home, else absolute. A
       relative token is never searched for under the cwd or home: a repo
-      file is stamped by its ``~`` or absolute path.
+      file is stamped by its ``~`` or absolute path. The one retry is
+      against the root, and it is kept only when it lands inside the
+      folder, which is the block's own spelling and no repo file.
     """
     path_clean = token.strip('`')
     home = pathlib.Path(os.path.abspath(os.path.expanduser('~')))
@@ -2283,6 +2294,15 @@ def _stored_path(
         candidate = pathlib.Path(os.path.normpath(os.path.expanduser(path_clean)))
     else:
         candidate = pathlib.Path(os.path.normpath(folder_abs / path_clean))
+        # The blocks print a file in the folder from the root -
+        # .handoff/<slug>/specs/SPEC.md - so that spelling keys on the
+        # row the bare one keys on. A relative token the root holds
+        # anywhere else is still never searched for.
+        if not candidate.exists():
+            from_root = pathlib.Path(os.path.normpath(
+                folder_abs.parent.parent / path_clean))
+            if folder_abs in from_root.parents:
+                candidate = from_root
     try:
         return candidate.relative_to(folder_abs).as_posix(), candidate, 'folder'
     except ValueError:
@@ -2425,6 +2445,7 @@ def _dirty_str(dirty: list[str]) -> str:
 def shown_paths(
     folder: pathlib.Path,
     live: dict[str, Row],
+    extra_paths: tuple[str, ...] = (),
 ) -> dict[str, tuple[str, str]]:
     """Map each stored path under the root or the pin to how a block prints it.
 
@@ -2435,39 +2456,53 @@ def shown_paths(
         ``work-dir`` file.
     live : dict[str, Row]
         Latest ledger row per path.
+    extra_paths : tuple[str, ...], default ()
+        Folder-relative names a block prints without a row - the walk
+        entries the Artifacts block grades ``unstamped``.
 
     Returns
     -------
     dict[str, tuple[str, str]]
-        Keyed by stored path, for each ``abs`` row under the pinned work
-        dir or the root: the path relative to that base, and the base
-        phrase a block's first line names - ``root ~/code/proj`` or
-        ``work dir ~/code/proj-wt``. Every other row is absent and
+        Keyed by stored path, for each row and each extra name under the
+        pinned work dir or the root: the path relative to that base, and
+        the base phrase a block's first line names - ``root ~/code/proj``
+        or ``work dir ~/code/proj-wt``. Every other row is absent and
         prints as stored.
 
     Notes
     -----
-    - The pin is tried first: a pin inside the root is the more specific
-      base, and a thread's made files print as their neighbors are named.
+    - A ``folder`` row is placed by the folder's own absolute path, so it
+      prints ``.handoff/<slug>/specs/SPEC.md`` under the root rather than
+      the bare ``specs/SPEC.md`` the ledger stores, which resolves from
+      the folder and not from the base the block names.
+    - The root is the one base a thread normally prints against. A pin
+      outside the root is the only second base, tried first so the made
+      files of a worktree thread print short.
     - A base prints by ``~`` under home, else absolutely, the spelling
       ``hq work-dir`` uses.
     """
     home = pathlib.Path(os.path.abspath(os.path.expanduser('~')))
     root = pathlib.Path(os.path.abspath(folder.parent.parent))
+    folder_abs = pathlib.Path(os.path.abspath(os.path.expanduser(str(folder))))
     pin_value, _ = resolve_work_dir(folder)
     bases: list[tuple[str, pathlib.Path]] = []
-    if pin_value:
-        pin = (
-            pathlib.Path(os.path.normpath(os.path.expanduser(pin_value)))
-            if pin_value.startswith(('/', '~'))
-            else pathlib.Path(os.path.normpath(root / pin_value)))
-        bases.append(('work dir', pin))
+    # A pin under the root resolves from the root already, and
+    # resolve_work_dir spells such a pin relative to it; only a pin
+    # outside the root earns a second base line.
+    if pin_value.startswith(('/', '~')):
+        bases.append((
+            'work dir',
+            pathlib.Path(os.path.normpath(os.path.expanduser(pin_value)))))
     bases.append(('root', root))
+    targets: list[tuple[str, pathlib.Path]] = [
+        (path,
+         pathlib.Path(os.path.normpath(os.path.expanduser(path)))
+         if row['base'] == 'abs' else folder_abs / path)
+        for path, row in live.items()
+        ]
+    targets += [(name, folder_abs / name) for name in extra_paths]
     shown: dict[str, tuple[str, str]] = {}
-    for path, row in live.items():
-        if row['base'] != 'abs':
-            continue
-        target = pathlib.Path(os.path.normpath(os.path.expanduser(path)))
+    for path, target in targets:
         for name, base in bases:
             if base not in target.parents:
                 continue
@@ -2597,14 +2632,14 @@ def _assemble_handoff(
         Complete HANDOFF.md text.
     """
     always_rows, read_spans, read_sizes, _ = read_first_data(folder, live)
-    shown = shown_paths(folder, live)
+    art_walk = [(n, k) for n, k in walk if k != 'skip']
+    shown = shown_paths(folder, live, tuple(n for n, _ in art_walk))
     read_body = render_read(always_rows, read_spans, read_sizes, shown)
     _rh = '## Read first\n' + read_body
     read_block = (
         f'<!-- hq:read {block_sha(_rh)} -->\n'
         f'## Read first\n{read_body}\n<!-- /hq:read -->'
     )
-    art_walk = [(n, k) for n, k in walk if k != 'skip']
     artifacts_body = render_artifacts(art_walk, live, folder.name, shown)
     _ah = '## Artifacts\n' + artifacts_body
     artifacts_block = (
@@ -4714,6 +4749,10 @@ def _verb_open(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     # - A row is judged by its rendered display path, so a display two
     #   live rows share, or one a work-dir repin has moved since the
     #   render, is passed over rather than guessed at.
+    # - A block an older version rendered carries the stored path where
+    #   this one prints the display, so the stored spelling is read
+    #   when the display finds no line; the next finish leaves only
+    #   the display.
     # - Both sides are compared stripped of trailing space: the block
     #   body loses it at its last line, and the ledger keeps it.
     shown = shown_paths(folder, live)
@@ -4727,9 +4766,13 @@ def _verb_open(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     for p_key, row, display in labeled:
         if displays.count(display) > 1:
             continue
-        rendered = re.findall(
-            '^' + re.escape(display) + r'  \S+  \S+  c\d+  (.*)$',
-            artifacts_body, re.MULTILINE)
+        rendered: list[str] = []
+        for spelling in dict.fromkeys((display, p_key)):
+            rendered = re.findall(
+                '^' + re.escape(spelling) + r'  \S+  \S+  c\d+  (.*)$',
+                artifacts_body, re.MULTILINE)
+            if rendered:
+                break
         if len(rendered) == 1 and rendered[0].rstrip() != row['label'].rstrip():
             print(
                 f'LEDGER BEHIND: block label differs: {p_key}'
@@ -4785,16 +4828,19 @@ def _verb_open(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
         # prints a path under the root or the pin relative to it.
         read_block_body = parsed.get('blocks', {}).get('read', '')
         display = shown.get(row['path'], (row['path'], ''))[0]
+        # As at the label check, a read block an older version rendered
+        # carries the stored path where this one prints the display.
+        spellings = tuple(dict.fromkeys((display, row['path'])))
         for line in read_block_body.splitlines():
-            if not line.startswith(display + ':'):
+            if not line.startswith(tuple(f'{sp}:' for sp in spellings)):
                 continue
-            m2 = re.match(re.escape(display) + r':([0-9?,\-]+)', line)
-            if not m2:
+            m2 = re.match(r'(.+?):([0-9?,\-]+)', line)
+            if not m2 or m2.group(1) not in spellings:
                 continue
             # An unresolved anchor prints ? in its slot; only resolved
             # slots are compared.
             old_spans = []
-            for ss in m2.group(1).split(','):
+            for ss in m2.group(2).split(','):
                 parts = ss.split('-')
                 if len(parts) == 2:
                     try:

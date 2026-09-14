@@ -35,16 +35,17 @@ Wire refresh_token() into poll() at scripts/auth.py:88, in the 401 branch.
 - Cap retry backoff at 60s, or give up after five tries? Blocks the
   integration test.
 
-<!-- hq:read 3bd7b098ee22 -->
+<!-- hq:read 68645f0c76e2 -->
 ## Read first
-specs/SPEC.md:11-13  (14 tok)  refresh contract; s3 is the retry schedule
+root ~/code/poller
+.handoff/auth-token-refresh/specs/SPEC.md:11-13  (14 tok)  refresh contract; s3 is the retry schedule
 <!-- /hq:read -->
 
-<!-- hq:artifacts 54181c75fcee -->
+<!-- hq:artifacts 992af43983f9 -->
 ## Artifacts
 root ~/code/poller
-notes/idp-quirks.md  notes  edit  c1  staging IdP quirks, found the hard way
-specs/SPEC.md  spec  always  c1  refresh contract; s3 is the retry schedule
+.handoff/auth-token-refresh/notes/idp-quirks.md  notes  edit  c1  staging IdP quirks, found the hard way
+.handoff/auth-token-refresh/specs/SPEC.md  spec  always  c1  refresh contract; s3 is the retry schedule
 scripts/auth.py  draft  edit  c1  poller; the 401 branch is under edit
 <!-- /hq:artifacts -->
 

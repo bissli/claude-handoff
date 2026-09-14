@@ -456,17 +456,18 @@ Resume: kill this session, start a fresh one, run
 6. A later bare `/handoff` targets this handoff - write rule 2.
 
 In the generated blocks, `Read first` has one line per live `always`
-row with the size of what `hq read` prints: `specs/SPEC.md:11-13  (320
-tok)` is where its anchor resolves today, `(N lines, T tok)` a whole
-file an older cycle left, `specs/SPEC.md:?` an anchor matching no
-heading - read the whole file, re-stamp with a
-`--where` that resolves, re-run `hq open`. `Artifacts` prints rows
-graded always, edit, or mention in full and `path spec? unstamped` for
-a file with no row; `never` rows collapse to counts, and a counted
-line ends in the command that expands it - `- hq artifacts <slug>`,
-`- hq when <slug> <path>`, `- hq standing <slug>` - run it. A path
-under the root or the pinned work dir prints relative to it; the
-block's first line names the base. `Standing` ids are `d`
+row with the size of what `hq read` prints:
+`.handoff/<slug>/specs/SPEC.md:11-13  (320 tok)` is where its anchor
+resolves today, `(N lines, T tok)` a whole file an older cycle left,
+`:?` an anchor matching no heading - read the whole file, re-stamp
+with a `--where` that resolves, re-run `hq open`. `Artifacts` prints
+rows graded always, edit, or mention in full and `path spec?
+unstamped` for a file with no row; `never` rows collapse to counts,
+and a counted line ends in the command that expands it -
+`- hq artifacts <slug>`, `- hq when <slug> <path>`,
+`- hq standing <slug>` - run it. Every path resolves from the base
+the first line names; the folder's own files carry
+`.handoff/<slug>/`. `Standing` ids are `d`
 decision, `c` constraint, `x` dead end, a decision or dead end by its
 headline; `hq standing <slug> <id>` prints the body. In `Log`, `+1`
 counts dirty paths.

@@ -469,8 +469,8 @@ def test_finish_names_a_made_file_first_stamped_this_cycle_against_the_work_dir(
             ' - move each to working, or under notes/ when it is evidence,'
             " then re-stamp with --successor and the file's ~ or absolute path") in out
     rendered = (folder / 'HANDOFF.md').read_text()
-    assert f'\nwork dir {root}/working\n' in rendered
-    assert '\nw.py  draft  edit  c1  -\n' in rendered
+    assert f'\nroot {root}\n' in rendered
+    assert '\nworking/w.py  draft  edit  c1  -\n' in rendered
 
     monkeypatch.setenv('HQ_CYCLE', '2')
     assert hq.main(['work-dir', _SLUG, '--clear']) == 0

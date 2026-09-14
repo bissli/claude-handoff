@@ -655,8 +655,8 @@ def test_finish_renders_a_directory_and_undecodable_file_at_always(
     standing = (folder / 'standing.md').read_text().splitlines()
     assert [ln for ln in standing if 'Stdlib only' in ln] == [standing[0]]
     text_lines = (folder / 'HANDOFF.md').read_text().splitlines()
-    assert 'probes  (1 files)  the probe subtree' in text_lines
-    assert 'bad.md  (1 KB)  a binary note' in text_lines
+    assert f'.handoff/{_SLUG}/probes  (1 files)  the probe subtree' in text_lines
+    assert f'.handoff/{_SLUG}/bad.md  (1 KB)  a binary note' in text_lines
 
 
 def test_subdirectory_row_on_disk_does_not_block_finish(tmp_path, monkeypatch):
@@ -1939,8 +1939,8 @@ def test_read_block_line_shapes(tmp_path, monkeypatch):
 
     handoff_text = (folder / 'HANDOFF.md').read_text()
     text_lines = handoff_text.splitlines()
-    assert 'SPEC.md:3-7,?  (9 tok)  -' in text_lines
-    assert 'NOTES.md:?  (3 lines, 3 tok)  -' in text_lines
+    assert f'.handoff/{_SLUG}/SPEC.md:3-7,?  (9 tok)  -' in text_lines
+    assert f'.handoff/{_SLUG}/NOTES.md:?  (3 lines, 3 tok)  -' in text_lines
 
 
 def test_untyped_unfiled_bullet_blocks_and_names_the_line(
