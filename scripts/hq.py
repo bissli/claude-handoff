@@ -3792,6 +3792,12 @@ def _do_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
     - A row that would sit live at ``always`` with no ``--where`` is
       refused whatever its kind, and the file's headings print under
       the refusal so the next stamp can anchor it.
+    - A written row shorter than its comparand, or missing one of its
+      backticked tokens or ``s<n>`` references, draws an advisory
+      here, where retyping the label costs nothing; the row stands
+      either way, and both lines can fire at once.
+    - The comparand is the last label an earlier cycle left, or the
+      previous stamp of this cycle where the path has no earlier row.
     """
     path = getattr(argv, 'path', '') or ''
     if not path:
@@ -4005,6 +4011,46 @@ def _do_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
             'label': label,
             }
     _append_tsv(ledger_path, LEDGER_FIELDS, new_row, _LEDGER_HEADER)
+    # Notes:
+    # - The comparand is the last row of an earlier cycle, so two
+    #   re-stamps in one cycle are both judged against what the
+    #   previous cycle left; with none, against the earlier re-stamp.
+    # - Backticks are markup, not content, so both tests read the
+    #   label with them stripped: an identifier the new label spells
+    #   plainly is neither a loss nor a shortening, and a formatting
+    #   change reported as an omission cannot be told from a real one.
+    # - A token counts as kept only where it stands on its own.
+    #   Characters of it inside a longer identifier name something
+    #   else, and the old name is gone.
+    # - Both lines can fire on one re-stamp: the dropped line is what
+    #   the operator retypes, the shorter line what is left unnamed.
+    cycle_now = str(anch['cycle'])
+    prev_row = next(
+        (r for r in reversed(history) if r['cycle'] != cycle_now),
+        history[-1] if history else None)
+    prev_label = prev_row['label'] if prev_row else '-'
+    curr_label = new_row['label']
+    if prev_label == '-' or curr_label == '-':
+        return 0
+    prev_plain = prev_label.replace('`', '')
+    curr_plain = curr_label.replace('`', '')
+    if len(curr_plain) < len(prev_plain):
+        print(
+            f'advisory: label shorter than predecessor: {stored_path}'
+            ' - check the new label still carries what the old one said')
+    dropped = {
+        f'`{token}`' for token in re.findall(r'`([^`]+)`', prev_label)
+        if not re.search(
+            r'(?<![0-9A-Za-z_])' + re.escape(token) + r'(?![0-9A-Za-z_])',
+            curr_plain)
+        }
+    dropped |= (
+        set(re.findall(r'\bs\d+\b', prev_label))
+        - set(re.findall(r'\bs\d+\b', curr_label)))
+    if dropped:
+        print(
+            f'advisory: label dropped {dropped!r}: {stored_path}'
+            ' - put it back or accept the loss')
     return 0
 
 
@@ -4496,42 +4542,6 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
                     f'advisory: one-line span at {p_key}:{start}; a wrapped heading?'
                     ' - anchor the last wrapped line, or join the heading'
                     ' where the file may be edited')
-    # --- Advisory: label regression ---
-    path_all_rows: dict[str, list[Row]] = {}
-    for r in rows:
-        path_all_rows.setdefault(r['path'], []).append(r)
-    for p_key, row_list in path_all_rows.items():
-        # Notes:
-        # - A shortening is judged once, at the finish of the cycle that
-        #   re-stamped the row; the ledger keeps both rows for good.
-        # - The comparand is the last row of an earlier cycle, so two
-        #   re-stamps in one cycle are judged against what the previous
-        #   cycle left; with none, against the earlier re-stamp.
-        cycle_now = str(anch['cycle'])
-        if len(row_list) < 2 or row_list[-1]['cycle'] != cycle_now:
-            continue
-        prev_row = next(
-            (r for r in reversed(row_list[:-1]) if r['cycle'] != cycle_now),
-            row_list[-2])
-        prev_label = prev_row.get('label', '-')
-        curr_label = row_list[-1].get('label', '-')
-        if curr_label == '-' or prev_label == '-':
-            continue
-        if len(curr_label) < len(prev_label):
-            print(
-                f'advisory: label shorter than predecessor: {p_key}'
-                ' - check the new label kept every backticked token'
-                ' and s<n> reference the old one carried')
-            continue
-        bt_prev = set(re.findall(r'`[^`]+`', prev_label))
-        bt_curr = set(re.findall(r'`[^`]+`', curr_label))
-        sref_prev = set(re.findall(r'\bs\d+\b', prev_label))
-        sref_curr = set(re.findall(r'\bs\d+\b', curr_label))
-        dropped = (bt_prev - bt_curr) | (sref_prev - sref_curr)
-        if dropped:
-            print(
-                f'advisory: label dropped {dropped!r}: {p_key}'
-                ' - put it back or accept the loss')
     # The drained items are formatted in memory: nothing touches disk
     # until the whole handoff text exists, so a failure writes nothing
     # and a re-run appends nothing twice.
@@ -4651,6 +4661,9 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
 def _verb_open(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int:
     """Run open: print status, drift, W1/W2, sha-moved rows, and stale paths.
 
+    A label the rendered block and the ledger disagree on is one of the
+    drift classes reported.
+
     Parameters
     ----------
     folder : pathlib.Path
@@ -4690,6 +4703,38 @@ def _verb_open(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
                 f'LEDGER BEHIND: file cycle {file_cycle}'
                 f' > last finished {last_finished}'
                 ' - the header was hand-edited; trust the ledger, report it')
+    # Notes:
+    # - A row re-stamped after the last finish leaves the rendered
+    #   blocks holding a label the ledger has moved past. The block sha
+    #   still matches, so no other check here tells.
+    # - The cycle this session began is meant to run ahead of the
+    #   blocks, so its own lock silences the comparison. A lock another
+    #   session left is a cycle that died, and the desync it left is
+    #   what this session has to know about.
+    # - A row is judged by its rendered display path, so a display two
+    #   live rows share, or one a work-dir repin has moved since the
+    #   render, is passed over rather than guessed at.
+    # - Both sides are compared stripped of trailing space: the block
+    #   body loses it at its last line, and the ledger keeps it.
+    shown = shown_paths(folder, live)
+    artifacts_body = parsed.get('blocks', {}).get('artifacts', '')
+    own_cycle = bool(lock) and lock.get('session') == anch['session']
+    labeled = [] if own_cycle else [
+        (p_key, row, shown.get(p_key, (p_key, ''))[0])
+        for p_key, row in sorted(live.items())
+        if row['status'] == 'live' and row['label'] != '-']
+    displays = [display for _, _, display in labeled]
+    for p_key, row, display in labeled:
+        if displays.count(display) > 1:
+            continue
+        rendered = re.findall(
+            '^' + re.escape(display) + r'  \S+  \S+  c\d+  (.*)$',
+            artifacts_body, re.MULTILINE)
+        if len(rendered) == 1 and rendered[0].rstrip() != row['label'].rstrip():
+            print(
+                f'LEDGER BEHIND: block label differs: {p_key}'
+                ' - the block and the ledger disagree; trust the ledger,'
+                ' and the next finish re-renders the block')
     for row in check_r3(list(_reconcile_missing(folder, live).values()), sha_map):
         print(
             f'sha moved since stamp: {row["path"]}'
@@ -4717,7 +4762,6 @@ def _verb_open(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
                 f' stored {stored_sha} computed {computed}'
                 ' - a hand edit; trust hq artifacts and hq standing, not the block')
     # Re-resolved spans: report anchors that moved or became unresolved.
-    shown = shown_paths(folder, live)
     for row in live.values():
         if row.get('status') != 'live' or row.get('read_before') != 'always':
             continue
@@ -5411,6 +5455,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "no anchor is refused and prints the file's headings.\n"
         '--kind, --read-before, --status, --where, and --label default to the\n'
         "previous row's value; omit them on a re-stamp to carry them forward.\n"
+        'A label shorter than its comparand, or missing one of its backticked\n'
+        'tokens or s<n> references, draws an advisory on the stamp that wrote\n'
+        'it; the row stands. The comparand is the last label an earlier cycle\n'
+        'left, or the previous stamp of this cycle where there is no earlier\n'
+        'row. Backticks are markup: an identifier the new label still spells\n'
+        'plainly is neither a loss nor a shortening.\n'
         '--successor P sets status=superseded read_before=never; --archive\n'
         'sets status=archived read_before=never and requires --reason;\n'
         '--defer marks a non-gated file deferred so it reappears in the next\n'

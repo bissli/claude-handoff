@@ -314,11 +314,13 @@ def test_finish_blocking_lines_name_the_class_that_fired(tmp_path, monkeypatch):
 
 def test_finish_success_and_advisory_lines_have_their_documented_shape(
         tmp_path, monkeypatch):
-    """A successful finish prints the size line and the resume line, and
-    the unstamped and shorter-label advisories name their subject.
+    """A successful finish prints the size line and the resume line, the
+    unstamped advisory names its subject, and the shorter-label advisory
+    lands on the stamp that shortened it, not on finish.
 
     Mutation: the token split dropped, the resume line pointing at hq.py
-    open, or an advisory class silent.
+    open, an advisory class silent, or the label advisory left in finish,
+    where the render is already written.
     Oracle: the documented shapes; one unstamped notes file and one label
     shortened from 21 to 5 characters.
     """
@@ -326,23 +328,209 @@ def test_finish_success_and_advisory_lines_have_their_documented_shape(
     _run(['begin', _SLUG])
     _spec(folder)
     (folder / 'notes-x.md').write_text('# Notes\n')
-    assert _run(
-        ['stamp', _SLUG, 'SPEC.md', '--where', 'Spec', '--label', 'a long spec label here'])[0] == 0
-    assert _run(['stamp', _SLUG, 'SPEC.md', '--label', 'short'])[0] == 0
+    assert _run([
+        'stamp', _SLUG, 'SPEC.md', '--where', 'Spec',
+        '--label', 'a long spec label here'])[0] == 0
+    rc, stamp_out, _ = _run(['stamp', _SLUG, 'SPEC.md', '--label', 'short'])
+    assert rc == 0
+    assert (
+        'advisory: label shorter than predecessor: SPEC.md'
+        ' - check the new label still carries what the old one said'
+        in stamp_out.splitlines())
     rc, out, _ = _run(['finish', _SLUG, '--log', 'one'])
     assert rc == 0
     lines = out.splitlines()
     assert 'advisory: unstamped notes x1: notes-x.md - stamp each' in lines
-    assert (
-        'advisory: label shorter than predecessor: SPEC.md'
-        ' - check the new label kept every backticked token'
-        ' and s<n> reference the old one carried'
-        in lines)
+    assert 'label shorter' not in out
     assert re.fullmatch(
         r'\S+/HANDOFF\.md  \d+ cursor lines  \d+ tokens'
         r' \(cursor \d+, read \d+, artifacts \d+, standing \d+\)', lines[-3])
     assert lines[-2] == 'read first: 1 rows, 6 tok (1 anchored, 0 whole)'
     assert lines[-1] == f'resume: /handoff {_SLUG}'
+
+
+def test_open_reports_a_label_the_ledger_moved_past_after_finish(
+        tmp_path, monkeypatch):
+    """A re-stamp after finish leaves the artifacts block behind, and open
+    names the path; a block that agrees, and a cycle in flight, stay silent.
+
+    Mutation: the rendered label compared with itself rather than with the
+    ledger row, so a re-stamp after finish is silent and the next session
+    reads a block that disagrees with the ledger with no signal; or the
+    lock guard dropped, so a stamp inside a cycle reports drift the
+    pending finish clears on its own.
+    Oracle: a block rendered from 'the first label' against a ledger row
+    that reads 'the second label', longer, so no shortening fires too.
+    """
+    folder = _root(tmp_path, monkeypatch)
+    _run(['begin', _SLUG])
+    _spec(folder)
+    assert _run(['stamp', _SLUG, 'SPEC.md', '--where', 'Spec',
+                 '--label', 'the first label'])[0] == 0
+    assert _run(['finish', _SLUG, '--log', 'one'])[0] == 0
+    rc, out, _ = _run(['open', _SLUG])
+    assert (rc, 'LEDGER BEHIND' in out) == (0, False)
+
+    assert _run(['stamp', _SLUG, 'SPEC.md', '--label', 'the second label'])[0] == 0
+
+    rc, out, _ = _run(['open', _SLUG])
+    assert rc == 0
+    assert (
+        'LEDGER BEHIND: block label differs: SPEC.md'
+        ' - the block and the ledger disagree; trust the ledger,'
+        ' and the next finish re-renders the block'
+        in out.splitlines())
+    assert _run(['begin', _SLUG])[0] == 0
+    rc, out, _ = _run(['open', _SLUG])
+    assert (rc, 'LEDGER BEHIND' in out) == (0, False)
+
+
+def test_open_label_check_reads_an_abs_row_through_its_rendered_display(
+        tmp_path, monkeypatch):
+    """A row stored by absolute path is judged against the relative line
+    the block prints for it.
+
+    Mutation: the ledger key matched against the block instead of the
+    display shown_paths returns, so every abs row under the root or the
+    pin stops being checked and open goes back to the silence the bug
+    was filed about.
+    Oracle: the row is stored as an absolute path and rendered as
+    'a/x.md', so only the mapped display can match the block line.
+    """
+    folder = _root(tmp_path, monkeypatch)
+    root = folder.parent.parent
+    (root / 'a').mkdir()
+    (root / 'a' / 'x.md').write_text('# X\n')
+    _run(['begin', _SLUG])
+    assert _run(['stamp', _SLUG, str(root / 'a' / 'x.md'),
+                 '--read-before', 'mention', '--label', 'first label'])[0] == 0
+    assert _run(['finish', _SLUG, '--log', 'one'])[0] == 0
+    assert _run(['stamp', _SLUG, str(root / 'a' / 'x.md'),
+                 '--read-before', 'mention', '--label', 'second label'])[0] == 0
+
+    rc, out, _ = _run(['open', _SLUG])
+
+    assert rc == 0
+    assert f'LEDGER BEHIND: block label differs: {root / "a" / "x.md"}' in out
+
+
+def _two_copies(tmp_path, monkeypatch):
+    """Pin a work dir and return (folder, root) with a/x.md in both bases."""
+    folder = _root(tmp_path, monkeypatch)
+    root = folder.parent.parent
+    (root / 'a').mkdir()
+    (root / 'wt' / 'a').mkdir(parents=True)
+    (root / 'a' / 'x.md').write_text('# X\n')
+    (root / 'wt' / 'a' / 'x.md').write_text('# X\n')
+    _run(['begin', _SLUG])
+    assert _run(['work-dir', _SLUG, 'wt'])[0] == 0
+    return folder, root
+
+
+def test_open_label_check_passes_over_a_display_the_block_prints_twice(
+        tmp_path, monkeypatch):
+    """A display the block carries on two lines is left alone.
+
+    Mutation: the first matching block line taken as the row's own, so a
+    live row whose display the block prints twice is judged against the
+    other row's label and reports a permanent LEDGER BEHIND that no
+    finish clears.
+    Oracle: the block holds 'root copy' and 'work dir copy' under one
+    relative path, the root row is then archived, and the surviving row
+    carries the label on the second of those two lines.
+    """
+    folder, root = _two_copies(tmp_path, monkeypatch)
+    assert _run(['stamp', _SLUG, str(root / 'a' / 'x.md'),
+                 '--read-before', 'mention', '--label', 'root copy'])[0] == 0
+    assert _run(['stamp', _SLUG, str(root / 'wt' / 'a' / 'x.md'),
+                 '--read-before', 'mention', '--label', 'work dir copy'])[0] == 0
+    assert _run(['finish', _SLUG, '--log', 'one'])[0] == 0
+    assert _run(['stamp', _SLUG, str(root / 'a' / 'x.md'), '--archive',
+                 '--reason', 'the work dir copy is the one'])[0] == 0
+
+    rc, out, _ = _run(['open', _SLUG])
+
+    assert (rc, 'LEDGER BEHIND' in out) == (0, False), out
+
+
+def test_open_label_check_passes_over_a_display_two_live_rows_share(
+        tmp_path, monkeypatch):
+    """A display two live rows share is left alone.
+
+    Mutation: the ledger-side ambiguity ignored, so a row stamped after
+    the render, under a display an older row already owns, is judged
+    against that older row's block line and reports a LEDGER BEHIND for
+    a label the block never claimed to hold.
+    Oracle: one block line reading 'root copy' against a second live row
+    added after the finish and labeled 'work dir copy'.
+    """
+    folder, root = _two_copies(tmp_path, monkeypatch)
+    assert _run(['stamp', _SLUG, str(root / 'a' / 'x.md'),
+                 '--read-before', 'mention', '--label', 'root copy'])[0] == 0
+    assert _run(['finish', _SLUG, '--log', 'one'])[0] == 0
+    assert _run(['stamp', _SLUG, str(root / 'wt' / 'a' / 'x.md'),
+                 '--read-before', 'mention', '--label', 'work dir copy'])[0] == 0
+
+    rc, out, _ = _run(['open', _SLUG])
+
+    assert (rc, 'LEDGER BEHIND' in out) == (0, False), out
+
+
+def test_open_label_check_survives_a_label_whose_trailing_space_the_block_drops(
+        tmp_path, monkeypatch):
+    """A label ending in a space is not reported against its own block line.
+
+    Mutation: the two labels compared unstripped, so a label with
+    trailing space on the block's last line reports a permanent
+    LEDGER BEHIND that no finish clears.
+    Oracle: a clean finish with one full-line row whose label ends in a
+    space the parsed block body has dropped.
+    """
+    folder = _root(tmp_path, monkeypatch)
+    (folder / 'doc.md').write_text('# Doc\n')
+    _run(['begin', _SLUG])
+    assert _run(['stamp', _SLUG, 'doc.md', '--read-before', 'mention',
+                 '--label', 'fix the parser '])[0] == 0
+    assert _run(['finish', _SLUG, '--log', 'one'])[0] == 0
+
+    rc, out, _ = _run(['open', _SLUG])
+
+    assert (rc, 'LEDGER BEHIND' in out) == (0, False), out
+
+
+def test_open_label_check_speaks_for_a_cycle_another_session_left_unfinished(
+        tmp_path, monkeypatch):
+    """A lock this session holds silences the label check; one another
+    session left does not.
+
+    Mutation: the guard keyed on the lock existing rather than on whose
+    it is, so a cycle that began, re-stamped, and died leaves the next
+    session with no per-path signal at all - the case the ticket asks
+    open to report.
+    Oracle: one re-stamp, read twice: once under this session's lock and
+    once under a lock naming another session.
+    """
+    folder = _root(tmp_path, monkeypatch)
+    (folder / 'doc.md').write_text('# Doc\n')
+    _run(['begin', _SLUG])
+    assert _run(['stamp', _SLUG, 'doc.md', '--read-before', 'mention',
+                 '--label', 'first label'])[0] == 0
+    assert _run(['finish', _SLUG, '--log', 'one'])[0] == 0
+    assert _run(['begin', _SLUG])[0] == 0
+    assert _run(['stamp', _SLUG, 'doc.md', '--read-before', 'mention',
+                 '--label', 'second label'])[0] == 0
+    rc, out, _ = _run(['open', _SLUG])
+    assert (rc, 'LEDGER BEHIND' in out) == (0, False), out
+
+    _lock(folder, 'session-other', '2026-09-09T11:00:00', cycle=2)
+
+    rc, out, _ = _run(['open', _SLUG])
+    assert rc == 0
+    assert (
+        'LEDGER BEHIND: block label differs: doc.md'
+        ' - the block and the ledger disagree; trust the ledger,'
+        ' and the next finish re-renders the block'
+        in out.splitlines()), out
 
 
 def test_open_reports_each_drift_class_by_its_documented_line(tmp_path, monkeypatch):
@@ -729,44 +917,45 @@ def test_open_stops_counting_a_stale_path_once_its_item_is_superseded(
     assert stale(_run(['open', _SLUG])[1]) == []
 
 
-def test_shorter_label_advisory_fires_only_in_the_cycle_that_shortened_it(
+def test_shorter_label_advisory_fires_at_the_stamp_against_an_earlier_cycle(
         tmp_path, monkeypatch):
-    """A label shortened in one cycle is reported at that finish alone.
+    """Each stamp that shortens a label reports it, judged against the
+    last label an earlier cycle left, and no finish repeats it.
 
-    Mutation: the cycle guard dropped, so the latest row is compared with
-    its predecessor at every later finish and a deliberate shortening is
-    re-reported for the life of the ledger; or the comparand taken as the
-    positional predecessor, so two re-stamps in one cycle hide a
-    shortening against the last cycle's label.
-    Oracle: the finish that follows the shortening prints the advisory;
-    the next cycle's finish, with no new row for the path, does not; a
-    cycle that re-stamps twice, 'a' then 'ab', is judged against the
-    earlier cycle's 'short' and prints it.
+    Mutation: the comparand taken as the row immediately before, so the
+    second of two re-stamps in one cycle is judged against the first and
+    a shortening against the last cycle's label goes unreported; or the
+    advisory left in finish, where it is re-reported for every later
+    cycle and costs a whole cycle to act on.
+    Oracle: 'short' after 'a long spec label here' prints it; the finish
+    and the next cycle's finish are silent; a cycle that re-stamps 'a'
+    then 'ab' is judged against the earlier cycle's 'short' and prints
+    it twice, which comparing 'ab' against 'a' would not.
     """
     folder = _root(tmp_path, monkeypatch)
     _run(['begin', _SLUG])
     _spec(folder)
-    assert _run(
-        ['stamp', _SLUG, 'SPEC.md', '--where', 'Spec', '--label', 'a long spec label here'])[0] == 0
-    assert _run(['stamp', _SLUG, 'SPEC.md', '--label', 'short'])[0] == 0
+    assert _run([
+        'stamp', _SLUG, 'SPEC.md', '--where', 'Spec',
+        '--label', 'a long spec label here'])[0] == 0
+    _lbl_short = (
+        'advisory: label shorter than predecessor: SPEC.md'
+        ' - check the new label still carries what the old one said')
+    rc, out, _ = _run(['stamp', _SLUG, 'SPEC.md', '--label', 'short'])
+    assert rc == 0
+    assert _lbl_short in out.splitlines()
     rc, out, _ = _run(['finish', _SLUG, '--log', 'one'])
     assert rc == 0
-    _lbl_short_tail = (
-        ' - check the new label kept every backticked token'
-        ' and s<n> reference the old one carried')
-    assert (
-        f'advisory: label shorter than predecessor: SPEC.md{_lbl_short_tail}'
-        in out.splitlines())
+    assert 'label shorter' not in out
     assert _run(['begin', _SLUG])[0] == 0
     rc, out, _ = _run(['finish', _SLUG, '--log', 'two'])
     assert rc == 0
     assert 'label shorter' not in out
     assert 'label dropped' not in out
     assert _run(['begin', _SLUG])[0] == 0
-    assert _run(['stamp', _SLUG, 'SPEC.md', '--label', 'a'])[0] == 0
-    assert _run(['stamp', _SLUG, 'SPEC.md', '--label', 'ab'])[0] == 0
-    rc, out, _ = _run(['finish', _SLUG, '--log', 'three'])
+    rc, out_a, _ = _run(['stamp', _SLUG, 'SPEC.md', '--label', 'a'])
     assert rc == 0
-    assert (
-        f'advisory: label shorter than predecessor: SPEC.md{_lbl_short_tail}'
-        in out.splitlines())
+    assert _lbl_short in out_a.splitlines()
+    rc, out_ab, _ = _run(['stamp', _SLUG, 'SPEC.md', '--label', 'ab'])
+    assert rc == 0
+    assert _lbl_short in out_ab.splitlines()

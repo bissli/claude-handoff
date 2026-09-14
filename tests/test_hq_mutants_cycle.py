@@ -1,6 +1,6 @@
 """Kill logic/number mutmut survivors for the cycle-path function group.
 
-Functions: _verb_finish, _take_lock, _verb_begin, _print_worklist,
+Functions: _verb_finish, _do_stamp, _take_lock, _verb_begin, _print_worklist,
 witness, _assemble_handoff, _append_lines, _append_tsv, render_log,
 _read_lock, drain_unfiled, collisions, _extract_terms, _dirty_str,
 check_r3, dangling_successors, _reconcile_missing, _folder_state.
@@ -1170,7 +1170,7 @@ def test_verb_finish_absent_gated_row_blocks(tmp_path, monkeypatch):
     # Create and stamp a file as always-read.
     (folder / 'guide.md').write_text('# Guide\n', encoding='utf-8')
     rc1, _, _ = _run(['stamp', _SLUG, 'guide.md', '--read-before', 'always',
-                       '--where', 'Guide'])
+                      '--where', 'Guide'])
     assert rc1 == 0
     # Delete the file before finish.
     (folder / 'guide.md').unlink()
@@ -1466,57 +1466,66 @@ def test_verb_finish_unstamped_shown_count_boundary(tmp_path, monkeypatch):
         f'6 items must produce "... and 1 more": {out2!r}')
 
 
-def test_verb_finish_label_check_last_row_not_second(tmp_path, monkeypatch):
-    """_verb_finish() checks row_list[-1] for curr_label, not row_list[1].
+def test_do_stamp_label_comparand_is_the_last_row_not_the_first(
+        tmp_path, monkeypatch):
+    """_do_stamp() judges the new label against the row before it, not the
+    path's first row.
 
-    Mutation: row_list[+1] -> row_list[1] checks the second row (index 1)
-    instead of the last; for 3 stamps, the third (most recent) is ignored.
-    Oracle: 3 stamps on the same file in one cycle; the last label must be
-    the current one.  With 3 rows ['short', 'long label here', 'tiny'],
-    rows[-1]='tiny' < rows[-2]='long label here' fires the shorter advisory;
-    rows[1]='long label here' == rows[-2] does not fire it.
+    Mutation: the fallback comparand taken as history[0] instead of
+    history[-1], so a label that grew and then shrank reads as a growth.
+    Oracle: three stamps in one cycle, 'ab' then 'a long label here' then
+    'medium one'; 10 characters is shorter than 17 and longer than 2, so
+    the advisory fires against the last row and not against the first.
     """
     folder = _new_root(tmp_path, monkeypatch)
     rc0, _, _ = _run(['begin', _SLUG])
     assert rc0 == 0
     (folder / 'doc.md').write_text('# Doc\n', encoding='utf-8')
     rc1, _, _ = _run(['stamp', _SLUG, 'doc.md', '--read-before', 'mention',
-                      '--label', 'short'])
+                      '--label', 'ab'])
     assert rc1 == 0
     rc2, _, _ = _run(['stamp', _SLUG, 'doc.md', '--read-before', 'mention',
-                      '--label', 'long label here'])
+                      '--label', 'a long label here'])
     assert rc2 == 0
-    rc3, _, _ = _run(['stamp', _SLUG, 'doc.md', '--read-before', 'mention',
-                      '--label', 'tiny'])
+    rc3, out3, _ = _run(['stamp', _SLUG, 'doc.md', '--read-before', 'mention',
+                         '--label', 'medium one'])
     assert rc3 == 0
-    rc4, out4, _ = _run(['finish', _SLUG, '--log', 'three stamps'])
-    assert rc4 == 0
-    assert 'label shorter' in out4, (
-        f'rows[-1]="tiny" is shorter than rows[-2]="long label here": {out4!r}')
+    assert 'label shorter' in out3, (
+        f'"medium one" is shorter than "a long label here": {out3!r}')
 
 
-def test_verb_finish_label_or_not_and(tmp_path, monkeypatch):
-    """_verb_finish() skips label check when either label is '-'.
+def test_do_stamp_label_advisory_silent_on_a_first_stamp_and_a_carry_forward(
+        tmp_path, monkeypatch):
+    """_do_stamp() reports nothing when there is no predecessor label, and
+    nothing when a re-stamp carries the label forward.
 
-    Mutation: 'or' -> 'and' only skips when BOTH are '-'; when only one is '-',
-    the label comparison proceeds (potential IndexError or false advisory).
-    Oracle: a first stamp (prev_label = '-') must not trigger label advisory.
+    Mutation: the shortening test written <=, so every re-stamp that
+    carries its label forward reports a shortening that never happened;
+    or the empty-history fallback taken as history[-1] unguarded, which
+    raises IndexError on the first stamp of a path.
+    Oracle: a first stamp with no label at all, then a re-stamp that
+    omits --label and inherits the same 17 characters.
     """
     folder = _new_root(tmp_path, monkeypatch)
     rc0, _, _ = _run(['begin', _SLUG])
     assert rc0 == 0
     (folder / 'doc.md').write_text('# Doc\n', encoding='utf-8')
-    rc1, _, _ = _run(['stamp', _SLUG, 'doc.md', '--read-before', 'mention'])
+    rc1, out1, _ = _run(['stamp', _SLUG, 'doc.md', '--read-before', 'mention'])
     assert rc1 == 0
-    rc2, out2, _ = _run(['finish', _SLUG, '--log', 'first stamp'])
+    assert 'label shorter' not in out1
+    assert 'label dropped' not in out1
+    rc2, _, _ = _run(['stamp', _SLUG, 'doc.md', '--read-before', 'mention',
+                      '--label', 'a long label here'])
     assert rc2 == 0
-    assert 'label shorter' not in out2, (
-        'first stamp has no predecessor label; must not trigger advisory')
-    assert 'label dropped' not in out2
+    rc3, out3, _ = _run(['stamp', _SLUG, 'doc.md', '--read-before', 'edit'])
+    assert rc3 == 0
+    assert 'label shorter' not in out3, (
+        f'a carried-forward label is the same label: {out3!r}')
+    assert 'label dropped' not in out3
 
 
-def test_verb_finish_sref_lowercase_pattern(tmp_path, monkeypatch):
-    r"""_verb_finish() detects section references with lowercase 's' prefix.
+def test_do_stamp_sref_lowercase_pattern(tmp_path, monkeypatch):
+    r"""_do_stamp() detects section references with lowercase 's' prefix.
 
     Mutation: r'\\bs\\d+\\b' -> r'\\bS\\d+\\b' matches only uppercase S;
     a label with 's3' would not register as a section reference.
@@ -1531,13 +1540,11 @@ def test_verb_finish_sref_lowercase_pattern(tmp_path, monkeypatch):
                       '--label', 'covers s3 data section carefully'])
     assert rc1 == 0
     # Re-stamp in the same cycle, dropping s3.
-    rc2, _, _ = _run(['stamp', _SLUG, 'doc.md', '--read-before', 'mention',
-                      '--label', 'covers data section carefully here'])
+    rc2, out2, _ = _run(['stamp', _SLUG, 'doc.md', '--read-before', 'mention',
+                         '--label', 'covers data section carefully here'])
     assert rc2 == 0
-    rc3, out3, _ = _run(['finish', _SLUG, '--log', 'dropped sref'])
-    assert rc3 == 0
-    assert 's3' in out3 or 'label dropped' in out3, (
-        f'dropped s-ref must be reported: {out3!r}')
+    assert 's3' in out2 or 'label dropped' in out2, (
+        f'dropped s-ref must be reported: {out2!r}')
 
 
 def test_verb_finish_lock_unlinked_on_success(tmp_path, monkeypatch):
@@ -1590,7 +1597,7 @@ def test_verb_finish_collision_spec_detected(tmp_path, monkeypatch):
     spec = folder / 'DESIGN-alpha.md'
     spec.write_text('# Design\n\n## ZetaPipeline overview\n', encoding='utf-8')
     rc1, _, _ = _run(['stamp', _SLUG, 'DESIGN-alpha.md', '--read-before', 'always',
-                       '--where', 'Design'])
+                      '--where', 'Design'])
     assert rc1 == 0
     # Edit HANDOFF to mention the term in the Now section.
     hf = folder / 'HANDOFF.md'
@@ -1622,7 +1629,7 @@ def test_verb_finish_walk_continue_not_break(tmp_path, monkeypatch):
     rc1, _, _ = _run(['stamp', _SLUG, 'aaa.md', '--read-before', 'mention'])
     # Spec files require --read-before always.
     rc2, _, _ = _run(['stamp', _SLUG, 'bbb.md', '--read-before', 'always',
-                       '--where', 'Spec: AlphaEngine'])
+                      '--where', 'Spec: AlphaEngine'])
     assert rc1 == 0
     assert rc2 == 0
     hf = folder / 'HANDOFF.md'
@@ -1654,38 +1661,3 @@ def test_verb_finish_skip_loop_continue_not_break(tmp_path, monkeypatch):
     assert rc1 == 0
     assert 'conflicted copy' in out1, (
         f'conflicted copy must be reported: {out1!r}')
-
-
-def test_verb_finish_label_row_continue_not_break(tmp_path, monkeypatch):
-    """_verb_finish() continues past single-row paths in the label check.
-
-    Mutation: (mutmut_350, 376, 379) continue -> break stops the loop after
-    the first single-row path, the first '-'-labeled path, or the first
-    shorter-label path, missing checks on subsequent paths.
-    Oracle: two paths, one with 1 row (skip), one with 2 rows (check); both
-    must be processed.
-    """
-    folder = _new_root(tmp_path, monkeypatch)
-    rc0, _, _ = _run(['begin', _SLUG])
-    assert rc0 == 0
-    (folder / 'a.md').write_text('# A\n', encoding='utf-8')
-    (folder / 'b.md').write_text('# B\n', encoding='utf-8')
-    # Stamp 'a.md' once (1 row), stamp 'b.md' twice with shorter second label.
-    rc1, _, _ = _run(['stamp', _SLUG, 'a.md', '--read-before', 'mention'])
-    rc2, _, _ = _run(['stamp', _SLUG, 'b.md', '--read-before', 'mention',
-                      '--label', 'longer label here'])
-    assert rc1 == 0
-    assert rc2 == 0
-    rc3, _, _ = _run(['finish', _SLUG, '--log', 'first'])
-    assert rc3 == 0
-    rc4, _, _ = _run(['begin', _SLUG])
-    assert rc4 == 0
-    # Re-stamp b.md with a shorter label; a.md has only 1 row (no prev label).
-    rc5, _, _ = _run(['stamp', _SLUG, 'b.md', '--read-before', 'mention',
-                      '--label', 'short'])
-    assert rc5 == 0
-    rc6, out6, _ = _run(['finish', _SLUG, '--log', 'second'])
-    assert rc6 == 0
-    # b.md must be reported (shorter label); a.md has only 1 row -> skip.
-    assert 'label shorter' in out6, (
-        f'b.md label shorter must be reported: {out6!r}')

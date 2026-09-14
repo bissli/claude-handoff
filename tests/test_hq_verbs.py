@@ -2199,6 +2199,7 @@ def test_when_shows_all_rows_for_path(tmp_path, monkeypatch, capsys):
     (folder / 'SPEC.md').write_text('# Spec\n\nVersion 3.\n')
     hq.main(['stamp', _SLUG, 'SPEC.md', '--label', 'third stamp'])
 
+    capsys.readouterr()
     hq.main(['when', _SLUG, 'SPEC.md'])
     out = capsys.readouterr().out
     spec_lines = [ln for ln in out.splitlines() if 'SPEC.md' in ln]
@@ -2531,11 +2532,13 @@ def test_collisions_skip_a_superseded_spec_and_a_present_abs_row_is_silent(
 def test_label_dropping_a_backticked_token_alone_is_advised(
         tmp_path, monkeypatch, capsys):
     """A same-length re-label that loses a backticked token, but no s<n>
-    reference, draws the dropped advisory naming the token.
+    reference, draws the dropped advisory naming the token at the stamp.
 
     Mutation: the two dropped sets intersected instead of united, so a
-    backtick-only loss is silent.
-    Oracle: the labels differ only by the token `--force`.
+    backtick-only loss is silent; or the advisory left in finish, where
+    the render is already written and retyping the label costs a cycle.
+    Oracle: the labels differ only by the token `--force`, and the
+    finish that follows the re-stamp is silent.
     """
     folder = _new_root(tmp_path, monkeypatch)
     hq.main(['begin', _SLUG])
@@ -2543,13 +2546,100 @@ def test_label_dropping_a_backticked_token_alone_is_advised(
     assert hq.main([
         'stamp', _SLUG, 'SPEC.md', '--where', 'Spec',
         '--label', 'the `--force` path, s4 spans it']) == 0
-    assert hq.main([
-        'stamp', _SLUG, 'SPEC.md', '--label', 'the force path now, s4 spans it']) == 0
     capsys.readouterr()
 
-    assert hq.main(['finish', _SLUG, '--log', 'c1']) == 0
+    assert hq.main([
+        'stamp', _SLUG, 'SPEC.md', '--label', 'the force path now, s4 spans it']) == 0
 
     assert "advisory: label dropped {'`--force`'}: SPEC.md" in capsys.readouterr().out
+    assert hq.main(['finish', _SLUG, '--log', 'c1']) == 0
+    assert 'label dropped' not in capsys.readouterr().out
+
+
+def test_label_losing_only_its_backticks_is_silent_on_both_counts(
+        tmp_path, monkeypatch, capsys):
+    """A re-label that spells an identifier without its backticks draws
+    neither advisory: the label lost markup, not content.
+
+    Mutation: the dropped set taken as the backticked spans of the old
+    label minus those of the new, so un-backticking reads as an
+    omission; or either length measured on the raw label, where two
+    stripped backticks read as a shortening. Each leaves the agent
+    unable to tell a formatting change from a real loss.
+    Oracle: the two labels carry the same eighteen characters of text
+    and differ only by the pair of backticks.
+    """
+    folder = _new_root(tmp_path, monkeypatch)
+    hq.main(['begin', _SLUG])
+    (folder / 'SPEC.md').write_text('# Spec\n')
+    assert hq.main([
+        'stamp', _SLUG, 'SPEC.md', '--where', 'Spec',
+        '--label', 'the `FINX_SURFACE` split']) == 0
+    capsys.readouterr()
+
+    assert hq.main([
+        'stamp', _SLUG, 'SPEC.md', '--label', 'the FINX_SURFACE split']) == 0
+
+    out = capsys.readouterr().out
+    assert 'label dropped' not in out, out
+    assert 'label shorter' not in out, out
+
+
+def test_label_keeping_a_token_only_inside_a_longer_word_is_a_loss(
+        tmp_path, monkeypatch, capsys):
+    """An identifier that survives only as a fragment of another word is
+    reported dropped.
+
+    Mutation: the kept test written as plain substring containment, so
+    `env` buried in 'environment' counts as carried and a real omission
+    goes unreported while the label grows.
+    Oracle: the new label is longer, so the shortening test cannot fire;
+    the only signal left is the token, and 'environment' is a different
+    word from the identifier `env`.
+    """
+    folder = _new_root(tmp_path, monkeypatch)
+    hq.main(['begin', _SLUG])
+    (folder / 'doc.md').write_text('# Doc\n')
+    assert hq.main([
+        'stamp', _SLUG, 'doc.md', '--read-before', 'mention',
+        '--label', 'the `env` guard']) == 0
+    capsys.readouterr()
+
+    assert hq.main([
+        'stamp', _SLUG, 'doc.md', '--read-before', 'mention',
+        '--label', 'the environment guard rewritten at length']) == 0
+
+    out = capsys.readouterr().out
+    assert "advisory: label dropped {'`env`'}: doc.md" in out, out
+    assert 'label shorter' not in out, out
+
+
+def test_a_shorter_label_that_also_drops_a_token_prints_both_lines(
+        tmp_path, monkeypatch, capsys):
+    """A re-label that both shortens and loses a token names the token.
+
+    Mutation: the shortening advisory returning before the token test,
+    so the common shape of a real loss - a label cut down, a token gone
+    with it - reports only that the label got shorter and never says
+    which identifier the reader lost.
+    Oracle: 40 characters of text down to 27, with `--force` gone and
+    `FINX_SURFACE` still spelled.
+    """
+    folder = _new_root(tmp_path, monkeypatch)
+    hq.main(['begin', _SLUG])
+    (folder / 'doc.md').write_text('# Doc\n')
+    assert hq.main([
+        'stamp', _SLUG, 'doc.md', '--read-before', 'mention',
+        '--label', 'the `--force` and `FINX_SURFACE` path']) == 0
+    capsys.readouterr()
+
+    assert hq.main([
+        'stamp', _SLUG, 'doc.md', '--read-before', 'mention',
+        '--label', 'the FINX_SURFACE path']) == 0
+
+    out = capsys.readouterr().out
+    assert 'advisory: label shorter than predecessor: doc.md' in out, out
+    assert "advisory: label dropped {'`--force`'}: doc.md" in out, out
 
 
 def test_two_unfiled_items_of_one_kind_get_consecutive_ids(tmp_path, monkeypatch):
@@ -2669,8 +2759,8 @@ def test_an_always_row_with_no_anchor_is_refused_with_its_headings(
     assert hq.main(['stamp', _SLUG, 'SPEC.md']) == 1
     out = capsys.readouterr().out.splitlines()
     assert out == [
-        'hq stamp: refused: SPEC.md always with no anchor - 7 lines read whole at'
-        ' every resume; stamp --where <heading> or --read-before edit',
+        ('hq stamp: refused: SPEC.md always with no anchor - 7 lines read whole at'
+         ' every resume; stamp --where <heading> or --read-before edit'),
         '  # Spec',
         '  ## 1. Scope',
         '  ## 2. Retry',
@@ -2787,7 +2877,7 @@ def test_blocks_print_a_root_path_relative_to_its_base_with_sizes(
 
 def test_standing_by_id_prints_the_body_and_the_superseded_marker(
         tmp_path, monkeypatch, capsys):
-    """hq standing <slug> <id> prints items in full; an unknown id exits 1.
+    """Hq standing <slug> <id> prints items in full; an unknown id exits 1.
 
     Mutation: the successor read from the wrong side of the arrow, so
     the marker names the old id; the marker dropped for a superseded

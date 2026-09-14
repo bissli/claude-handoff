@@ -213,7 +213,8 @@ session chose.)
 - Each write ends with a reviewer pass that must reconstruct the task
   from the file alone. Reading starts with `hq open`, which reports
   drift - a moved commit, a gated file edited since its stamp, a
-  heading an anchor no longer finds - then reads the spans the ledger
+  heading an anchor no longer finds, a label a re-stamp moved past the
+  rendered block - then reads the spans the ledger
   gates and executes the file's next step without re-litigating
   settled decisions.
 - Two advisory hooks back it. Once a handoff is opened, at a write in
