@@ -167,6 +167,33 @@ def test_begin_announces_creation_adoption_and_a_saved_hand_edit(
     assert 'hq begin: ran adopt on existing HANDOFF.md' in out
 
 
+def test_begin_names_the_stale_cycle_header_only_when_it_is_stale(
+        tmp_path, monkeypatch):
+    """Begin names the header's Cycle field beside the cycle it opened,
+    and says nothing where the two agree.
+
+    Mutation: the line printed wherever a header exists, so the first
+    cycle of a thread is told its own header is wrong; or the header
+    never read, so the misattribution the line exists to stop stays
+    silent for every later cycle.
+    Oracle: cycle 1, whose header begin itself wrote as Cycle: 1, and
+    cycle 2, whose finish has not yet moved that field off 1.
+    """
+    _root(tmp_path, monkeypatch)
+    rc, first, _ = _run(['begin', _SLUG])
+    assert rc == 0
+    assert 'header reads Cycle:' not in first
+    assert _run(['finish', _SLUG, '--log', 'one'])[0] == 0
+
+    rc, second, _ = _run(['begin', _SLUG])
+
+    assert rc == 0
+    assert 'cycle 2 begun by session-abc on test-host' in second.splitlines()
+    assert (
+        'header reads Cycle: 1; this cycle is 2 - finish rewrites that line'
+        " last; attribute this session's work to 2") in second.splitlines()
+
+
 def test_begin_refuses_a_young_lock_and_names_a_takeover(tmp_path, monkeypatch):
     """A foreign lock under two hours prints the --force line and exits 1;
     an older one is taken over with the two documented lines.

@@ -3671,6 +3671,10 @@ def _print_worklist(folder: pathlib.Path, anch: dict) -> None:
       so; every other ``skip`` entry - a name carrying a tab, carriage
       return, or newline, or a non-regular file - prints as unstampable,
       the separator escaped.
+    - The closing lines name the cycle just opened and, where the file
+      disagrees, the stale ``Cycle:`` field beside it: ``finish`` writes
+      that field last, so the header reads the previous cycle for the
+      whole write and is never the number to attribute work to.
     """
     walk, rows, live, sha_map, manifest, lb, sb = _folder_state(folder)
     for b in witness(manifest[-1] if manifest else None, lb, sb):
@@ -3751,6 +3755,20 @@ def _print_worklist(folder: pathlib.Path, anch: dict) -> None:
         print(line)
     print(work_dir_line(folder, wd_value, first_cycle=anch['cycle'] == 1))
     print(f'cycle {anch["cycle"]} begun by {anch["session"]} on {anch["host"]}')
+    # The Cycle line is the previous cycle's until finish rewrites it at
+    # the end, so an agent that takes its number from the file credits
+    # this cycle's work to the one that assigned it.
+    handoff_path = folder / 'HANDOFF.md'
+    if handoff_path.is_file():
+        cycle = anch['cycle']
+        header_cycle = split_handoff(
+            handoff_path.read_text(encoding='utf-8-sig', errors='replace')
+            ).get('cycle') or 0
+        if header_cycle and header_cycle != cycle:
+            print(
+                f'header reads Cycle: {header_cycle}; this cycle is {cycle}'
+                " - finish rewrites that line last; attribute this session's"
+                f' work to {cycle}')
 
 
 def _verb_begin(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int:
@@ -5486,7 +5504,17 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser('adopt').add_argument('slug')
 
-    beg = sub.add_parser('begin')
+    _begin_epilog = (
+        'The cycle this opens is the number printed here, never the Cycle\n'
+        'field in HANDOFF.md: finish rewrites that field last, so it reads\n'
+        'the previous cycle for the whole write. The cycle= field of\n'
+        '.hq.lock carries the same number. Every note, stamp, and cursor\n'
+        'line this session writes belongs to it.'
+    )
+    beg = sub.add_parser(
+        'begin',
+        epilog=_begin_epilog,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
     beg.add_argument('slug')
     beg.add_argument('--force', action='store_true')
 
