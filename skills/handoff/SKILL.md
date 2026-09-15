@@ -80,7 +80,6 @@ own; `hq work-dir <slug>` prints the ruling, `--clear` undoes it. The
 agent invents no project directory and proposes none. Only a file that
 outlives the session or is stamped is bound.
 
-
 ## Which verb, which target
 
 The verb is inferred, never typed. One question settles it: does this
@@ -159,9 +158,9 @@ Write for a reader with no memory of this session and full access to
 the repo: short technical documentation in complete sentences, no
 transcript narration. Task and Now are required; omit any other cursor
 section that would be empty. The file is the whole bridge - a
-requirement the user stated, an approval given, a quirk found the hard
-way is lost unless written here. Trimming cuts what the repo records,
-never what only the session knows; in doubt, write it down.
+requirement the user stated, an approval given, a quirk found is lost
+unless written here. Trimming cuts what the repo records, never what
+only the session knows; in doubt, write it down.
 
 The hand-written half of a real file, three cycles in
 (`reference/example-handoff.md` beside this file is the whole file):
@@ -205,7 +204,6 @@ Rules:
 - Too big for the file but worth keeping: a sibling `notes/<topic>.md`,
   stamped `--read-before edit` when the cursor points at it, so its
   label stays in the Artifacts block instead of a count.
-
 - Name where a credential lives, never its value.
 - Absolute dates. ASCII only.
 - Now is the single next action; Plan is what follows it. Plan
@@ -213,15 +211,14 @@ Rules:
 - The cursor is rewritten from `## Task` down every cycle, and every
   cursor line this session did not settle is carried forward verbatim:
   an Open question leaves only when answered, a Plan item only when
-  done or rehomed. `finish` owns the header line.
+  done or rehomed.
 - Anything still awaiting the user - a question, an unapproved plan -
   goes under `Open questions`; read stops there.
 - An item recorded with `note` or under `## Unfiled` is not repeated
   in State: the Standing block carries it.
-- No line ceiling binds the cursor: it carries every unsettled line.
-  What a resuming reader does not need first moves whole to a sibling
-  by the rule above - moved, never cut. Rewording to reach a count
-  drops facts and barely moves it.
+- No line ceiling binds the cursor. What a resuming reader does not
+  need first moves whole to a sibling by the rule above - moved, never
+  cut. Rewording to reach a count drops facts and barely moves it.
 
 ### The artifact ledger
 
@@ -357,11 +354,10 @@ Run these steps in order:
    earlier one.
 3. Place each file this session made by `## The folder` before its first
    stamp; then one `hq stamp` per artifact created, re-read, or moved,
-   or one `--batch`. A refusal (exit 1) leaves the row as it was,
-   records the attempt, and names the way out: a successor, an archive
-   reason, or leave the row gated - unless its file is missing, which
-   blocks `finish` until the row is re-pointed, superseded, or archived.
-
+   or one `--batch`. A refusal (exit 1) leaves the row as it was and
+   names the way out: a successor, an archive reason, or leave the row
+   gated - unless its file is missing, which blocks `finish` until the
+   row is re-pointed, superseded, or archived.
 4. Rewrite the cursor from `## Task` down, above the first `<!-- hq:`
    marker, carrying forward every line this session did not settle;
    leave the header line and everything below the marker alone.
@@ -380,7 +376,7 @@ Run these steps in order:
    `<path>:?` in the rendered read block does not block, but the anchor
    is unresolved: re-stamp with a `--where` that resolves.
 
-One whole cycle on the example thread, in order:
+One whole cycle on the example thread:
 
 ```
 hq begin auth-token-refresh
@@ -428,9 +424,9 @@ Resume: kill this session, start a fresh one, run
    say so. The last two stop there - never pick the newest, and never
    fall through to write.
 2. Run `hq open <slug>`. It is read-only and prints only what is
-   wrong; silence is good. Each line names its move and none stops the
-   read: a `WARNING:` (an edited recorded line), an unfinished cycle,
-   or `LEDGER BEHIND` is reported and read past; `git drift` names the
+   wrong. Each line names its move and none stops the read: a
+   `WARNING:` (an edited recorded line), an unfinished cycle, or
+   `LEDGER BEHIND` is reported and read past; `git drift` names the
    `git log` to run; a moved sha, an unresolved anchor, or a moved span
    says what to read instead; a `stale folder path` waits for the next
    write.
@@ -438,8 +434,10 @@ Resume: kill this session, start a fresh one, run
    `## Read first` line that shows a span: it prints the span and
    records the read; a line printed instead names its move. A
    whole-file row, an older cycle's, is read when the Now step names
-   its file or the gate names it at a write, never before. Then read
-   every todo file the Plan points at. A conforming
+   its file or the gate names it at a write, never before. A section
+   the row does not anchor is read when the work needs it:
+   `--section <anchor>` in `--where` form, or `--whole` for the file
+   whole. Then read every todo file the Plan points at. A conforming
    target with no `ledger.tsv` has no blocks yet: follow its `## Key
    files` `Read now:` pointers by hand. A target with no conforming
    header names its own reading order - follow it. Read nothing else.
@@ -459,7 +457,7 @@ In the generated blocks, `Read first` has one line per live `always`
 row with the size of what `hq read` prints:
 `.handoff/<slug>/specs/SPEC.md:11-13  (320 tok)` is where its anchor
 resolves today, `(N lines, T tok)` a whole file an older cycle left,
-`:?` an anchor matching no heading - read the whole file, re-stamp
+`:?` an anchor matching no heading - read it `--whole`, re-stamp
 with a `--where` that resolves, re-run `hq open`. `Artifacts` prints
 rows graded always, edit, or mention in full and `path spec?
 unstamped` for a file with no row; `never` rows collapse to counts,
@@ -519,12 +517,11 @@ At the end of a turn, the Stop hook names a `HANDOFF.md` written by
 hand since its last finished cycle and the `begin`/`finish` pair that
 files it.
 
-
 ## Adoption
 
 `hq adopt <slug>` changes nothing, prints the heading inventory, and
-names `reference/adoption.md` beside this file. Follow it, then
-continue at write path step 1; `begin` runs `adopt` and opens cycle 2.
+names `reference/adoption.md`. Follow it, then continue at write path
+step 1; `begin` runs `adopt` and opens cycle 2.
 
 ## Where the rest lives
 
