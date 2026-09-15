@@ -326,17 +326,17 @@ def test_gate_credits_a_read_receipt(monkeypatch, capsys, tmp_path):
     assert run('r4') == ''
 
 
-def test_gate_names_the_first_span_the_anchor_set_resolves(
+def test_gate_counts_the_spans_it_does_not_name(
         monkeypatch, capsys, tmp_path):
-    """The span in the gate's message follows a re-stamped anchor set.
+    """The gate names the first resolved span and how many there are.
 
-    Mutation: the span read from the row's stored lines field, or the
-    resolved list indexed at its last element, so a trim that drops the
-    leading section leaves the message pointing at a span the row no
-    longer gates.
+    Mutation: the count dropped, so a multi-anchor row advertises its
+    first span as the whole gated extent; the count off by one; or the
+    count printed on a single-span row.
     Oracle: hand-computed against the fixture spec - 'Scope' runs 3-7 and
-    'Risks' 8-10. The same payload names 3-7 while Scope leads the anchor
-    set and 8-10 once the set is narrowed to Risks alone.
+    'Risks' 8-10. A two-anchor row reads 'lines 3-7 of 2 spans' and the
+    same payload reads a bare 'lines 8-10' once the set is narrowed to
+    Risks alone.
     """
     root, folder = _handoff_root(tmp_path)
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
@@ -352,11 +352,35 @@ def test_gate_names_the_first_span_the_anchor_set_resolves(
     hq._append_tsv(ledger, hq.LEDGER_FIELDS,
                    _row('SPEC.md', cycle='2', where='Scope;Risks'),
                    _LEDGER_HEADER)
-    assert 'SPEC.md (lines 3-7)' in run('w1')
+    assert 'SPEC.md (lines 3-7 of 2 spans)' in run('w1')
     hq._append_tsv(ledger, hq.LEDGER_FIELDS,
                    _row('SPEC.md', cycle='3', where='Risks'),
                    _LEDGER_HEADER)
     assert 'SPEC.md (lines 8-10)' in run('w2')
+
+
+def test_gate_counts_every_resolved_span_in_anchor_order(
+        monkeypatch, capsys, tmp_path):
+    """The named span is the first anchor's, whatever its place in the file.
+
+    Mutation: the resolved list sorted or indexed at its last element, or
+    the pair read as the outer bounds of every span, so a row whose first
+    anchor sits late in the file advertises a span it does not lead with.
+    Oracle: hand-computed against the fixture spec - 'Risks;Scope'
+    resolves to 8-10 then 3-7, so the message reads 'lines 8-10 of 2
+    spans' and never 3-10 or 3-7.
+    """
+    root, folder = _handoff_root(tmp_path)
+    monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
+    tr = _transcript(tmp_path / 't.jsonl',
+                     [_bash(f'python3 scripts/hq.py open {_SLUG}')])
+    hq._append_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS,
+                   _row('SPEC.md', cycle='2', where='Risks;Scope'),
+                   _LEDGER_HEADER)
+    payload = _payload(root, tr, 'o1', 'Edit', {'file_path': 'src/app.py'})
+    out = _context(_run(monkeypatch, capsys, handoff_gate, payload))
+    assert 'SPEC.md (lines 8-10 of 2 spans)' in out
+    assert 'lines 3-' not in out
 
 
 def test_a_read_of_a_narrowed_span_still_clears_the_gate(
@@ -858,3 +882,57 @@ def test_stop_ignores_subagents(monkeypatch, capsys, tmp_path):
                                 _stop_payload(root, 'T1'))
     assert _run(monkeypatch, capsys, handoff_stop,
                 _stop_payload(root, 'T2', agent_id='agent-9')) == ''
+
+
+def test_gate_resolves_escaped_semicolon_in_where(monkeypatch, capsys, tmp_path):
+    r"""Verify a heading whose text contains a semicolon resolves correctly.
+
+    Mutation: splitting row['where'] with str.split(';') instead of
+    hq._split_where, which turns the stored '3\\; Retry' into ['3\\',
+    'Retry'] and leaves both anchors unresolved, printing 'anchor not
+    found' for a heading that exists.
+    Oracle: hq._split_where's own output on the stored value confirms
+    the anchor list; the gate must report a line span, not 'anchor not
+    found'.
+    """
+    root, folder = _handoff_root(tmp_path)
+    monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
+    (folder / 'SPEC.md').write_text(
+        '# Spec\n\n## 3; Retry\n\nBody.\n', encoding='utf-8')
+    stored_where = '3\\; Retry'
+    assert hq._split_where(stored_where) == ['3; Retry']
+    hq._append_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS,
+                   _row('SPEC.md', cycle='2', where=stored_where),
+                   _LEDGER_HEADER)
+    tr = _transcript(tmp_path / 't.jsonl',
+                     [_bash(f'python3 scripts/hq.py open {_SLUG}')])
+    payload = _payload(root, tr, 'sc1', 'Edit', {'file_path': 'src/app.py'})
+    out = _context(_run(monkeypatch, capsys, handoff_gate, payload))
+    assert 'anchor not found' not in out
+    assert 'SPEC.md (lines 3-5)' in out
+
+
+def test_gate_counts_distinct_spans_not_anchors(monkeypatch, capsys, tmp_path):
+    """Verify two anchors resolving to the same extent count as one span.
+
+    Mutation: using len(spans) rather than len(set(spans)), which prints
+    'lines 3-6 of 2 spans' when two different spellings of the same heading
+    resolve to one line range, hiding that no second extent exists.
+    Oracle: hand-computed - '3. Retry' and 's3' both match '## 3. Retry'
+    at lines 3-6; one distinct span, so the gate shows 'lines 3-6' with
+    no count.
+    """
+    root, folder = _handoff_root(tmp_path)
+    monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
+    (folder / 'SPEC.md').write_text(
+        '# Spec\n\n## 3. Retry\n\nBody.\n\n## Next\n\nOther.\n',
+        encoding='utf-8')
+    hq._append_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS,
+                   _row('SPEC.md', cycle='2', where='3. Retry;s3'),
+                   _LEDGER_HEADER)
+    tr = _transcript(tmp_path / 't.jsonl',
+                     [_bash(f'python3 scripts/hq.py open {_SLUG}')])
+    payload = _payload(root, tr, 'dd1', 'Edit', {'file_path': 'src/app.py'})
+    out = _context(_run(monkeypatch, capsys, handoff_gate, payload))
+    assert 'SPEC.md (lines 3-6)' in out
+    assert 'of 2 spans' not in out

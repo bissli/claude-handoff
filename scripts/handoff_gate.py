@@ -455,11 +455,17 @@ def gate(payload: dict[str, Any]) -> int:
                     text = target.read_text(encoding='utf-8', errors='replace')
                 except OSError:
                     text = ''
-                spans, _ = hq.resolve_where(
-                    text,
-                    [a.strip() for a in row['where'].split(';') if a.strip()])
-                span = (f'lines {spans[0][0]}-{spans[0][1]}' if spans
-                        else 'anchor not found')
+                spans, _ = hq.resolve_where(text, hq._split_where(row['where']))
+                # The resolved list follows the anchor order, not the
+                # file's, so a joined list of every span reads out of
+                # order. The count carries the extent instead.
+                distinct = len(set(spans))
+                if not spans:
+                    span = 'anchor not found'
+                elif distinct == 1:
+                    span = f'lines {spans[0][0]}-{spans[0][1]}'
+                else:
+                    span = f'lines {spans[0][0]}-{spans[0][1]} of {distinct} spans'
             missing.append((stored, span))
         reported.extend(path for path, _ in missing)
         if missing:
