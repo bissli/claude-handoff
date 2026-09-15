@@ -326,6 +326,71 @@ def test_gate_credits_a_read_receipt(monkeypatch, capsys, tmp_path):
     assert run('r4') == ''
 
 
+def test_gate_names_the_first_span_the_anchor_set_resolves(
+        monkeypatch, capsys, tmp_path):
+    """The span in the gate's message follows a re-stamped anchor set.
+
+    Mutation: the span read from the row's stored lines field, or the
+    resolved list indexed at its last element, so a trim that drops the
+    leading section leaves the message pointing at a span the row no
+    longer gates.
+    Oracle: hand-computed against the fixture spec - 'Scope' runs 3-7 and
+    'Risks' 8-10. The same payload names 3-7 while Scope leads the anchor
+    set and 8-10 once the set is narrowed to Risks alone.
+    """
+    root, folder = _handoff_root(tmp_path)
+    monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
+    tr = _transcript(tmp_path / 't.jsonl',
+                     [_bash(f'python3 scripts/hq.py open {_SLUG}')])
+
+    def run(session):
+        payload = _payload(root, tr, session, 'Edit',
+                           {'file_path': 'src/app.py'})
+        return _context(_run(monkeypatch, capsys, handoff_gate, payload))
+
+    ledger = folder / 'ledger.tsv'
+    hq._append_tsv(ledger, hq.LEDGER_FIELDS,
+                   _row('SPEC.md', cycle='2', where='Scope;Risks'),
+                   _LEDGER_HEADER)
+    assert 'SPEC.md (lines 3-7)' in run('w1')
+    hq._append_tsv(ledger, hq.LEDGER_FIELDS,
+                   _row('SPEC.md', cycle='3', where='Risks'),
+                   _LEDGER_HEADER)
+    assert 'SPEC.md (lines 8-10)' in run('w2')
+
+
+def test_a_read_of_a_narrowed_span_still_clears_the_gate(
+        monkeypatch, capsys, tmp_path):
+    """Gate credit is keyed on the path, whatever fraction the anchor names.
+
+    Mutation: the receipt matched against the row's anchor set as well as
+    its path, which makes a trimmed row unclearable - every write after a
+    narrowing reports a path the session has already read.
+    Oracle: a spy on stdout - one receipt naming the folder and the path
+    silences a row anchored at one of the fixture's two sections, and the
+    same payload reports without it.
+    """
+    root, folder = _handoff_root(tmp_path)
+    state = tmp_path / 'state'
+    state.mkdir()
+    monkeypatch.setenv('HQ_STATE_DIR', str(state))
+    tr = _transcript(tmp_path / 't.jsonl',
+                     [_bash(f'python3 scripts/hq.py open {_SLUG}')])
+    hq._append_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS,
+                   _row('SPEC.md', cycle='2', where='Risks'),
+                   _LEDGER_HEADER)
+
+    def run(session):
+        payload = _payload(root, tr, session, 'Edit',
+                           {'file_path': 'src/app.py'})
+        return _run(monkeypatch, capsys, handoff_gate, payload)
+
+    assert 'SPEC.md' in run('n1')
+    (state / 'hq-reads-n2.txt').write_text(f'{_NOW} {_SLUG} SPEC.md\n',
+                                           encoding='utf-8')
+    assert run('n2') == ''
+
+
 def test_gate_arms_only_on_hq_open(monkeypatch, capsys, tmp_path):
     """Verify nothing is gated until an hq.py open names a slug.
 
