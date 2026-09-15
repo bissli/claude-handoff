@@ -1,6 +1,6 @@
 {
   "name": "claude-handoff",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "description": "Warns in-session, while there is still room, that a Claude Code conversation should be handed off, and ships the /handoff skill that writes and reads the handoff",
   "author": {
     "name": "bissli"
