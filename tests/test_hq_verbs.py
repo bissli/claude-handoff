@@ -515,24 +515,23 @@ def test_reason_with_receipt_prefix_is_usage(tmp_path, monkeypatch):
     assert len((folder / 'ledger.tsv').read_text().splitlines()) == 1
 
 
-def test_tab_and_newline_in_free_text_become_spaces(tmp_path, monkeypatch):
-    """No ledger field carries a tab or a newline.
+def test_control_chars_in_label_refused_before_ledger(tmp_path, monkeypatch):
+    """--label with a tab or newline is refused before reaching the ledger.
 
-    Mutation: free text written unescaped, so a newline in --label appends
-    a forged row and a tab shifts every later field.
-    Oracle: one data row of thirteen fields with the label 'a b c'.
+    Mutation: the control-character check removed from _do_stamp, so a
+    newline in --label appends a forged row and a tab shifts every later
+    field.
+    Oracle: exit 2 and no data row written to ledger.tsv.
     """
     folder = _new_root(tmp_path, monkeypatch)
     hq.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n')
 
-    assert hq.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Spec', '--label', 'a\tb\nc']) == 0
+    assert hq.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Spec', '--label', 'a\tb\nc']) == 2
 
     lines = (folder / 'ledger.tsv').read_text().splitlines()
-    assert len(lines) == 2
-    fields = lines[1].split('\t')
-    assert len(fields) == len(hq.LEDGER_FIELDS)
-    assert fields[-1] == 'a b c'
+    # Header only; no data row was written.
+    assert len(lines) == 1
 
 
 def test_batch_reports_a_line_it_cannot_parse(tmp_path, monkeypatch):

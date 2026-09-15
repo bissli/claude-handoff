@@ -640,7 +640,7 @@ def test_read_and_diff_refusals_print_their_documented_lines(tmp_path, monkeypat
     assert (rc, out.strip()) == (
         0,
         ('? unresolved: Ghost'
-         ' - read the file whole when no span printed above'))
+         ' - use --whole to read the whole file when no span printed above'))
     (folder / 'SPEC.md').unlink()
     rc, out, _ = _run(['read', _SLUG, 'SPEC.md'])
     assert (rc, out.strip()) == (

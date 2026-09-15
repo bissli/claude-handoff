@@ -129,7 +129,7 @@ def test_a_path_carrying_a_tab_or_a_newline_is_a_usage_error(
     assert hq.main(['stamp', _SLUG, 'bad\nname.md']) == 2
 
     out = capsys.readouterr().out
-    refusal = 'hq stamp: path may not contain a tab, newline, or carriage return'
+    refusal = 'hq stamp: path may not contain a tab or a line break'
     assert out.count(refusal) == 2
     assert _rows(folder) == []
 

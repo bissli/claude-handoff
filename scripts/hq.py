@@ -128,7 +128,14 @@ s<n> for the heading numbered <n>.
   shows (N lines, T tok) and the whole file is the read; a :? in
   place of the span means the anchor matches no heading - read the
   whole file, then re-stamp with a --where that resolves and re-run
-  hq open. A ? that survives means the anchor is still wrong.""",
+  hq open. A ? that survives means the anchor is still wrong.
+- A section dropped from --where stays reachable: the read verb
+  takes --section <anchor>, in this same grammar, for an anchor
+  the row does not carry, and --whole for the file whole. Both
+  record the receipt the gate credits.
+- hq artifacts accepts --in-cycle N or --in-cycle cN to select on
+  the path's current cycle field, and --tsv to print all thirteen
+  ledger columns tab-separated under the ledger header line.""",
     'kinds': """\
 hq help kinds - how stamp infers kind and read_before
 
@@ -289,6 +296,9 @@ _STOPWORDS = {
     'phase',
     }
 _DEFAULT_STATE = pathlib.Path.home() / '.claude' / 'cache' / 'claude-handoff'
+# The characters str.splitlines() breaks on, plus tab. Any of these in a
+# ledger field would yield phantom rows when _read_tsv calls splitlines().
+_SPLITLINES_CHARS = '\t\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029'
 
 
 # ----------------------------------------------------------------------
@@ -1678,6 +1688,30 @@ def _append_lines(path: pathlib.Path, lines: list[str]) -> None:
         print(f'advisory: {path.name} lacked its trailing newline; restored')
     with path.open('a', encoding='utf-8') as fh:
         fh.write(lead + ''.join(line + '\n' for line in lines))
+
+
+def _tsv_line(values: list[str]) -> str:
+    """Return one tab-joined line, each value folded onto one line.
+
+    Parameters
+    ----------
+    values : list[str]
+        Field values in column order; each is stringified, and a tab,
+        carriage return, or newline inside one becomes a space.
+
+    Returns
+    -------
+    str
+        The values joined by tabs, with no trailing newline.
+
+    Notes
+    -----
+    - ``_append_tsv`` carries the same fold independently; both must move
+      together whenever the fold changes.
+    """
+    return '\t'.join(
+        ' '.join(str(value).split('\t')).replace('\r', ' ').replace('\n', ' ')
+        for value in values)
 
 
 def _append_tsv(path: pathlib.Path, fields: list[str], row: dict, header: str) -> None:
@@ -3851,14 +3885,27 @@ def _do_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
       either way, and both lines can fire at once.
     - The comparand is the last label an earlier cycle left, or the
       previous stamp of this cycle where the path has no earlier row.
+    - A label naming an ``s<n>`` section the new spans do not cover
+      draws a third advisory, on a stamp that gave ``--where`` and let
+      ``--label`` carry forward.
     """
     path = getattr(argv, 'path', '') or ''
     if not path:
         print('hq stamp: path is required')
         return 2
-    if '\t' in path or '\n' in path or '\r' in path:
-        print('hq stamp: path may not contain a tab, newline, or carriage return')
+    if any(c in path for c in _SPLITLINES_CHARS):
+        print('hq stamp: path may not contain a tab or a line break')
         return 2
+    for flag, value in (
+            ('--label', getattr(argv, 'label', None) or ''),
+            ('--where', getattr(argv, 'where', None) or ''),
+            ('--reason', getattr(argv, 'reason', None) or '')):
+        if any(c in value for c in _SPLITLINES_CHARS):
+            print(
+                f'hq stamp: {flag} may not contain a tab or a line break'
+                ' - the ledger is tab-delimited and one row is one line;'
+                ' retype it on one line')
+            return 2
     ledger_path = folder / 'ledger.tsv'
     rows = _read_tsv(ledger_path, LEDGER_FIELDS)
     live = latest_rows(rows)
@@ -4064,6 +4111,51 @@ def _do_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
             'label': label,
             }
     _append_tsv(ledger_path, LEDGER_FIELDS, new_row, _LEDGER_HEADER)
+    # Notes:
+    # - The gate is the command's own shape. Only a stamp that
+    #   narrowed --where while carrying the label forward can leave a
+    #   label its writer never re-read; a label typed in the same
+    #   command was judged as it was typed.
+    # - Coverage is the heading line, not the whole section, so an
+    #   anchor named by its title covers what s<n> names.
+    label_unread = (
+        bool(getattr(argv, 'where', None))
+        and not getattr(argv, 'label', None)
+        and where != '-' and label != '-'
+        and path_obj.is_file())
+    if label_unread:
+        file_text_for_advisory: str | None = None
+        try:
+            file_text_for_advisory = path_obj.read_text(encoding='utf-8', errors='replace')
+        except OSError:
+            pass
+        if file_text_for_advisory is not None:
+            spans, _ = resolve_where(file_text_for_advisory, _split_where(where))
+            uncovered = []
+            for token in sorted({
+                    m.lower() for m in re.findall(
+                        r'(?<![0-9A-Za-z_])s\d+(?:\.\d+)*[a-z]?(?![0-9A-Za-z_])',
+                        label)}):
+                token_spans, _ = resolve_where(file_text_for_advisory, [token])
+                # Notes:
+                # - A token naming a section the file does not have (e.g.
+                #   s11 of a nine-section file) resolves to nothing; report
+                #   it alongside out-of-span tokens because the label still
+                #   advertises a section the span will not print.
+                # - This comparison uses the fuller anchor grammar
+                #   (s\d+(?:\.\d+)*[a-z]?) while advisory 2 above keeps
+                #   \bs\d+\b; they disagree on 's24.4' - advisory 2 sees
+                #   's24', this one sees 's24.4'. Unifying them is wider
+                #   than this ticket.
+                if not token_spans or not any(
+                        start <= token_spans[0][0] <= end
+                        for start, end in spans):
+                    uncovered.append(token)
+            if uncovered:
+                print(
+                    f'advisory: label names {uncovered!r} outside the span:'
+                    f' {stored_path} - rewrite it with --label in the same'
+                    ' stamp')
     # Notes:
     # - The comparand is the last row of an earlier cycle, so two
     #   re-stamps in one cycle are both judged against what the
@@ -4971,19 +5063,24 @@ def _verb_read(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     anch : dict
         Anchors dict from ``anchors()``; provides session and timestamp.
     argv : argparse.Namespace
-        Parsed read arguments: path.
+        Parsed read arguments: path, ``--whole``, ``--section``.
 
     Returns
     -------
     int
         0 on success; 1 when the path is not in the ledger, not on disk,
-        or the receipt directory cannot be written.
+        or the receipt directory cannot be written; 2 when ``--whole``
+        and ``--section`` are passed together.
 
     Notes
     -----
     - The spans print before the receipt is written, so a state directory
       the receipt cannot reach costs the caller the exit code, never
       the content it asked for.
+    - ``--whole`` prints the file whole whatever the row anchors and
+      ``--section`` resolves an anchor of its own; both write the
+      receipt, because gate credit is keyed on the path and never on
+      the span.
     - The path keys as ``stamp`` stores it, else relative to the root or
       the pinned work dir (``_ledger_key``), and the file opens where the
       stored path resolves; the receipt carries the stored path, which
@@ -4992,6 +5089,18 @@ def _verb_read(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
       file, not a path under the state directory.
     """
     path = getattr(argv, 'path', '')
+    whole = getattr(argv, 'whole', False)
+    section = getattr(argv, 'section', None)
+    if section is not None and not section:
+        print(
+            'hq read: --section requires an anchor'
+            ' - pass a heading or use --whole for the file whole')
+        return 2
+    if whole and section:
+        print(
+            'hq read: --whole and --section name different reads'
+            ' - pass one or the other')
+        return 2
     rows = _read_tsv(folder / 'ledger.tsv', LEDGER_FIELDS)
     stored_path = _ledger_key(folder, path, {r['path'] for r in rows})
     if stored_path is None:
@@ -5006,15 +5115,16 @@ def _verb_read(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
         return 1
     file_text = file_path.read_text(encoding='utf-8', errors='replace')
     file_lines = file_text.splitlines()
-    if row['where'] != '-':
-        anchor_list = _split_where(row['where'])
+    where = '-' if whole else (section or row['where'])
+    if where != '-':
+        anchor_list = _split_where(where)
         spans, unresolved = resolve_where(file_text, anchor_list)
         for span in spans:
             print('\n'.join(file_lines[span[0] - 1:span[1]]))
         for anchor_str in unresolved:
             print(
                 f'? unresolved: {anchor_str}'
-                ' - read the file whole when no span printed above')
+                ' - use --whole to read the whole file when no span printed above')
     else:
         print('\n'.join(file_lines))
     state_path = pathlib.Path(os.environ.get('HQ_STATE_DIR', str(_DEFAULT_STATE)))
@@ -5042,13 +5152,14 @@ def _verb_when(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     anch : dict
         Anchors dict from ``anchors()``; unused but required by dispatch.
     argv : argparse.Namespace
-        Parsed when arguments: path.
+        Parsed when arguments: path, ``--tsv``.
 
     Returns
     -------
     int
         0 with every row for the path, oldest first, no cap; 1 when no
-        spelling of the path has a row.
+        spelling of the path has a row; with ``--tsv`` the ledger header
+        and every column of every row instead of the seven.
 
     Notes
     -----
@@ -5065,8 +5176,14 @@ def _verb_when(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
             f'hq when: {path} not in ledger'
             f' - hq artifacts {folder.name} lists the rows')
         return 1
+    tsv = getattr(argv, 'tsv', False)
+    if tsv:
+        print(_LEDGER_HEADER)
     for row in rows:
         if row['path'] == stored_path:
+            if tsv:
+                print(_tsv_line([row[f] for f in LEDGER_FIELDS]))
+                continue
             print('\t'.join([
                 row['path'], row['cycle'], row['status'], row['read_before'],
                 row['successor'], row['reason'], row['label']]))
@@ -5182,42 +5299,96 @@ def _verb_artifacts(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) 
     anch : dict
         Anchors dict from ``anchors()``; unused but required by dispatch.
     argv : argparse.Namespace
-        Parsed artifacts arguments (none beyond the common flags).
+        Parsed artifacts arguments: ``--kind``, ``--status``,
+        ``--read-before``, ``--in-cycle``, ``--successor``, ``--tsv``.
 
     Returns
     -------
     int
-        0 always; prints one line per entry.
+        0 always; one line per entry, or one per selected row where any
+        filter is given, or the ledger header and one tab-separated row
+        each with ``--tsv``.
+
+    Notes
+    -----
+    - Selection reads the path's current row, the ``latest_rows`` fold,
+      so a superseded earlier row never answers a filter.
+    - ``--status`` replaces the live-only default; the other filters
+      keep it.
+    - No row matching is exit 0, not a refusal: the query answered.
     """
     rows = _read_tsv(folder / 'ledger.tsv', LEDGER_FIELDS)
     live = latest_rows(rows)
     walk = _walk_folder(folder)
     live = _reconcile_missing(folder, live)
+    in_cycle_raw = getattr(argv, 'in_cycle', None)
+    in_cycle = None
+    if in_cycle_raw is not None:
+        digits = in_cycle_raw.lstrip('cC')
+        if not digits.isdecimal():
+            print(
+                f'hq artifacts: --in-cycle {in_cycle_raw!r} is not a cycle number'
+                ' - pass an integer, as 5 or c5')
+            return 2
+        in_cycle = str(int(digits))
+    any_filter = any(
+        getattr(argv, name, None) is not None
+        for name in ('kind', 'status', 'read_before', 'in_cycle', 'successor'))
+    explicit_status = getattr(argv, 'status', None)
+    successor_filter = getattr(argv, 'successor', None)
+    # When --successor is given without --status, drop the implicit live
+    # default: the row a successor stamps points at will be superseded, not
+    # live, so the live default would always answer the empty set.
+    selectors = {
+        'status': explicit_status or (None if successor_filter else 'live'),
+        'kind': getattr(argv, 'kind', None),
+        'read_before': getattr(argv, 'read_before', None),
+        'cycle': in_cycle,
+        'successor': successor_filter,
+        }
+    wanted = {field: value for field, value in selectors.items() if value}
+    tsv = getattr(argv, 'tsv', False)
+    # A walk entry with no row carries no column to select on, so a
+    # filtered or tsv run reports rows alone.
+    rows_only = tsv or any_filter
+    if tsv:
+        print(_LEDGER_HEADER)
+    printed = 0
     seen: set[str] = set()
     for name, kind in walk:
         seen.add(name)
         if kind == 'skip':
-            if 'conflicted copy' in name:
-                print(f'{name}  conflicted copy')
-            else:
-                print(f'{name}  unstampable')
+            if not rows_only:
+                print(
+                    f'{name}  conflicted copy' if 'conflicted copy' in name
+                    else f'{name}  unstampable')
             continue
         row = live.get(name)
         if row is None:
-            if not is_recorded(name, live):
+            if not rows_only and not is_recorded(name, live):
                 print(f'{name}  {kind}?  unstamped')
             continue
-        if row['status'] == 'live':
+        if all(row[field] == value for field, value in wanted.items()):
+            printed += 1
             print(
+                _tsv_line([row[f] for f in LEDGER_FIELDS]) if tsv else
                 f'{name}  {row["kind"]}  {row["read_before"]}'
-                f'  c{row["cycle"]}  {row["label"]}'
-                )
+                f'  c{row["cycle"]}  {row["label"]}')
     for path, row in live.items():
-        if path in seen or row['status'] != 'live':
+        if path in seen:
             continue
+        if row['status'] != 'live' and not any_filter:
+            continue
+        if all(row[field] == value for field, value in wanted.items()):
+            printed += 1
+            print(
+                _tsv_line([row[f] for f in LEDGER_FIELDS]) if tsv else
+                f'{path}  {row["kind"]}  {row["read_before"]}'
+                f'  c{row["cycle"]}  {row["label"]}')
+    if any_filter and not tsv and not printed:
         print(
-            f'{path}  {row["kind"]}  {row["read_before"]}'
-            f'  c{row["cycle"]}  {row["label"]}')
+            f'hq artifacts: no row matches those flags: {folder.name}'
+            ' - drop one, or run the verb bare for every live row')
     return 0
 
 
@@ -5232,13 +5403,15 @@ def _verb_standing(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -
         Anchors dict from ``anchors()``; unused but required by dispatch.
     argv : argparse.Namespace
         Parsed standing arguments; ``ids`` names items to print in full,
-        ``--all`` includes superseded items in the listing.
+        ``--all`` includes superseded items in the listing, ``--tsv``
+        prints a tab-separated table instead.
 
     Returns
     -------
     int
         0 with no id, one line per item; with ids, 0 once every id
-        printed and 1 when any id is not in standing.md.
+        printed and 1 when any id is not in standing.md; with ``--tsv``,
+        the header and one row per item instead of prose lines.
 
     Notes
     -----
@@ -5278,6 +5451,7 @@ def _verb_standing(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -
     show_all = getattr(argv, 'all', False)
     wanted = list(getattr(argv, 'ids', None) or [])
     by_id = {item['id']: item for item in items}
+    tsv = getattr(argv, 'tsv', False)
     rc = 0
     for item_id in wanted:
         if item_id not in by_id:
@@ -5285,18 +5459,35 @@ def _verb_standing(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -
                 f'hq standing: {item_id} not in standing.md'
                 f' - hq standing {folder.name} lists the ids')
             rc = 1
+    # In tsv mode a prose refusal must not appear before the header; return
+    # as soon as any id is invalid so the stream starts clean.
+    if tsv and rc:
+        return rc
+    if tsv:
+        print(
+            'id\tprefix\tcycle\theadline\tbody\tsuperseded'
+            '\tsuperseded_by\tsuperseded_in')
     for item in items:
         if wanted:
             if item['id'] not in wanted:
                 continue
         elif not show_all and item['id'] in superseded_ids:
             continue
-        sup = ''
+        sup_by = sup_in = '-'
         chain = chains.get(item['id'])
         if chain:
-            cycle = successors[chain[-2]][1]
+            sup_by, sup_in = chain[-1], successors[chain[-2]][1]
+        if tsv:
+            print(_tsv_line([
+                item['id'], item['prefix'], item['cycle'] or '-',
+                item['headline'], item['body'] or '-',
+                'yes' if item['id'] in superseded_ids else 'no',
+                sup_by, sup_in]))
+            continue
+        sup = ''
+        if chain:
             hops = f' - {" -> ".join(chain)}' if wanted and len(chain) > 2 else ''
-            sup = f' [superseded by {chain[-1]} in c{cycle}{hops}]'
+            sup = f' [superseded by {sup_by} in c{sup_in}{hops}]'
         elif item['id'] in superseded_ids:
             sup = ' [superseded]'
         print(f'[{item["id"]}] (c{item["cycle"]}) **{item["headline"]}** {item["body"]}{sup}')
@@ -5374,7 +5565,8 @@ def _verb_list(root: pathlib.Path, argv: argparse.Namespace) -> int:
     root : pathlib.Path
         Project root; the handoff folders sit under ``root / HANDOFF_DIRNAME``.
     argv : argparse.Namespace
-        Parsed ``list`` arguments; ``count`` caps the lines, None for all.
+        Parsed ``list`` arguments; ``count`` caps the lines, None for all;
+        ``--tsv`` prints a tab-separated table instead.
 
     Returns
     -------
@@ -5396,6 +5588,9 @@ def _verb_list(root: pathlib.Path, argv: argparse.Namespace) -> int:
     - A file the script cannot read prints its slug with ``-`` in every
       field and ``unreadable: <reason>`` as the Task; the survey goes on
       and the exit stays 0.
+    - ``--tsv`` prints the header alone where no folder holds a
+      ``HANDOFF.md``, so every ``--tsv`` run is exactly one header plus
+      zero or more rows.
     """
     count = getattr(argv, 'count', None)
     if count is not None and count < 1:
@@ -5408,7 +5603,11 @@ def _verb_list(root: pathlib.Path, argv: argparse.Namespace) -> int:
             (path for path in handoffs.glob('*/HANDOFF.md') if path.is_file()),
             key=lambda path: path.parent.name)
         files.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    tsv = getattr(argv, 'tsv', False)
     if not files:
+        if tsv:
+            print('slug\twritten\tcycle\tprogress\ttask')
+            return 0
         print(f'hq list: no handoff under {handoffs}')
         return 0
     rows: list[tuple[str, str, str, str, str]] = []
@@ -5444,6 +5643,12 @@ def _verb_list(root: pathlib.Path, argv: argparse.Namespace) -> int:
                     done += box.group(1) != ' '
         progress = f'{done}/{total}' if total else '-'
         rows.append((path.parent.name, written, cycle, progress, task))
+    if tsv:
+        print('slug\twritten\tcycle\tprogress\ttask')
+        for slug, written, cycle, progress, task in rows:
+            print(_tsv_line(
+                [slug, written, cycle.lstrip('c') or '-', progress, task]))
+        return 0
     headers = ('SLUG', 'WRITTEN', 'CYCLE', 'PROGRESS')
     col_widths = [
         max(*(len(row[i]) for row in rows), len(headers[i]))
@@ -5535,6 +5740,9 @@ def _build_parser() -> argparse.ArgumentParser:
         'left, or the previous stamp of this cycle where there is no earlier\n'
         'row. Backticks are markup: an identifier the new label still spells\n'
         'plainly is neither a loss nor a shortening.\n'
+        'A stamp that gives --where and lets --label carry forward draws a\n'
+        'third advisory where the label names an s<n> section the new spans\n'
+        'do not cover.\n'
         '--successor P sets status=superseded read_before=never; --archive\n'
         'sets status=archived read_before=never and requires --reason;\n'
         '--defer marks a non-gated file deferred so it reappears in the next\n'
@@ -5614,16 +5822,37 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser('open').add_argument('slug')
 
-    rd = sub.add_parser('read')
+    _read_epilog = (
+        "The row's anchored spans, or the whole file where the row has no\n"
+        'anchor, then the receipt the gate credits. Gate credit is keyed on\n'
+        'the path, so every form of the verb records it, an anchor matching\n'
+        'no heading included.\n'
+        '--whole prints the file whole whatever the row anchors. --section\n'
+        '<anchor> resolves an anchor of its own instead, in the hq help\n'
+        "anchors grammar and joined with ';' for several, whether or not the\n"
+        "row's where carries it: the sanctioned read of a section dropped\n"
+        'from --where. The two name different reads and are refused\n'
+        'together. An anchor matching no heading prints ? unresolved:\n'
+        '<anchor>; resolved anchors in the same list still print above it.'
+    )
+    rd = sub.add_parser(
+        'read',
+        epilog=_read_epilog,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
     rd.add_argument('slug')
     rd.add_argument('path')
+    rd.add_argument('--whole', action='store_true')
+    rd.add_argument('--section', metavar='ANCHOR')
 
     _when_epilog = (
         'Every ledger row for the path, oldest first, no cap, seven\n'
         'tab-separated columns: path cycle status read_before successor\n'
         'reason label. The path keys as stamp stores it; a relative token\n'
         'the folder does not hold is tried against the project root, then\n'
-        'the pinned work dir. A path with no row exits 1.'
+        'the pinned work dir. A path with no row exits 1.\n'
+        '--tsv prints every ledger column of every such row under the\n'
+        'ledger header line instead of the seven; a path with no row still\n'
+        'prints its own line and exits 1.'
     )
     wh = sub.add_parser(
         'when',
@@ -5631,6 +5860,7 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter)
     wh.add_argument('slug')
     wh.add_argument('path')
+    wh.add_argument('--tsv', action='store_true')
 
     _diff_epilog = (
         'Cycles are named N, cN, or cNN. With no section, one line per\n'
@@ -5657,13 +5887,36 @@ def _build_parser() -> argparse.ArgumentParser:
         'no cap, then <name>  <kind>?  unstamped for a file with no row,\n'
         '<name>  conflicted copy for a sync duplicate, and <name>  unstampable\n'
         'for a name holding a tab or newline or an entry that is not a regular\n'
-        'file.'
+        'file.\n'
+        '--kind, --status, --read-before, --in-cycle, and --successor select on\n'
+        "that field of the path's current row, never a superseded earlier one;\n"
+        '--status replaces the live-only default and --in-cycle takes a bare\n'
+        'integer or cN. Any of them reports rows alone, the unstamped and\n'
+        'unstampable entries dropped for want of a field to select on, and\n'
+        'prints hq artifacts: no row matches those flags when none does, at\n'
+        'exit 0. --tsv prints the thirteen ledger columns under their own\n'
+        'header line instead, the bytes the ledger holds except that a\n'
+        'vanished file reads status missing and a walk entry of kind skip\n'
+        'has its row omitted from the output.'
     )
-    sub.add_parser(
+    art = sub.add_parser(
         'artifacts',
         epilog=_artifacts_epilog,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    ).add_argument('slug')
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    art.add_argument('slug')
+    art.add_argument(
+        '--kind',
+        choices=['spec', 'draft', 'notes', 'todo', 'snapshot', 'probe-dir', 'other'])
+    art.add_argument(
+        '--status',
+        choices=['live', 'superseded', 'archived', 'missing'])
+    art.add_argument(
+        '--read-before',
+        dest='read_before',
+        choices=['always', 'edit', 'mention', 'never'])
+    art.add_argument('--in-cycle', dest='in_cycle')
+    art.add_argument('--successor')
+    art.add_argument('--tsv', action='store_true')
 
     _standing_epilog = (
         'Every unsuperseded item in full; --all adds the superseded ones.\n'
@@ -5672,7 +5925,11 @@ def _build_parser() -> argparse.ArgumentParser:
         'old -> new lines to the end of the chain: [d18] ... [superseded by\n'
         'd21 in c5]. Past one hop the id form adds the chain itself:\n'
         '[superseded by d21 in c5 - d18 -> d20 -> d21]. An id not in\n'
-        'standing.md prints hq standing: <id> not in standing.md and exits 1.'
+        'standing.md prints hq standing: <id> not in standing.md and exits 1.\n'
+        '--tsv prints one header line, id prefix cycle headline body\n'
+        'superseded superseded_by superseded_in, then that row per item\n'
+        'instead, cycles as bare numbers, a nil field as -, and\n'
+        'superseded_by the end of the chain.'
     )
     st = sub.add_parser(
         'standing',
@@ -5681,6 +5938,7 @@ def _build_parser() -> argparse.ArgumentParser:
     st.add_argument('slug')
     st.add_argument('ids', nargs='*')
     st.add_argument('--all', action='store_true')
+    st.add_argument('--tsv', action='store_true')
 
     _list_epilog = (
         'One line per folder under .handoff/ holding a HANDOFF.md, newest\n'
@@ -5690,13 +5948,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "checkbox item; a file with no conforming header shows '-' for the\n"
         "date and the cycle; an unreadable file shows '-  -  -  unreadable:\n"
         "<reason>'. Ties in the same second list A to Z by slug. A bare list\n"
-        'shows every one; list 5 the five most recent.'
+        'shows every one; list 5 the five most recent.\n'
+        '--tsv prints one header line, slug written cycle progress task,\n'
+        'then that row per folder instead, tab-separated, the cycle a bare\n'
+        'number and no padding or rule line; with no handoff it prints the\n'
+        'header alone.'
     )
-    sub.add_parser(
+    lst = sub.add_parser(
         'list',
         epilog=_list_epilog,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    ).add_argument('count', nargs='?', type=int)
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    lst.add_argument('count', nargs='?', type=int)
+    lst.add_argument('--tsv', action='store_true')
 
     _work_dir_epilog = (
         "With the slug alone, prints where the thread's made files go:\n"

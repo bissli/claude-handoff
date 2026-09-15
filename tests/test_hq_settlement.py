@@ -177,7 +177,7 @@ def test_a_carriage_return_in_a_path_token_is_refused(tmp_path, monkeypatch):
     before = (folder / 'ledger.tsv').read_bytes()
     rc, out = _run(['stamp', _SLUG, 'a\rb.md', '--label', 'cr'])
     assert rc == 2
-    assert 'hq stamp: path may not contain a tab, newline, or carriage return' in out
+    assert 'hq stamp: path may not contain a tab or a line break' in out
     assert (folder / 'ledger.tsv').read_bytes() == before
 
 
