@@ -11,8 +11,27 @@ This hook watches each write after an ``hq open`` and, when a gated
 path the write needs has not been read this session, hands the model
 one line naming the path and the lines to read.
 
+It carries a second, smaller guard. The skill dictates ``ledger.tsv``,
+``standing.md``, and ``cycles/`` through a verb and never opens them,
+and nothing enforced that either: a run was seen reading the ledger
+and the lock in one command, unprompted, in a session written for
+other work. A call that names one of those three gets back the verb
+that replaces it.
+
 Notes
 -----
+- The store guard tests the path's shape alone, so it needs no armed
+  folder, no ledger, and no transcript, and it runs ahead of every
+  write test. The write gate reports what a write has not read; this
+  reports what a read should not open. The two test independent
+  things. They do not print independently: one call prints both, so
+  where a write reaches the ledger and that work raises, the fail-open
+  below drops the store report with it.
+- The ``Read`` tool reaches the stores as plainly as ``cat`` does, and
+  ``store_reads`` grades both, but ``hooks.json`` matches only
+  ``Edit|Write|NotebookEdit|Bash``. Adding ``Read`` to that matcher
+  spawns this hook on every Read call on the machine, which is a cost
+  the shell route does not carry.
 - The hook runs on every Bash, Edit, Write, and NotebookEdit call on the
   machine, so the common path globs the ancestors of the write target
   and of cwd for a ledger and stops. Only a write that reaches a project
@@ -175,6 +194,63 @@ def _strip_heredocs(command: str) -> str:
     return '\n'.join(kept)
 
 
+def read_segments(command: str) -> list[str]:
+    """Return the shell segments of a command that read a file.
+
+    Parameters
+    ----------
+    command : str
+        The command line as sent in ``tool_input.command``.
+
+    Returns
+    -------
+    list[str]
+        Each segment whose command word is a read verb, its redirect
+        targets dropped and its ends stripped.
+
+    Notes
+    -----
+    - A segment is the run between ``;``, ``|``, ``&``, and newline,
+      heredoc bodies dropped first. ``cat f | head`` yields ``cat f``;
+      ``hq when s f | head`` and ``grep x f | head`` yield ``head``,
+      which names no path.
+    - The write gate's read credit and the store guard both read a
+      command through this one function, so the evidence they accept
+      cannot drift apart.
+    """
+    return [_REDIRECT_TARGET.sub(' ', segment).strip()
+            for segment in _SEGMENT_SPLIT.split(_strip_heredocs(command))
+            if _READ_SEGMENT.match(segment)]
+
+
+def _resolved(target: str, cwd: str) -> str:
+    """Return one path normalized, its tilde expanded, against cwd.
+
+    Parameters
+    ----------
+    target : str
+        The path as the call spells it, absolute or relative.
+    cwd : str
+        The session's working directory; ``.`` stands in when empty.
+
+    Returns
+    -------
+    str
+        The normalized absolute path, or the normalized path as written
+        where no home could be resolved.
+
+    Notes
+    -----
+    - ``os.path.expanduser`` leaves ``~nouser/f`` as written where
+      pathlib's raises, and a raise reaches ``main``'s fail-open and
+      silences the whole hook for that call.
+    """
+    expanded = os.path.expanduser(target)
+    if not os.path.isabs(expanded):
+        expanded = os.path.join(cwd or '.', expanded)
+    return os.path.normpath(expanded)
+
+
 def scan_transcript(text: str) -> tuple[str, list[str], list[str]]:
     """Pull the armed slug and the reading a transcript chunk records.
 
@@ -240,8 +316,113 @@ def scan_transcript(text: str) -> tuple[str, list[str], list[str]]:
                 for opened in _OPEN_VERB.finditer(command):
                     if not any(a <= opened.start() < b for a, b in mention_spans):
                         slug = opened.group(1)
-                segments.extend(_REDIRECT_TARGET.sub(' ', segment).strip() for segment in _SEGMENT_SPLIT.split(_strip_heredocs(command)) if _READ_SEGMENT.match(segment))
+                segments.extend(read_segments(command))
     return slug, reads, segments
+
+
+def store_reads(tool: str, fields: dict[str, Any], cwd: str) -> list[tuple[str, str]]:
+    """Name the append-only stores a call is about to open directly.
+
+    Parameters
+    ----------
+    tool : str
+        The PreToolUse ``tool_name``.
+    fields : dict[str, Any]
+        The call's ``tool_input``.
+    cwd : str
+        The session's working directory, which resolves a relative path.
+
+    Returns
+    -------
+    list[tuple[str, str]]
+        One ``(slug, store)`` pair per store the call names, in the
+        order it names them and without repeats. Empty for a call that
+        names none, which is nearly every call.
+
+    Notes
+    -----
+    - The test is the path's own shape - the handoff directory, a slug,
+      then ``ledger.tsv``, ``standing.md``, or ``cycles`` - so this
+      guard needs no armed folder, no ledger, and no transcript. That
+      is what lets it fire on a read that precedes the ``hq open``
+      arming anything, which is where the read it exists to catch was
+      seen.
+    - A read is the Read tool's own target or a token of a shell
+      segment whose command word is a read verb, the same evidence the
+      write gate credits. So ``hq when`` and ``hq standing`` report
+      nothing: neither is a read verb, and both are the route named
+      here.
+    - The shape alone decides, so no filesystem call is made. A
+      ``~user`` token costs a name-service lookup through
+      ``expanduser``; nothing else leaves the process.
+    - The store component has to be named by the call. Inherited from
+      cwd alone, every read run from inside a ``cycles/`` directory
+      would report one.
+    """
+    name = hq.HANDOFF_DIRNAME
+    if tool == 'Read':
+        raw = str(fields.get('file_path') or '')
+    elif tool == 'Bash':
+        raw = str(fields.get('command') or '')
+    else:
+        return []
+    # A store path carries the handoff directory as a component, so a
+    # call naming it in neither the command nor cwd cannot reach one.
+    # This hook runs on every matched call on the machine and nearly
+    # every one stops here, before any parsing or path work.
+    if name not in raw and name not in cwd:
+        return []
+    if tool == 'Read':
+        spelled = [raw] if raw else []
+    else:
+        spelled = [token for segment in read_segments(raw)
+                   for token in _TOKEN_SPLIT.split(segment) if token]
+    found: list[tuple[str, str]] = []
+    for target in spelled:
+        if not any(store in target for store in hq.STORE_VERBS):
+            continue
+        parts = _resolved(target, cwd).split(os.sep)
+        for index, part in enumerate(parts[:-2]):
+            store = parts[index + 2]
+            if part == name and store in hq.STORE_VERBS and store in target:
+                found.append((parts[index + 1], store))
+    return list(dict.fromkeys(found))
+
+
+def _emit(message: str) -> int:
+    """Hand one gate message to the model, or print nothing at all.
+
+    Parameters
+    ----------
+    message : str
+        The line to report, empty where the gate found nothing.
+
+    Returns
+    -------
+    int
+        Always 0. The hook allows the call whatever it reports.
+
+    Notes
+    -----
+    - ``HQ_GATE_DENY=1`` turns the report into a refusal, and is the
+      one operator switch that blocks the call.
+    - The ``handoff gate:`` prefix belongs here, the one place that
+      knows a message is going out, so a report joining both guards
+      carries it once.
+    """
+    if not message:
+        return 0
+    message = f'handoff gate: {message}'
+    if os.environ.get('HQ_GATE_DENY') == '1':
+        decision = {'hookEventName': 'PreToolUse',
+                    'permissionDecision': 'deny',
+                    'permissionDecisionReason': message}
+    else:
+        decision = {'hookEventName': 'PreToolUse',
+                    'permissionDecision': 'allow',
+                    'additionalContext': message}
+    json.dump({'hookSpecificOutput': decision}, sys.stdout)
+    return 0
 
 
 def gate(payload: dict[str, Any]) -> int:
@@ -275,6 +456,13 @@ def gate(payload: dict[str, Any]) -> int:
     tool = str(payload.get('tool_name') or '')
     fields = payload.get('tool_input') or {}
     command = str(fields.get('command') or '')
+    # The store guard runs ahead of every write test and of the root
+    # search, because a direct read is not a write and reaches none of
+    # them.
+    nudge = '; '.join(
+        f'{read_slug}/{store} is dictated, not opened - run: '
+        + hq.STORE_VERBS[store].format(slug=read_slug)
+        for read_slug, store in store_reads(tool, fields, cwd))
     # Notes:
     # - A Bash target is the word after a redirect, or a non-flag word
     #   of an in-place edit or a write verb up to the end of its shell
@@ -285,10 +473,10 @@ def gate(payload: dict[str, Any]) -> int:
     if tool in WRITE_TOOL_TARGETS:
         spelled = [str(fields.get(WRITE_TOOL_TARGETS[tool]) or '')]
         if not spelled[0]:
-            return 0
+            return _emit(nudge)
     elif tool == 'Bash':
         if not bash_writes(command):
-            return 0
+            return _emit(nudge)
         text = _QUOTED.sub(
             lambda m: re.sub(r'[<>]', ' ', m.group(0)[1:-1]),
             _strip_heredocs(command))
@@ -298,17 +486,10 @@ def gate(payload: dict[str, Any]) -> int:
             segment = _SEGMENT_SPLIT.split(text[verb.end():])[0]
             spelled += [t for t in segment.split() if not t.startswith('-')]
     else:
-        return 0
+        return _emit(nudge)
     # Every target is joined to cwd when relative and normalized, so
     # `../../src/f` written from inside the folder resolves outside it.
-    # os.path.expanduser leaves `~nouser/f` as written where pathlib's
-    # raises, and a raise here would silence the gate.
-    targets: list[str] = []
-    for target in spelled:
-        resolved = pathlib.Path(os.path.expanduser(target))
-        if not resolved.is_absolute():
-            resolved = pathlib.Path(cwd or '.') / resolved
-        targets.append(os.path.normpath(str(resolved)))
+    targets = [_resolved(target, cwd) for target in spelled]
 
     # The root is the target's, so a write reaches the project it lands
     # in from any cwd; cwd's root is the fallback for a write verb with
@@ -322,7 +503,7 @@ def gate(payload: dict[str, Any]) -> int:
         if root is not None:
             break
     if root is None:
-        return 0
+        return _emit(nudge)
 
     session = str(payload.get('session_id') or 'unknown').replace('/', '_')
     state_dir = pathlib.Path(os.environ.get('HQ_STATE_DIR', STATE_DIR))
@@ -416,12 +597,7 @@ def gate(payload: dict[str, Any]) -> int:
                 encoding='utf-8').splitlines()
         except OSError:
             receipts = []
-        opened = set()
-        for entry in reads:
-            item = pathlib.Path(entry).expanduser()
-            if not item.is_absolute():
-                item = pathlib.Path(cwd) / item
-            opened.add(os.path.normpath(str(item)))
+        opened = {_resolved(entry, cwd) for entry in reads}
         tokens = [set(_TOKEN_SPLIT.split(entry)) for entry in segments]
         missing: list[tuple[str, str]] = []
         for row in rows.values():
@@ -470,7 +646,7 @@ def gate(payload: dict[str, Any]) -> int:
         reported.extend(path for path, _ in missing)
         if missing:
             listed = ', '.join(f'{path} ({span})' for path, span in missing)
-            message = (f'handoff gate: {folder.name}: {len(missing)} gated '
+            message = (f'{folder.name}: {len(missing)} gated '
                        f'path(s) not read this session - {listed}; read each '
                        f'or run: hq read {folder.name} {missing[0][0]}')
 
@@ -486,18 +662,10 @@ def gate(payload: dict[str, Any]) -> int:
         state_path.write_text(json.dumps(state), encoding='utf-8')
     except OSError:
         pass
-    if not message:
-        return 0
-    if os.environ.get('HQ_GATE_DENY') == '1':
-        decision = {'hookEventName': 'PreToolUse',
-                    'permissionDecision': 'deny',
-                    'permissionDecisionReason': message}
-    else:
-        decision = {'hookEventName': 'PreToolUse',
-                    'permissionDecision': 'allow',
-                    'additionalContext': message}
-    json.dump({'hookSpecificOutput': decision}, sys.stdout)
-    return 0
+    # One command can both read a store and write past a gated path
+    # (`cat .handoff/x/ledger.tsv > out`), so the two reports join
+    # rather than one displacing the other.
+    return _emit('; '.join(part for part in (nudge, message) if part))
 
 
 def main() -> int:

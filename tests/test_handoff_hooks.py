@@ -936,3 +936,270 @@ def test_gate_counts_distinct_spans_not_anchors(monkeypatch, capsys, tmp_path):
     out = _context(_run(monkeypatch, capsys, handoff_gate, payload))
     assert 'SPEC.md (lines 3-6)' in out
     assert 'of 2 spans' not in out
+
+
+def test_store_guard_fires_on_the_shape_seen_in_practice(monkeypatch, capsys,
+                                                         tmp_path):
+    """Verify a bare `cat ledger.tsv` from inside the folder reports.
+
+    Mutation: testing each path as spelled instead of resolved against
+    cwd, which misses the one store read seen in practice - the lock
+    and the ledger named bare in one command, run from inside the
+    folder.
+    Oracle: the hand-written verb for the ledger, with the lock named
+    beside it changing nothing.
+    """
+    root, folder = _handoff_root(tmp_path)
+    monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
+    tr = _transcript(tmp_path / 't.jsonl', [])
+    payload = _payload(folder, tr, 'G1', 'Bash',
+                       {'command': 'cat .hq.lock ledger.tsv'})
+    out = _context(_run(monkeypatch, capsys, handoff_gate, payload))
+    assert f'{_SLUG}/ledger.tsv is dictated, not opened' in out
+    assert f'hq artifacts {_SLUG}' in out
+
+
+def test_store_guard_stays_silent_on_the_verbs_it_names(monkeypatch, capsys,
+                                                        tmp_path):
+    """Verify the hq verbs that replace a direct read report nothing.
+
+    Mutation: matching a store name anywhere in the command instead of
+    as a read verb's own argument, which fires on `hq when <slug>
+    ledger.tsv` and so punishes the route the message recommends.
+    Oracle: empty stdout for each of the four verbs, one of them piped
+    into head.
+    """
+    root, folder = _handoff_root(tmp_path)
+    monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
+    tr = _transcript(tmp_path / 't.jsonl', [])
+    for index, command in enumerate([
+            f'hq artifacts {_SLUG}',
+            f'hq when {_SLUG} ledger.tsv',
+            f'hq standing {_SLUG} | head -3',
+            f'hq diff {_SLUG} c01 c02',
+            ]):
+        payload = _payload(root, tr, f'G2{index}', 'Bash',
+                           {'command': command})
+        assert _run(monkeypatch, capsys, handoff_gate, payload) == ''
+
+
+def test_store_guard_counts_only_read_shaped_evidence(monkeypatch, capsys,
+                                                      tmp_path):
+    """Verify listing or searching a store is not opening it.
+
+    Mutation: dropping the read-verb filter and testing every token of
+    every command, which reports an `ls` or a `grep` that never read a
+    line.
+    Oracle: empty stdout under ls, wc, and grep against the same path
+    that reports under cat, which is the positive guard.
+    """
+    root, folder = _handoff_root(tmp_path)
+    monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
+    tr = _transcript(tmp_path / 't.jsonl', [])
+    stored = f'.handoff/{_SLUG}/ledger.tsv'
+
+    def run(session, command):
+        payload = _payload(root, tr, session, 'Bash', {'command': command})
+        return _run(monkeypatch, capsys, handoff_gate, payload)
+
+    assert run('G30', f'ls {stored}') == ''
+    assert run('G31', f'wc -l {stored}') == ''
+    assert run('G32', f'grep refresh {stored}') == ''
+    assert 'ledger.tsv' in _context(run('G33', f'cat {stored}'))
+
+
+def test_store_guard_names_the_three_stores_not_the_folder(monkeypatch, capsys,
+                                                           tmp_path):
+    """Verify the guard covers three paths, never the folder at large.
+
+    Mutation: matching the folder prefix instead of the store names,
+    which fires on HANDOFF.md - the file the read path exists to open -
+    and turns the guard into noise on the prescribed route.
+    Oracle: empty stdout for HANDOFF.md and for a notes file, against
+    the ledger reporting from the same cwd.
+    """
+    root, folder = _handoff_root(tmp_path)
+    monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
+    tr = _transcript(tmp_path / 't.jsonl', [])
+
+    def run(session, target):
+        payload = _payload(root, tr, session, 'Bash',
+                           {'command': f'cat .handoff/{_SLUG}/{target}'})
+        return _run(monkeypatch, capsys, handoff_gate, payload)
+
+    assert run('G40', 'HANDOFF.md') == ''
+    assert run('G41', 'notes/idp-quirks.md') == ''
+    assert run('G42', 'specs/SPEC.md') == ''
+    assert 'ledger.tsv' in _context(run('G43', 'ledger.tsv'))
+
+
+def test_store_guard_pairs_each_store_with_its_own_verb(monkeypatch, capsys,
+                                                        tmp_path):
+    """Verify cycles matches at any depth and each store names its verb.
+
+    Mutation: one verb for all three stores, which sends a reader of
+    standing.md to hq artifacts; or applying the exact-depth rule to
+    cycles too, which misses cycles/c01.md - the only shape a cycle is
+    ever read by.
+    Oracle: the hand-written verb per store, checked against the
+    documented mapping rather than against the code.
+    """
+    root, folder = _handoff_root(tmp_path)
+    monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
+    tr = _transcript(tmp_path / 't.jsonl', [])
+
+    def verb(session, target):
+        payload = _payload(root, tr, session, 'Bash',
+                           {'command': f'cat .handoff/{_SLUG}/{target}'})
+        return _context(_run(monkeypatch, capsys, handoff_gate, payload))
+
+    assert f'hq artifacts {_SLUG}' in verb('G50', 'ledger.tsv')
+    assert f'hq standing {_SLUG}' in verb('G51', 'standing.md')
+    assert f'hq diff {_SLUG} <c1> <c2>' in verb('G52', 'cycles/c01.md')
+    assert f'hq diff {_SLUG} <c1> <c2>' in verb('G53', 'cycles')
+    assert f'hq diff {_SLUG} <c1> <c2>' in verb('G54', 'cycles/manifest.tsv')
+
+
+def test_store_guard_needs_the_store_named_by_the_call(monkeypatch, capsys,
+                                                       tmp_path):
+    """Verify a store component inherited from cwd alone does not report.
+
+    Mutation: accepting a store component that came from cwd rather
+    than from the call, so every plain read run from inside a cycles
+    directory reports a cycles read - the command word included.
+    Oracle: an unrelated file read from inside cycles/ is silent,
+    against a cycle file named by the call from the folder above,
+    which reports.
+    """
+    root, folder = _handoff_root(tmp_path)
+    monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
+    cycles = folder / 'cycles'
+    cycles.mkdir()
+    tr = _transcript(tmp_path / 't.jsonl', [])
+
+    def run(where, session, command):
+        payload = _payload(where, tr, session, 'Bash', {'command': command})
+        return _run(monkeypatch, capsys, handoff_gate, payload)
+
+    assert run(cycles, 'GB0', 'cat notes.txt') == ''
+    assert 'hq diff' in _context(run(folder, 'GB1', 'cat cycles/c01.md'))
+
+
+def test_store_guard_needs_no_ledger_and_no_arming(monkeypatch, capsys,
+                                                   tmp_path):
+    """Verify a store read reports where no ledger and no hq open exist.
+
+    Mutation: placing the store test below the root search or behind
+    the armed slug, which restores the hole it closes - the read seen
+    in practice came while the run was still resolving its target, so
+    possibly before any hq open.
+    Oracle: a directory holding a .handoff/<slug>/ path and no
+    ledger.tsv anywhere, an empty transcript, and a spy on the state
+    directory, which must stay empty. The plain read exits at the write
+    test; the read that also writes is what reaches the root search, so
+    both shapes are needed to pin the placement.
+    """
+    bare = tmp_path / 'bare'
+    (bare / '.handoff' / 'other').mkdir(parents=True)
+    state = tmp_path / 'state'
+    monkeypatch.setenv('HQ_STATE_DIR', str(state))
+    tr = _transcript(tmp_path / 't.jsonl', [])
+
+    def run(session, command):
+        payload = _payload(bare, tr, session, 'Bash', {'command': command})
+        return _context(_run(monkeypatch, capsys, handoff_gate, payload))
+
+    expected = 'other/ledger.tsv is dictated, not opened'
+    assert expected in run('G60', 'cat .handoff/other/ledger.tsv')
+    assert expected in run('G61', 'cat .handoff/other/ledger.tsv > out.txt')
+    assert not state.exists() or list(state.iterdir()) == []
+
+
+def test_store_reads_grades_a_read_tool_payload(monkeypatch, capsys,
+                                                tmp_path):
+    """Verify a Read payload is graded like a read verb.
+
+    Mutation: grading the Bash route alone, which leaves the plainest
+    way to open a store - the Read tool - unreported. hooks.json
+    matches Edit|Write|NotebookEdit|Bash, so this pins store_reads
+    rather than a route a session can take today.
+    Oracle: a Read payload naming standing.md by absolute path, against
+    the hand-written verb for that store.
+    """
+    root, folder = _handoff_root(tmp_path)
+    monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
+    tr = _transcript(tmp_path / 't.jsonl', [])
+    payload = _payload(root, tr, 'G7', 'Read',
+                       {'file_path': str(folder / 'standing.md')})
+    out = _context(_run(monkeypatch, capsys, handoff_gate, payload))
+    assert f'hq standing {_SLUG}' in out
+
+
+def test_store_guard_joins_the_write_gate_report(monkeypatch, capsys,
+                                                 tmp_path):
+    """Verify a command that both reads a store and writes reports twice.
+
+    Mutation: returning the store report on its own, which silently
+    drops the older gate's finding whenever one command does both.
+    Oracle: both findings in one additionalContext - the ledger's verb
+    and SPEC.md's unread span, each hand-written.
+    """
+    root, folder = _handoff_root(tmp_path)
+    monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
+    tr = _transcript(tmp_path / 't.jsonl',
+                     [_bash(f'python3 scripts/hq.py open {_SLUG}')])
+    payload = _payload(
+        root, tr, 'G8', 'Bash',
+        {'command': f'cat .handoff/{_SLUG}/ledger.tsv > out.txt'})
+    out = _context(_run(monkeypatch, capsys, handoff_gate, payload))
+    assert f'hq artifacts {_SLUG}' in out
+    assert 'SPEC.md' in out
+    assert _SPEC_SPAN in out
+
+
+def test_store_guard_honors_both_env_switches(monkeypatch, capsys, tmp_path):
+    """Verify HQ_GATE=0 silences the store report and HQ_GATE_DENY denies.
+
+    Mutation: computing the store report above the HQ_GATE check, which
+    makes the documented off switch stop silencing the hook.
+    Oracle: empty stdout under the off switch, and permissionDecision
+    deny carrying the reason under the deny switch.
+    """
+    root, folder = _handoff_root(tmp_path)
+    monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
+    tr = _transcript(tmp_path / 't.jsonl', [])
+    command = {'command': f'cat .handoff/{_SLUG}/ledger.tsv'}
+
+    monkeypatch.setenv('HQ_GATE', '0')
+    payload = _payload(root, tr, 'G90', 'Bash', command)
+    assert _run(monkeypatch, capsys, handoff_gate, payload) == ''
+
+    monkeypatch.delenv('HQ_GATE')
+    monkeypatch.setenv('HQ_GATE_DENY', '1')
+    payload = _payload(root, tr, 'G91', 'Bash', command)
+    decision = json.loads(
+        _run(monkeypatch, capsys, handoff_gate, payload))['hookSpecificOutput']
+    assert decision['permissionDecision'] == 'deny'
+    assert 'ledger.tsv' in decision['permissionDecisionReason']
+
+
+def test_store_guard_reports_one_store_once(monkeypatch, capsys, tmp_path):
+    """Verify a store named twice reports once and two stores report twice.
+
+    Mutation: dropping the repeat check, which reports the same line
+    twice for a command naming one store in two arguments.
+    Oracle: a count of the report phrase, hand-set to 1 for the repeat
+    and 2 for the pair.
+    """
+    root, folder = _handoff_root(tmp_path)
+    monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
+    tr = _transcript(tmp_path / 't.jsonl', [])
+    stored = f'.handoff/{_SLUG}'
+
+    def count(session, command):
+        payload = _payload(root, tr, session, 'Bash', {'command': command})
+        out = _context(_run(monkeypatch, capsys, handoff_gate, payload))
+        return out.count('is dictated, not opened')
+
+    assert count('GA0', f'cat {stored}/ledger.tsv {stored}/ledger.tsv') == 1
+    assert count('GA1', f'cat {stored}/ledger.tsv {stored}/standing.md') == 2

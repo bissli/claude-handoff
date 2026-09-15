@@ -60,6 +60,18 @@ _LEDGER_HEADER = '\t'.join(LEDGER_FIELDS)
 _MANIFEST_HEADER = '\t'.join(MANIFEST_FIELDS)
 _SKIP_NAMES = {
     'HANDOFF.md', 'ledger.tsv', 'standing.md', 'cycles', '.hq.lock', 'work-dir'}
+# Notes:
+# - The append-only stores the agent dictates through a verb instead
+#   of opening, each against the verb that replaces a direct read.
+#   `read` refuses them by this map and the PreToolUse gate reports
+#   them by it, so both halves name the same route.
+# - A name matches as one path component, so the cycles entry covers
+#   the directory and every file in it.
+STORE_VERBS = {
+    'ledger.tsv': 'hq artifacts {slug}, or hq when {slug} <path>',
+    'standing.md': 'hq standing {slug}',
+    'cycles': 'hq diff {slug} <c1> <c2>',
+    }
 HANDOFF_DIRNAME = '.handoff'
 # The directories earlier plugin versions kept the folder under; a
 # path written under one of them names where a folder used to be.
@@ -5125,6 +5137,16 @@ def _verb_read(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     rows = _read_tsv(folder / 'ledger.tsv', LEDGER_FIELDS)
     stored_path = _ledger_key(folder, path, {r['path'] for r in rows})
     if stored_path is None:
+        # A store has no row to find - the artifact walk skips all
+        # three - so the bare refusal sent the reader to open the file
+        # the gate reports them for opening. Name the verb instead.
+        store = next((part for part in pathlib.PurePath(path).parts
+                      if part in STORE_VERBS), None)
+        if store:
+            print(f'hq read: {store} is dictated, not opened'
+                  f' - run this instead:'
+                  f' {STORE_VERBS[store].format(slug=folder.name)}')
+            return 1
         print(f'hq read: {path} not in ledger - read it whole by hand')
         return 1
     file_path = _stored_path(folder, stored_path)[1]

@@ -622,6 +622,32 @@ def test_open_reports_git_drift_against_the_header_sha(tmp_path, monkeypatch):
         out), out
 
 
+def test_read_sends_a_store_to_its_verb_not_to_the_file(tmp_path, monkeypatch):
+    """Read refuses the three dictated stores by naming the verb instead.
+
+    Mutation: falling through to the not-in-ledger refusal, which reads
+    'read it whole by hand' and so tells the agent to do the one thing
+    the PreToolUse gate reports it for; or matching the basename only,
+    which misses cycles/<file>.
+    Oracle: the hand-written verb per store from hq.STORE_VERBS, and
+    exit 1 on each.
+    """
+    folder = _root(tmp_path, monkeypatch)
+    _run(['begin', _SLUG])
+    _spec(folder)
+    for path, verb in [
+            ('ledger.tsv', f'hq artifacts {_SLUG}, or hq when {_SLUG} <path>'),
+            ('standing.md', f'hq standing {_SLUG}'),
+            ('cycles', f'hq diff {_SLUG} <c1> <c2>'),
+            ('cycles/c01.md', f'hq diff {_SLUG} <c1> <c2>'),
+            ]:
+        store = path.split('/')[0]
+        rc, out, _ = _run(['read', _SLUG, path])
+        assert (rc, out.strip()) == (
+            1, (f'hq read: {store} is dictated, not opened'
+                f' - run this instead: {verb}'))
+
+
 def test_read_and_diff_refusals_print_their_documented_lines(tmp_path, monkeypatch):
     """Read names an unstamped path, a vanished file, and an unresolved
     anchor; diff names a cycle that was never finished.
