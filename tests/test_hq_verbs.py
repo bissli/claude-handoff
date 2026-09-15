@@ -990,6 +990,105 @@ def test_adopt_seeds_numbered_and_plain_decision_lines(tmp_path, monkeypatch):
     assert items[1]['body'] == 'Memory bound.'
 
 
+def test_adopt_joins_a_bullet_wrapped_at_the_column(tmp_path, monkeypatch):
+    """Adopt reads a hand-wrapped bullet as one item, not one per line.
+
+    Mutation: an unindented line always opening a new item, so a bullet
+    wrapped over four lines seeds four and each continuation's first
+    fragment becomes a headline.
+    Oracle: one item, its headline the hand-joined sentence, against a
+    section whose four physical lines carry one idea.
+    """
+    folder = _new_root(tmp_path, monkeypatch)
+    _conforming(folder, 2, '## Task\nx\n\n## Constraints\n'
+                '- Ruled out three routes: page offsets for the size\n'
+                'problem; a packed wire format, since the reader wants\n'
+                'plain text; and generated queries, which would undo\n'
+                'the read-only rule.\n\n## Log\n')
+
+    assert hq.main(['adopt', _SLUG]) == 0
+
+    items, _ = hq._parse_standing((folder / 'standing.md').read_text())
+    assert [(i['id'], i['headline']) for i in items] == [
+        ('c01', ('Ruled out three routes: page offsets for the size problem;'
+                 ' a packed wire format, since the reader wants plain text;'
+                 ' and generated queries, which would undo the read-only'
+                 ' rule.')),
+        ]
+
+
+def test_adopt_splits_a_plain_item_below_a_finished_sentence(
+        tmp_path, monkeypatch):
+    """Adopt keeps a plain line below a finished bullet as its own item.
+
+    Mutation: joining every unindented line into the bullet above, so a
+    section mixing a bullet with a plain one-line item seeds one item
+    carrying both. This is the boundary the wrapped case turns on.
+    Oracle: two items, hand-written, against the wrapped case that
+    seeds one; the line above ends a sentence and this one opens
+    another.
+    """
+    folder = _new_root(tmp_path, monkeypatch)
+    _conforming(folder, 2, '## Task\nx\n\n## Constraints\n'
+                '- Never below one.\nAlways above zero.\n\n## Log\n')
+
+    assert hq.main(['adopt', _SLUG]) == 0
+
+    items, _ = hq._parse_standing((folder / 'standing.md').read_text())
+    assert [(i['id'], i['headline']) for i in items] == [
+        ('c01', 'Never below one.'),
+        ('c02', 'Always above zero.'),
+        ]
+
+
+def test_adopt_closes_an_open_item_at_a_blank_line(tmp_path, monkeypatch):
+    """Adopt ends a wrapped item at a blank line, not at the next marker.
+
+    Mutation: a blank line leaving the item open, so a paragraph below
+    an unfinished bullet joins it and two ideas land as one.
+    Oracle: two items, hand-written. The bullet's last line ends with
+    no sentence terminator, so the blank line is the only thing that
+    can separate them.
+    """
+    folder = _new_root(tmp_path, monkeypatch)
+    _conforming(folder, 2, '## Task\nx\n\n## Constraints\n'
+                '- Ruled out page offsets and\npacked formats\n\n'
+                'Revisit when the reader changes.\n\n## Log\n')
+
+    assert hq.main(['adopt', _SLUG]) == 0
+
+    items, _ = hq._parse_standing((folder / 'standing.md').read_text())
+    assert [(i['id'], i['headline']) for i in items] == [
+        ('c01', 'Ruled out page offsets and packed formats'),
+        ('c02', 'Revisit when the reader changes.'),
+        ]
+
+
+def test_adopt_keeps_the_words_of_an_inner_bold_span(tmp_path, monkeypatch):
+    """Adopt drops an inner ** pair rather than nesting it in the item.
+
+    Mutation: wrapping the headline whole, so the inner pair closes the
+    outer span early and the item renders as a two-word headline
+    followed by plain text.
+    Oracle: the stored line carries exactly one ** pair, and the parsed
+    headline holds the inner word with no markers.
+    """
+    folder = _new_root(tmp_path, monkeypatch)
+    _conforming(folder, 2, '## Task\nx\n\n## Constraints\n'
+                '- widgets is a **public** package - it carries no\n'
+                '  internal names.\n\n## Log\n')
+
+    assert hq.main(['adopt', _SLUG]) == 0
+
+    text = (folder / 'standing.md').read_text()
+    items, _ = hq._parse_standing(text)
+    assert [i['headline'] for i in items] == [
+        'widgets is a public package - it carries no internal names.']
+    stored = [ln for ln in text.splitlines() if 'widgets' in ln]
+    assert len(stored) == 1
+    assert stored[0].count('**') == 2
+
+
 def test_adopt_concatenates_a_repeated_heading(tmp_path, monkeypatch):
     """Two sections with the same heading both reach the cursor.
 

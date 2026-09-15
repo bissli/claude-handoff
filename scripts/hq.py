@@ -1029,6 +1029,12 @@ def _join_headline_body(headline: str, body: str) -> str:
     return f'{headline}{joiner}{body}'
 
 
+# A sentence ends at `.`, `!`, or `?` and any closers that follow it,
+# which is what tells an item wrapped at the column from a section of
+# plain one-line items: the wrap breaks mid-sentence.
+_SENTENCE_END = re.compile(r'[.!?]["\')\]]*$')
+
+
 def split_headline(content: str) -> tuple[str, str]:
     """Split one plain item's text into its headline and the body after it.
 
@@ -3311,17 +3317,29 @@ def _verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
                 headline, body = split_headline(content)
             _do_note(folder, anch, current_kind, headline, body)
 
-        # An item starts at any unindented non-empty line, whatever its
-        # marker; an indented line continues the item above it. A
-        # lead-in wrapped at the column joins as a paragraph does.
+        # Notes:
+        # - An indented line always continues the item above it.
+        # - An unindented line carrying no marker continues it too,
+        #   unless the line above ended a sentence and this one opens
+        #   another. A hand wrapping one item at the column breaks
+        #   mid-sentence, where a section of plain one-line items does
+        #   not, and the two are otherwise identical text.
+        # - A blank line closes the open item, which is what keeps a
+        #   paragraph below a bullet from joining it.
+        # - A lead-in wrapped at the column joins as a paragraph does.
         lead_in_open = False
         for idx, line in enumerate(section_lines):
             if not line.strip():
+                _flush_bullet(bullet_lines)
+                bullet_lines = []
                 lead_in_open = False
                 continue
-            if line.startswith(' ') and bullet_lines:
-                bullet_lines.append(line)
-                continue
+            if bullet_lines and not item_marker.match(line):
+                wrapped = not (_SENTENCE_END.search(bullet_lines[-1].rstrip())
+                               and line[:1].isupper())
+                if line.startswith((' ', '\t')) or wrapped:
+                    bullet_lines.append(line)
+                    continue
             _flush_bullet(bullet_lines)
             bullet_lines = []
             if (first_bullet is not None and idx < first_bullet
@@ -4277,6 +4295,9 @@ def _note_line(
     - The item is one physical line: a separator left in the headline
       would split it, and every reader of ``standing.md`` - the block,
       ``standing``, ``supersede``, and the next id - reads line by line.
+    - A headline carrying its own ``**`` span keeps its words and loses
+      the markers, since the line wraps the headline in a span of its
+      own and the inner pair would close the outer one early.
     """
     prefix_map = {'decision': 'd', 'constraint': 'c', 'dead-end': 'x'}
     prefix = prefix_map.get(kind_str)
@@ -4284,7 +4305,7 @@ def _note_line(
         return None
     items, _ = _parse_standing(standing_text)
     item_id = _next_id(items, prefix)
-    headline_clean = ' '.join(headline.split())
+    headline_clean = ' '.join(headline.split()).replace('**', '')
     body_clean = body.replace('\n', ' ')
     bold = f'**{headline_clean}**'
     return f'- [{item_id}] (c{cycle}) {_join_headline_body(bold, body_clean)}'.rstrip()
