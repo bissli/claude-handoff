@@ -230,3 +230,65 @@ def test_a_filtered_line_is_the_bare_runs_line(tmp_path, monkeypatch, capsys):
 
     _, out_rb = _run(['artifacts', _SLUG, '--read-before', 'always'], capsys)
     assert spec_line in out_rb.splitlines()
+
+
+def test_the_bare_run_counts_every_row_it_held_back(tmp_path, monkeypatch, capsys):
+    """A bare run closes with one count line per non-live status it dropped.
+
+    Mutation: dropping the count block, so a bare run answers a stamped
+    path with silence at exit 0; or folding live rows into the counts.
+    Oracle: three hand-placed non-live rows against one live row, and
+    the row count each named --status run prints back.
+    """
+    folder = _new_folder(tmp_path, monkeypatch)
+    (folder / 'live.md').write_text('live\n')
+    (folder / 'gone-successor.md').write_text('successor\n')
+    _write_row(folder, 'live.md', read_before='edit', label='the live one')
+    _write_row(
+        folder, 'old.md', status='superseded', successor='gone-successor.md')
+    _write_row(folder, 'done.md', status='archived', reason='consumed')
+    _write_row(folder, 'vanished.md', status='missing')
+
+    _, out = _run(['artifacts', _SLUG], capsys)
+    lines = out.splitlines()
+
+    assert 'live.md  notes  edit  c1  the live one' in lines
+    assert lines[-3:] == [
+        f'superseded 1  - hq artifacts {_SLUG} --status superseded',
+        f'archived 1  - hq artifacts {_SLUG} --status archived',
+        f'missing 1  - hq artifacts {_SLUG} --status missing',
+        ]
+
+    for status, path in (
+            ('superseded', 'old.md'),
+            ('archived', 'done.md'),
+            ('missing', 'vanished.md')):
+        _, out_status = _run(['artifacts', _SLUG, '--status', status], capsys)
+        assert [ln.split('  ')[0] for ln in out_status.splitlines()] == [path]
+
+
+def test_an_absolute_path_that_never_arrived_is_counted_not_dropped(
+        tmp_path, monkeypatch, capsys):
+    """A live abs row with no file on disk leaves a missing count behind.
+
+    Mutation: the bare run printing only the rows the folder walk sees,
+    so a file stamped outside the folder and never written vanishes from
+    the verb while its ledger row still reads live.
+    Oracle: the one count line, against hq when, which reports the row
+    exactly as the ledger stored it.
+    """
+    folder = _new_folder(tmp_path, monkeypatch)
+    (folder / 'notes.md').write_text('notes\n')
+    _write_row(folder, 'notes.md', read_before='edit', label='in the folder')
+    outside = pathlib.Path(tmp_path) / 'elsewhere' / 'REPORT.md'
+    _write_row(
+        folder, str(outside), base='abs', kind='other',
+        read_before='mention', label='filed in a sibling repo')
+
+    _, out = _run(['artifacts', _SLUG], capsys)
+    assert str(outside) not in out
+    assert out.splitlines()[-1] == (
+        f'missing 1  - hq artifacts {_SLUG} --status missing')
+
+    _, out_when = _run(['when', _SLUG, str(outside)], capsys)
+    assert out_when.split('\t')[2] == 'live'

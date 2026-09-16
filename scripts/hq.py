@@ -99,6 +99,9 @@ _TEMP_DIRS = (
 _KIND_DIRS = {'specs': 'spec', 'drafts': 'draft', 'notes': 'notes', 'outputs': 'other'}
 _GATE_RB = {'always', 'edit'}
 _FULL_RB = {'always', 'edit', 'mention'}
+# Least recoverable last: a superseded row has a successor to follow, an
+# archived one a reason, and a missing one neither.
+_NON_LIVE_ORDER = ('superseded', 'archived', 'missing')
 # The tier a gated kind seeds: a spec is the contract, read at every
 # resume; a draft is read at the write that changes it.
 _TIER_SEED = {'spec': 'always', 'draft': 'edit'}
@@ -1003,7 +1006,7 @@ def render_artifacts(
         parts = '  '.join(f'{k} x{v}' for k, v in sorted(kind_never.items()))
         out.append(f'{parts}  - hq artifacts {slug}')
     if non_live:
-        ordered = [k for k in ('superseded', 'archived', 'missing') if k in non_live]
+        ordered = [k for k in _NON_LIVE_ORDER if k in non_live]
         ordered += sorted(k for k in non_live if k not in ordered)
         parts = '  '.join(f'{k} {non_live[k]}' for k in ordered)
         out.append(f'{parts}  - hq when {slug} <path>')
@@ -5350,7 +5353,8 @@ def _verb_artifacts(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) 
     int
         0 always; one line per entry, or one per selected row where any
         filter is given, or the ledger header and one tab-separated row
-        each with ``--tsv``.
+        each with ``--tsv``. A bare run closes with one count line per
+        status it left out, naming the ``--status`` that prints them.
 
     Notes
     -----
@@ -5358,6 +5362,12 @@ def _verb_artifacts(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) 
       so a superseded earlier row never answers a filter.
     - ``--status`` replaces the live-only default; the other filters
       keep it.
+    - The live-only default also governs a bare ``--tsv`` run, so a row
+      that is not live needs ``--status`` there too.
+    - A row whose file is gone reads ``missing`` against the disk, so a
+      path stamped by an absolute spelling that never arrived is
+      counted rather than printed, and the count line is the only trace
+      it leaves here.
     - No row matching is exit 0, not a refusal: the query answered.
     """
     rows = _read_tsv(folder / 'ledger.tsv', LEDGER_FIELDS)
@@ -5428,6 +5438,18 @@ def _verb_artifacts(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) 
                 _tsv_line([row[f] for f in LEDGER_FIELDS]) if tsv else
                 f'{path}  {row["kind"]}  {row["read_before"]}'
                 f'  c{row["cycle"]}  {row["label"]}')
+    if not rows_only:
+        held_back: dict[str, int] = {}
+        for row in live.values():
+            if row['status'] != 'live':
+                held_back[row['status']] = held_back.get(row['status'], 0) + 1
+        for status in [
+                *_NON_LIVE_ORDER,
+                *sorted(s for s in held_back if s not in _NON_LIVE_ORDER)]:
+            if status in held_back:
+                print(
+                    f'{status} {held_back[status]}'
+                    f'  - hq artifacts {folder.name} --status {status}')
     if any_filter and not tsv and not printed:
         print(
             f'hq artifacts: no row matches those flags: {folder.name}'
@@ -5930,7 +5952,11 @@ def _build_parser() -> argparse.ArgumentParser:
         'no cap, then <name>  <kind>?  unstamped for a file with no row,\n'
         '<name>  conflicted copy for a sync duplicate, and <name>  unstampable\n'
         'for a name holding a tab or newline or an entry that is not a regular\n'
-        'file.\n'
+        'file. A row that is not live is counted, not printed: the run closes\n'
+        'with superseded N, archived N, or missing N, each naming the --status\n'
+        'that prints those rows. A file gone from the disk reads missing here\n'
+        'whatever the ledger stored, so a path stamped by an absolute spelling\n'
+        'that never arrived is counted under missing.\n'
         '--kind, --status, --read-before, --in-cycle, and --successor select on\n'
         "that field of the path's current row, never a superseded earlier one;\n"
         '--status replaces the live-only default and --in-cycle takes a bare\n'
@@ -5940,7 +5966,9 @@ def _build_parser() -> argparse.ArgumentParser:
         'exit 0. --tsv prints the thirteen ledger columns under their own\n'
         'header line instead, the bytes the ledger holds except that a\n'
         'vanished file reads status missing and a walk entry of kind skip\n'
-        'has its row omitted from the output.'
+        'has its row omitted from the output. It keeps the live-only default\n'
+        'and prints no count line, so pair it with --status to read a row\n'
+        'that is not live.'
     )
     art = sub.add_parser(
         'artifacts',

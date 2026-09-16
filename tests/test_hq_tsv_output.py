@@ -291,3 +291,34 @@ def test_tsv_line_folds_control_chars_and_agrees_with_append_tsv(tmp_path):
     hq._append_tsv(ledger, fields, values, hq._LEDGER_HEADER)
     rows = hq._read_tsv(ledger, fields)
     assert rows[0]['label'] == parts[label_idx]
+
+
+def test_artifacts_tsv_keeps_the_live_default_and_emits_no_count_line(
+    tmp_path, monkeypatch, capsys
+):
+    """A bare --tsv run prints live rows alone, every line a full ledger row.
+
+    Mutation: the count line the bare run closes with leaking into the
+    machine-readable stream, so a caller splitting on tabs reads a
+    two-field line as a row; or --tsv dropping the live-only default and
+    silently widening the caller's row set.
+    Oracle: the live row's own ledger line, and the thirteen-column width
+    every data line must hold.
+    """
+    folder = _new_folder(tmp_path, monkeypatch)
+    (folder / 'live.md').write_text('live\n')
+    _write_row(folder, 'live.md', kind='spec', read_before='always', label='alpha')
+    _write_row(folder, 'done.md', status='archived', reason='consumed')
+
+    rc, out = _run(['artifacts', _SLUG, '--tsv'], capsys)
+    assert rc == 0
+
+    lines = out.splitlines()
+    assert lines[0] == hq._LEDGER_HEADER
+    assert all(len(ln.split('\t')) == len(hq.LEDGER_FIELDS) for ln in lines[1:])
+    assert [ln.split('\t')[2] for ln in lines[1:]] == ['live.md']
+
+    rc_status, out_status = _run(
+        ['artifacts', _SLUG, '--tsv', '--status', 'archived'], capsys)
+    assert rc_status == 0
+    assert [ln.split('\t')[2] for ln in out_status.splitlines()[1:]] == ['done.md']
