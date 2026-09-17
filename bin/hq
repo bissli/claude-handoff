@@ -1,2 +1,11 @@
 #!/bin/sh
-exec python3 "$(dirname "$0")/../scripts/hq.py" "$@"
+# Resolve $0 through any symlink, then to a real absolute root, so the
+# exec'd path carries no '..' component and no link: a path with '..' is
+# the form that failed to open inside the plugin eval sandbox, where
+# scripts/ itself reads fine, and a symlinked $0 resolves its root to the
+# link's own parent. readlink -f is GNU and modern macOS; where it is
+# absent $0 stands unresolved, as before.
+real=$(readlink -f -- "$0" 2>/dev/null) || real=$0
+[ -n "$real" ] || real=$0
+root=$(CDPATH= cd -- "$(dirname -- "$real")/.." && pwd -P) || exit 1
+exec python3 "$root/scripts/hq.py" "$@"

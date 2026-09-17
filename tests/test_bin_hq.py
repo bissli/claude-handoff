@@ -32,3 +32,47 @@ def test_bin_hq_forwards_its_arguments_to_the_script(tmp_path):
     assert direct.stdout == f'hq list: no handoff under {root}/.handoff\n'
     assert (wrapped.returncode, wrapped.stdout) == (
         direct.returncode, direct.stdout)
+
+
+def test_bin_hq_execs_a_path_carrying_no_parent_component(tmp_path):
+    """Verify the wrapper resolves its root before exec, leaving no '..'.
+
+    Mutation: the root taken as "$(dirname "$0")/../scripts/hq.py", so the
+    exec'd path carries a '..' component. A sandbox that grants a
+    directory by path prefix refuses that form while allowing scripts/
+    itself, which is how a whole eval pass scored against a plugin whose
+    entry point never loaded.
+    Oracle: the exec line sh -x prints, read for a literal '..' and for
+    the resolved script path.
+    """
+    traced = subprocess.run(
+        ['sh', '-x', str(ROOT / 'bin' / 'hq'), '--help'],
+        capture_output=True, text=True)
+    execs = [ln for ln in traced.stderr.splitlines() if 'exec python3' in ln]
+    assert len(execs) == 1, traced.stderr
+    assert '..' not in execs[0]
+    assert str(ROOT / 'scripts' / 'hq.py') in execs[0]
+
+
+def test_bin_hq_runs_through_a_symlink_on_the_path(tmp_path):
+    """Verify a symlinked wrapper resolves the real root, not the link's.
+
+    Mutation: dropping the readlink resolution, which sends $0's dirname
+    to the directory holding the link, so the root becomes that
+    directory's parent and the script is looked for where it is not. A
+    PATH entry that symlinks the wrapper is the shape that breaks.
+    Oracle: a differential run of the real wrapper on the same argv, both
+    the exit code and the stdout line naming the root.
+    """
+    link = tmp_path / 'hq'
+    link.symlink_to(ROOT / 'bin' / 'hq')
+    root = tmp_path / 'work'
+    root.mkdir()
+    argv = ['--root', str(root), 'list']
+    direct = subprocess.run(
+        [str(ROOT / 'bin' / 'hq'), *argv], capture_output=True, text=True)
+    linked = subprocess.run(
+        [str(link), *argv], capture_output=True, text=True, cwd='/')
+    assert direct.stdout == f'hq list: no handoff under {root}/.handoff\n'
+    assert (linked.returncode, linked.stdout) == (
+        direct.returncode, direct.stdout)
