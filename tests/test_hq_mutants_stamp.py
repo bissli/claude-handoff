@@ -14,7 +14,7 @@ import shutil
 import socket
 import subprocess
 
-from scripts import hq
+from bin import hq
 
 _SLUG = 'mut-stamp-slug'
 _SESSION = 'session-mut'

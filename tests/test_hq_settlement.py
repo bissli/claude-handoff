@@ -11,7 +11,7 @@ import os
 import pathlib
 import stat
 
-from scripts import hq
+from bin import hq
 
 _SLUG = 'settle'
 _NOW = '2026-09-10T12:00:00'

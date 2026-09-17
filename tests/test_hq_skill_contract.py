@@ -1,4 +1,4 @@
-"""Contract tests that hold the handoff skill to scripts/hq.py.
+"""Contract tests that hold the handoff skill to bin/hq.py.
 
 The skill is prose an agent follows; the script is what it drives. The
 corpus the agent can reach is SKILL.md, the reference files beside it,
@@ -15,13 +15,13 @@ import re
 import shlex
 
 HERE = pathlib.Path(__file__).resolve().parent
-SCRIPTS = HERE.parent / 'scripts'
+BIN = HERE.parent / 'bin'
 SKILL_DIR = HERE.parent / 'skills' / 'handoff'
 SKILL = SKILL_DIR / 'SKILL.md'
 REFERENCE_DIR = SKILL_DIR / 'reference'
 EXAMPLE = REFERENCE_DIR / 'example-handoff.md'
 
-from scripts import hq
+from bin import hq
 
 _HQ_CALL = 'hq'
 # Flags in the skill that belong to other tools, never to hq.py.
@@ -136,7 +136,7 @@ def _texts():
       constants are not yielded again on their own.
     - A plain string yields itself as its one piece.
     """
-    tree = ast.parse((SCRIPTS / 'hq.py').read_text())
+    tree = ast.parse((BIN / 'hq.py').read_text())
     children = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.JoinedStr):
@@ -166,7 +166,7 @@ def _print_calls():
     - Pieces under eight characters after stripping are noise (a
       separator, a label) and are not candidates for the longest piece.
     """
-    tree = ast.parse((SCRIPTS / 'hq.py').read_text())
+    tree = ast.parse((BIN / 'hq.py').read_text())
     calls = []
     for node in ast.walk(tree):
         is_print = (

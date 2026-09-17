@@ -28,11 +28,16 @@ import sys
 from typing import Any
 
 try:
-    # Script mode puts scripts/ on sys.path; pytest and mutmut import
-    # the package instead.
-    import hq
+    # pytest and mutmut run from the repo root and import the package.
+    from bin import hq
 except ImportError:
-    from scripts import hq
+    # Script mode puts scripts/ on sys.path rather than the plugin root,
+    # so reach the program in bin/ by its own path. One branch or the
+    # other binds hq, never both, so a test patching bin.hq patches the
+    # module the hook holds.
+    sys.path.insert(
+        0, str(pathlib.Path(__file__).resolve().parent.parent / 'bin'))
+    import hq
 
 STATE_DIR = os.path.expanduser('~/.claude/cache/claude-handoff')
 

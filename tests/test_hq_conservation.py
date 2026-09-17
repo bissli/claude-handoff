@@ -5,7 +5,8 @@ labels.
 import pathlib
 
 import pytest
-from scripts import hq
+
+from bin import hq
 
 _SLUG = 'cons-test'
 _NOW = '2026-09-10T09:00:00'
@@ -129,7 +130,7 @@ def test_conservation_reports_a_label_heading_outside_key_files(
 
 
 def test_adopt_counts_the_bullets_it_left_unfiled(tmp_path, monkeypatch, capsys):
-    """adopt names how many Unfiled bullets the rewrite left behind.
+    """Adopt names how many Unfiled bullets the rewrite left behind.
 
     Mutation: the summary reporting conservation alone, so a run that
     parks every foreign line under ## Unfiled prints 'every original line

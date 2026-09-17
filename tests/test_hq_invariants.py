@@ -13,7 +13,7 @@ import itertools
 import pathlib
 import random
 
-from scripts import hq
+from bin import hq
 
 _SLUG = 'fuzz-slug'
 _GATED = {'spec', 'draft'}

@@ -2,7 +2,7 @@
 the rendered standing block.
 """
 
-from scripts import hq
+from bin import hq
 
 # Numbered headings, one with a letter suffix, and two headings whose
 # first word merely starts with a digit.

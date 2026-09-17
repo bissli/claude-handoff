@@ -12,7 +12,8 @@ import pathlib
 import signal
 
 import pytest
-from scripts import hq
+
+from bin import hq
 
 _SLUG = 'demo'
 _SESSION = 'session-abc'

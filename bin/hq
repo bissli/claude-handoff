@@ -1,11 +1,13 @@
 #!/bin/sh
-# Resolve $0 through any symlink, then to a real absolute root, so the
-# exec'd path carries no '..' component and no link: a path with '..' is
-# the form that failed to open inside the plugin eval sandbox, where
-# scripts/ itself reads fine, and a symlinked $0 resolves its root to the
-# link's own parent. readlink -f is GNU and modern macOS; where it is
-# absent $0 stands unresolved, as before.
+# Notes:
+# - The program sits beside this wrapper inside bin/, never in a sibling
+#   directory of the plugin root: the plugin eval sandbox exposes only
+#   the directory it puts on PATH, so scripts/ is absent there and a path
+#   through the root cannot be opened at all.
+# - readlink -f is GNU and modern macOS; where it is absent $0 stands
+#   unresolved, as before, and a symlinked PATH entry would otherwise
+#   resolve to the directory holding the link.
 real=$(readlink -f -- "$0" 2>/dev/null) || real=$0
 [ -n "$real" ] || real=$0
-root=$(CDPATH= cd -- "$(dirname -- "$real")/.." && pwd -P) || exit 1
-exec python3 "$root/scripts/hq.py" "$@"
+dir=$(CDPATH= cd -- "$(dirname -- "$real")" && pwd -P) || exit 1
+exec python3 "$dir/hq.py" "$@"

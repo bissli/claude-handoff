@@ -9,7 +9,8 @@ import signal
 import threading
 
 import pytest
-from scripts import hq
+
+from bin import hq
 
 _SLUG = 'rob-test'
 _NOW = '2026-09-10T09:00:00'

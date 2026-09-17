@@ -7,7 +7,7 @@ is hand-computed.
 
 import hashlib
 
-from scripts import hq
+from bin import hq
 
 _FIELDS = (
     'cycle', 'ts', 'path', 'base', 'kind', 'status', 'read_before',

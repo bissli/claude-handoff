@@ -9,7 +9,7 @@ import contextlib
 import io
 import pathlib
 
-from scripts import hq
+from bin import hq
 
 _SLUG = 'field-guard-slug'
 _SESSION = 'session-field-guard'

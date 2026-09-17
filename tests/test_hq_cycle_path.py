@@ -10,7 +10,7 @@ import os
 import pathlib
 import subprocess
 
-from scripts import hq
+from bin import hq
 
 _SLUG = 'test-slug'
 _SESSION = 'session-abc'

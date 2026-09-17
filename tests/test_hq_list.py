@@ -5,7 +5,7 @@ import pathlib
 import threading
 from typing import Any
 
-from scripts import hq
+from bin import hq
 
 _SLUG = 'test-slug'
 _SESSION = 'session-abc'

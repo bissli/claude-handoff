@@ -5,7 +5,9 @@ import json
 import pathlib
 import sys
 
-from scripts import handoff_gate, handoff_stop, hq
+from scripts import handoff_gate, handoff_stop
+
+from bin import hq
 
 _SLUG = 'demo-slug'
 _NOW = '2026-09-09T12:00:00'
@@ -164,7 +166,7 @@ def test_gate_ignores_stderr_only_redirects():
         "cat <<'EOF'\n> not a redirect\nEOF",
         'sed -n 1,20p file',
         'grep -n x file',
-        'python3 scripts/hq.py stamp demo-slug SPEC.md > out.txt',
+        'python3 bin/hq.py stamp demo-slug SPEC.md > out.txt',
         ]
     loud = [
         'cmd > out.txt',
@@ -193,7 +195,7 @@ def test_gate_fires_on_a_heredoc_and_a_redirect_write(monkeypatch, capsys,
     root, folder = _handoff_root(tmp_path)
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     tr = _transcript(tmp_path / 't.jsonl',
-                     [_bash(f'python3 scripts/hq.py open {_SLUG}')])
+                     [_bash(f'python3 bin/hq.py open {_SLUG}')])
     payload = _payload(root, tr, 'S1', 'Bash',
                        {'command': "cat > x.py <<'EOF'\nprint(1)\nEOF"})
     out = _run(monkeypatch, capsys, handoff_gate, payload)
@@ -243,8 +245,8 @@ def test_gate_exempts_a_segment_whose_command_word_is_hq():
         'HQ_ROOT=/tmp/x hq begin demo-slug | tee log',
         'cd /tmp/x && hq begin demo-slug > log',
         'bin/hq note demo-slug decision "x" > /tmp/o',
-        'python3 scripts/hq.py stamp demo-slug SPEC.md > out.txt',
-        'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/hq.py" stamp demo-slug a.md > o',
+        'python3 bin/hq.py stamp demo-slug SPEC.md > out.txt',
+        'python3 "${CLAUDE_PLUGIN_ROOT}/bin/hq.py" stamp demo-slug a.md > o',
         'bash -c "hq open demo-slug > f"',
         ]
     gated = [
@@ -271,7 +273,7 @@ def test_gate_counts_only_read_shaped_evidence(monkeypatch, capsys, tmp_path):
     root, folder = _handoff_root(tmp_path)
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     spec = folder / 'SPEC.md'
-    armed = [_bash(f'python3 scripts/hq.py open {_SLUG}')]
+    armed = [_bash(f'python3 bin/hq.py open {_SLUG}')]
 
     def run(session, extra):
         tr = _transcript(tmp_path / f'{session}.jsonl', armed + extra)
@@ -282,7 +284,7 @@ def test_gate_counts_only_read_shaped_evidence(monkeypatch, capsys, tmp_path):
     assert 'SPEC.md' in run('m1', [
         _bash(f'ls .handoff/{_SLUG}/SPEC.md'),
         _bash(f'wc -l .handoff/{_SLUG}/SPEC.md'),
-        _bash(f'python3 scripts/hq.py stamp {_SLUG} SPEC.md'),
+        _bash(f'python3 bin/hq.py stamp {_SLUG} SPEC.md'),
         ])
     assert run('m2', [_bash(f'cat .handoff/{_SLUG}/SPEC.md')]) == ''
     assert run('m3', [_bash(f'sed -n 1,20p {spec}')]) == ''
@@ -307,7 +309,7 @@ def test_gate_credits_a_read_receipt(monkeypatch, capsys, tmp_path):
     state.mkdir()
     monkeypatch.setenv('HQ_STATE_DIR', str(state))
     tr = _transcript(tmp_path / 't.jsonl',
-                     [_bash(f'python3 scripts/hq.py open {_SLUG}')])
+                     [_bash(f'python3 bin/hq.py open {_SLUG}')])
 
     def run(session):
         payload = _payload(root, tr, session, 'Edit',
@@ -341,7 +343,7 @@ def test_gate_counts_the_spans_it_does_not_name(
     root, folder = _handoff_root(tmp_path)
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     tr = _transcript(tmp_path / 't.jsonl',
-                     [_bash(f'python3 scripts/hq.py open {_SLUG}')])
+                     [_bash(f'python3 bin/hq.py open {_SLUG}')])
 
     def run(session):
         payload = _payload(root, tr, session, 'Edit',
@@ -373,7 +375,7 @@ def test_gate_counts_every_resolved_span_in_anchor_order(
     root, folder = _handoff_root(tmp_path)
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     tr = _transcript(tmp_path / 't.jsonl',
-                     [_bash(f'python3 scripts/hq.py open {_SLUG}')])
+                     [_bash(f'python3 bin/hq.py open {_SLUG}')])
     hq._append_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS,
                    _row('SPEC.md', cycle='2', where='Risks;Scope'),
                    _LEDGER_HEADER)
@@ -399,7 +401,7 @@ def test_a_read_of_a_narrowed_span_still_clears_the_gate(
     state.mkdir()
     monkeypatch.setenv('HQ_STATE_DIR', str(state))
     tr = _transcript(tmp_path / 't.jsonl',
-                     [_bash(f'python3 scripts/hq.py open {_SLUG}')])
+                     [_bash(f'python3 bin/hq.py open {_SLUG}')])
     hq._append_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS,
                    _row('SPEC.md', cycle='2', where='Risks'),
                    _LEDGER_HEADER)
@@ -473,26 +475,26 @@ def test_gate_slug_stops_at_shell_punctuation_and_quotes(monkeypatch, capsys,
     _handoff_root(tmp_path, 'demo.v2-y')
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     spellings = [
-        f'python3 scripts/hq.py open {_SLUG}; echo done',
-        f'python3 scripts/hq.py open {_SLUG}|head -3',
-        f'python3 scripts/hq.py open {_SLUG}&&echo ok',
-        f'python3 scripts/hq.py open "{_SLUG}" 2>&1',
-        f"python3 scripts/hq.py open '{_SLUG}'",
-        'python3 scripts/hq.py open demo.v2_x',
-        f'bash -lc "cd /tmp && python3 scripts/hq.py open {_SLUG}"',
-        f"ssh host 'python3 scripts/hq.py open {_SLUG}'",
-        f'echo hi; bash -c "python3 scripts/hq.py open {_SLUG}"',
-        f"# don't stamp yet\npython3 scripts/hq.py open {_SLUG}\n# it's open",
-        f'python3 scripts/hq.py open {_SLUG}; git commit -am "hq.py open other"',
+        f'python3 bin/hq.py open {_SLUG}; echo done',
+        f'python3 bin/hq.py open {_SLUG}|head -3',
+        f'python3 bin/hq.py open {_SLUG}&&echo ok',
+        f'python3 bin/hq.py open "{_SLUG}" 2>&1',
+        f"python3 bin/hq.py open '{_SLUG}'",
+        'python3 bin/hq.py open demo.v2_x',
+        f'bash -lc "cd /tmp && python3 bin/hq.py open {_SLUG}"',
+        f"ssh host 'python3 bin/hq.py open {_SLUG}'",
+        f'echo hi; bash -c "python3 bin/hq.py open {_SLUG}"',
+        f"# don't stamp yet\npython3 bin/hq.py open {_SLUG}\n# it's open",
+        f'python3 bin/hq.py open {_SLUG}; git commit -am "hq.py open other"',
         f'docker run --rm -m 512m img bash -c "python3 hq.py open {_SLUG}"',
-        f'echo "$(python3 scripts/hq.py open {_SLUG})"',
+        f'echo "$(python3 bin/hq.py open {_SLUG})"',
         ]
     mentions = [
         f'grep -n "hq.py open {_SLUG}" README.md',
         f'grep -e "a|b" -e "hq.py open {_SLUG}" README.md',
         f"sed 's/hq.py open {_SLUG}/x/' README.md",
         f'git commit -m "note: hq.py open {_SLUG}"',
-        'python3 scripts/hq.py open demo.v2',
+        'python3 bin/hq.py open demo.v2',
         ]
 
     def run(session, command):
@@ -520,14 +522,14 @@ def test_gate_exempts_hq_commands_and_folder_writes(monkeypatch, capsys,
     root, folder = _handoff_root(tmp_path)
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     tr = _transcript(tmp_path / 't.jsonl',
-                     [_bash(f'python3 scripts/hq.py open {_SLUG}')])
+                     [_bash(f'python3 bin/hq.py open {_SLUG}')])
 
     def run(tool_name, tool_input):
         payload = _payload(root, tr, 'E1', tool_name, tool_input)
         return _run(monkeypatch, capsys, handoff_gate, payload)
 
     assert run('Bash', {
-        'command': f'python3 scripts/hq.py stamp {_SLUG} notes-a.md'}) == ''
+        'command': f'python3 bin/hq.py stamp {_SLUG} notes-a.md'}) == ''
     assert run('Bash', {
         'command': f'echo x > .handoff/{_SLUG}/notes-a.md'}) == ''
     assert run('Edit', {'file_path': str(folder / 'HANDOFF.md')}) == ''
@@ -548,7 +550,7 @@ def test_gate_scans_the_transcript_once_per_session(monkeypatch, capsys,
     root, folder = _handoff_root(tmp_path)
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     tr = _transcript(tmp_path / 't.jsonl',
-                     [_bash(f'python3 scripts/hq.py open {_SLUG}')])
+                     [_bash(f'python3 bin/hq.py open {_SLUG}')])
     scanned = []
     real = handoff_gate.scan_transcript
 
@@ -584,7 +586,7 @@ def test_gate_resumes_at_a_line_boundary(monkeypatch, capsys, tmp_path):
     root, folder = _handoff_root(tmp_path)
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     tr = _transcript(tmp_path / 't.jsonl', [_read(str(folder / 'HANDOFF.md'))])
-    open_line = json.dumps(_bash(f'python3 scripts/hq.py open {_SLUG}'))
+    open_line = json.dumps(_bash(f'python3 bin/hq.py open {_SLUG}'))
     cut = len(open_line) // 2
     with tr.open('a', encoding='utf-8') as handle:
         handle.write(open_line[:cut])
@@ -610,7 +612,7 @@ def test_gate_allows_when_off_marker_present(monkeypatch, capsys, tmp_path):
     root, folder = _handoff_root(tmp_path)
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     tr = _transcript(tmp_path / 't.jsonl',
-                     [_bash(f'python3 scripts/hq.py open {_SLUG}')])
+                     [_bash(f'python3 bin/hq.py open {_SLUG}')])
 
     def run(session):
         payload = _payload(root, tr, session, 'Edit',
@@ -633,7 +635,7 @@ def test_gate_deny_path_behind_env(monkeypatch, capsys, tmp_path):
     root, folder = _handoff_root(tmp_path)
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     tr = _transcript(tmp_path / 't.jsonl',
-                     [_bash(f'python3 scripts/hq.py open {_SLUG}')])
+                     [_bash(f'python3 bin/hq.py open {_SLUG}')])
 
     def run(session):
         payload = _payload(root, tr, session, 'Edit',
@@ -664,7 +666,7 @@ def test_gate_is_silent_outside_a_handoff_root(monkeypatch, capsys, tmp_path):
     elsewhere = tmp_path / 'elsewhere'
     elsewhere.mkdir()
     tr = _transcript(tmp_path / 't.jsonl',
-                     [_bash(f'python3 scripts/hq.py open {_SLUG}')])
+                     [_bash(f'python3 bin/hq.py open {_SLUG}')])
     payload = _payload(elsewhere, tr, 'X1', 'Bash',
                        {'command': 'echo x > out.txt'})
     assert _run(monkeypatch, capsys, handoff_gate, payload) == ''
@@ -685,7 +687,7 @@ def test_gate_survives_a_corrupt_state_file(monkeypatch, capsys, tmp_path):
     monkeypatch.setenv('HQ_STATE_DIR', str(state))
     (state / 'C1.handoff.json').write_text('{"gate": ', encoding='utf-8')
     tr = _transcript(tmp_path / 't.jsonl',
-                     [_bash(f'python3 scripts/hq.py open {_SLUG}')])
+                     [_bash(f'python3 bin/hq.py open {_SLUG}')])
     payload = _payload(root, tr, 'C1', 'Edit', {'file_path': 'src/app.py'})
     assert handoff_gate.gate(payload) == 0
     assert 'SPEC.md' in capsys.readouterr().out
@@ -905,7 +907,7 @@ def test_gate_resolves_escaped_semicolon_in_where(monkeypatch, capsys, tmp_path)
                    _row('SPEC.md', cycle='2', where=stored_where),
                    _LEDGER_HEADER)
     tr = _transcript(tmp_path / 't.jsonl',
-                     [_bash(f'python3 scripts/hq.py open {_SLUG}')])
+                     [_bash(f'python3 bin/hq.py open {_SLUG}')])
     payload = _payload(root, tr, 'sc1', 'Edit', {'file_path': 'src/app.py'})
     out = _context(_run(monkeypatch, capsys, handoff_gate, payload))
     assert 'anchor not found' not in out
@@ -931,7 +933,7 @@ def test_gate_counts_distinct_spans_not_anchors(monkeypatch, capsys, tmp_path):
                    _row('SPEC.md', cycle='2', where='3. Retry;s3'),
                    _LEDGER_HEADER)
     tr = _transcript(tmp_path / 't.jsonl',
-                     [_bash(f'python3 scripts/hq.py open {_SLUG}')])
+                     [_bash(f'python3 bin/hq.py open {_SLUG}')])
     payload = _payload(root, tr, 'dd1', 'Edit', {'file_path': 'src/app.py'})
     out = _context(_run(monkeypatch, capsys, handoff_gate, payload))
     assert 'SPEC.md (lines 3-6)' in out
@@ -1147,7 +1149,7 @@ def test_store_guard_joins_the_write_gate_report(monkeypatch, capsys,
     root, folder = _handoff_root(tmp_path)
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     tr = _transcript(tmp_path / 't.jsonl',
-                     [_bash(f'python3 scripts/hq.py open {_SLUG}')])
+                     [_bash(f'python3 bin/hq.py open {_SLUG}')])
     payload = _payload(
         root, tr, 'G8', 'Bash',
         {'command': f'cat .handoff/{_SLUG}/ledger.tsv > out.txt'})

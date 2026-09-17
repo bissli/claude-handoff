@@ -8,7 +8,7 @@ counted at the end of this module.
 
 import pathlib
 
-from scripts import hq
+from bin import hq
 
 _SLUG = 'mut-adopt'
 _SESSION = 'session-mut'

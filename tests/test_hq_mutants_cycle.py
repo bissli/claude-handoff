@@ -11,7 +11,7 @@ import hashlib
 import io
 import pathlib
 
-from scripts import hq
+from bin import hq
 
 # ---------------------------------------------------------------------------
 # Helpers copied from test_hq_cycle_path.py

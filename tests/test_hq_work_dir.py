@@ -9,7 +9,7 @@ earlier ruling.
 
 import pathlib
 
-from scripts import hq
+from bin import hq
 
 _SLUG = 'wd-slug'
 _SESSION = 'session-wd'

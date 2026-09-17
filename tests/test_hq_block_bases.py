@@ -8,7 +8,7 @@ than costing a resuming session a search.
 import pathlib
 import re
 
-from scripts import hq
+from bin import hq
 
 _SLUG = 'block-base-slug'
 _SESSION = 'session-blocks'

@@ -6,7 +6,8 @@ HANDOFF rule.
 import pathlib
 
 import pytest
-from scripts import hq
+
+from bin import hq
 
 _SLUG = 'ptr-test'
 _SESSION = 'session-ptr'
@@ -290,8 +291,8 @@ def test_an_unindented_paragraph_under_key_files_or_the_header_is_one_bullet(
     assert [ln for ln in text.splitlines() if ln.startswith('- unfiled: ')] == [
         '- unfiled: First paragraph opens here and wraps onto a second line.',
         '- unfiled: Second paragraph stands alone.',
-        '- unfiled: This context note spans three physical lines without'
-        ' any indentation below.',
+        ('- unfiled: This context note spans three physical lines without'
+         ' any indentation below.'),
         '- unfiled: - Parked material one',
         '- unfiled: - Parked material two',
     ]
@@ -329,8 +330,8 @@ def test_a_label_wrapped_over_two_lines_grades_the_bullets_below_it(
     assert rows['notes-old.md']['read_before'] == 'edit'
     text = (folder / 'HANDOFF.md').read_text()
     assert [ln for ln in text.splitlines() if ln.startswith('- unfiled: ')] == [
-        '- unfiled: Read now, because the register template is the open work,'
-        ' and the billing item follows it:']
+        ('- unfiled: Read now, because the register template is the open work,'
+         ' and the billing item follows it:')]
     assert 'conservation: every original line carried' in capsys.readouterr().out
 
 
@@ -714,7 +715,7 @@ def test_where_seed_keeps_only_anchors_the_file_resolves(
 
 def test_begin_names_each_row_adopt_seeded_as_missing(
         tmp_path, monkeypatch, capsys):
-    """begin lists every ledger row stored as missing, with its move.
+    """Begin lists every ledger row stored as missing, with its move.
 
     Mutation: the work list reading status='live' rows alone, so a Key
     files pointer adopt seeded as missing is never named again and the

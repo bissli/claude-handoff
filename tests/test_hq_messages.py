@@ -14,7 +14,7 @@ import re
 import shutil
 import subprocess
 
-from scripts import hq
+from bin import hq
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FIXTURES = os.path.join(HERE, 'fixtures', 'handoff')

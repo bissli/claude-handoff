@@ -9,7 +9,9 @@ import json
 import pathlib
 import sys
 
-from scripts import handoff_gate, handoff_stop, hq
+from scripts import handoff_gate, handoff_stop
+
+from bin import hq
 
 _SLUG = 'demo-slug'
 _NOW = '2026-09-09T12:00:00'

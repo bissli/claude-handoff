@@ -12,7 +12,7 @@ from typing import Any
 HERE = os.path.dirname(os.path.abspath(__file__))
 FIXTURES = os.path.join(HERE, 'fixtures', 'handoff')
 
-from scripts import hq
+from bin import hq
 
 _SLUG = 'test-slug'
 _SESSION = 'session-abc'

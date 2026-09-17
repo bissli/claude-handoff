@@ -9,7 +9,7 @@ drops.
 import pathlib
 from typing import Any
 
-from scripts import hq
+from bin import hq
 
 _SLUG = 'test-slug'
 _NOW = '2026-09-09T12:00:00'

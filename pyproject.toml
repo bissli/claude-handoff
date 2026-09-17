@@ -11,7 +11,7 @@ mutmut = "^3.7.0"
 
 [tool.mutmut]
 source_paths = [
-    "scripts/hq.py",
+    "bin/hq.py",
     "scripts/handoff_gate.py",
     "scripts/handoff_stop.py",
 ]

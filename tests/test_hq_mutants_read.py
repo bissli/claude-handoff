@@ -11,7 +11,7 @@ import os
 import pathlib
 from typing import Any
 
-from scripts import hq
+from bin import hq
 
 _SLUG = 'test-slug'
 _SESSION = 'session-abc'
@@ -973,7 +973,7 @@ def test_verb_read_abs_base_resolves_correctly(tmp_path, monkeypatch, capsys):
     ret_stamp = hq.main(['stamp', _SLUG, str(target)])
     assert ret_stamp == 0, 'stamp must succeed for this test to be meaningful'
     # Determine the stored path (may be absolute or ~/... form).
-    import scripts.hq as _hq
+    import bin.hq as _hq
     rows = _hq._read_tsv(folder / 'ledger.tsv', _hq.LEDGER_FIELDS)
     stored = rows[-1]['path']
     capsys.readouterr()
@@ -1002,7 +1002,7 @@ def test_verb_read_state_dir_fallback_without_hq_state_dir(
     # Set state dir to a known writable temp location via default override.
     state_dir = tmp_path / 'state'
     state_dir.mkdir()
-    import scripts.hq as _hq
+    import bin.hq as _hq
     orig_default = _hq._DEFAULT_STATE
     _hq._DEFAULT_STATE = state_dir
     capsys.readouterr()
@@ -1159,7 +1159,7 @@ def test_verb_artifacts_abs_rows_not_in_walk_are_listed(
     ret = hq.main(['stamp', _SLUG, str(target), '--label', 'global doc'])
     assert ret == 0, 'stamp must succeed'
     # Get the stored path from the ledger.
-    import scripts.hq as _hq
+    import bin.hq as _hq
     rows = _hq._read_tsv(folder / 'ledger.tsv', _hq.LEDGER_FIELDS)
     stored = rows[-1]['path']
     assert rows[-1]['base'] == 'abs', 'Expected abs base for outside-folder file'
@@ -1185,7 +1185,7 @@ def test_verb_artifacts_live_filter_uses_lowercase_live(
     target.write_text('# Live\n\nContent.\n')
     ret = hq.main(['stamp', _SLUG, str(target), '--label', 'live doc'])
     assert ret == 0
-    import scripts.hq as _hq
+    import bin.hq as _hq
     rows = _hq._read_tsv(folder / 'ledger.tsv', _hq.LEDGER_FIELDS)
     stored = rows[-1]['path']
     capsys.readouterr()
@@ -1213,7 +1213,7 @@ def test_verb_artifacts_continues_past_non_live_abs_rows(
     hq.main(['stamp', _SLUG, str(early)])
     hq.main(['stamp', _SLUG, str(early), '--successor', str(late)])
     hq.main(['stamp', _SLUG, str(late), '--label', 'live one'])
-    import scripts.hq as _hq
+    import bin.hq as _hq
     rows = _hq._read_tsv(folder / 'ledger.tsv', _hq.LEDGER_FIELDS)
     live_row = next(r for r in reversed(rows) if r['path'].endswith('late.md'))
     stored_late = live_row['path']

@@ -9,7 +9,7 @@ import os
 import pathlib
 from typing import Any
 
-from scripts import hq
+from bin import hq
 
 _SLUG = 'reach-slug'
 _SESSION = 'session-reach'
