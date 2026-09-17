@@ -1159,9 +1159,9 @@ def test_render_standing_bodies_headings_and_the_eighty_line_boundary():
 
     Mutation: include_body flipped for a kind, the dead-end prefix letter
     changed, or the boundary moved either way.
-    Oracle: hand-computed lines for one item per kind; 79 constraints
-    render as 80 lines with no overflow, 80 as 80 lines ending
-    '... 2 more'.
+    Oracle: hand-computed lines for one item per kind; no cap binds the
+    block, so 79 constraints render as 80 lines and 80 render as 81, the
+    last of them the item itself and never an overflow marker.
     """
     items = [
         {'id': 'c01', 'prefix': 'c', 'cycle': '1', 'headline': 'Never log tokens',

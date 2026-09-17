@@ -99,6 +99,8 @@ _TEMP_DIRS = (
 _KIND_DIRS = {'specs': 'spec', 'drafts': 'draft', 'notes': 'notes', 'outputs': 'other'}
 _GATE_RB = {'always', 'edit'}
 _FULL_RB = {'always', 'edit', 'mention'}
+_LABEL_RESIDENT = 120
+_KIND_PREFIX = {'decision': 'd', 'constraint': 'c', 'dead-end': 'x'}
 # Least recoverable last: a superseded row has a successor to follow, an
 # archived one a reason, and a missing one neither.
 _NON_LIVE_ORDER = ('superseded', 'archived', 'missing')
@@ -889,6 +891,7 @@ def render_read(
 def artifact_lines(
     walk: list[tuple[str, str]],
     rows: dict[str, Row],
+    slug: str,
     shown: dict[str, tuple[str, str]] | None = None,
 ) -> tuple[list[str], dict[str, int], dict[str, int], set[str]]:
     """Sort artifacts into full lines, a never count, a non-live count, bases.
@@ -901,6 +904,8 @@ def artifact_lines(
     rows : dict[str, Row]
         Latest ledger row per path, with the caller's ``missing`` marks
         already applied; the disk is never consulted.
+    slug : str
+        Handoff slug for the ``hq when`` command a capped label names.
     shown : dict[str, tuple[str, str]] | None, default None
         Display path and base phrase per stored path, as ``shown_paths``
         returns it; a path absent from it prints as stored.
@@ -918,6 +923,12 @@ def artifact_lines(
     - A full line is ``path  kind  read_before  cN  label`` for a live row
       with ``read_before`` in {always, edit, mention}, or
       ``path  kind?  unstamped`` for a walk entry with no row.
+    - An ``always`` row prints no label: ``render_read`` prints it
+      verbatim for every live ``always`` row, so a second copy here is
+      duplicate bytes.
+    - Any other label is resident to ``_LABEL_RESIDENT`` characters and
+      names ``hq when <slug> <path>`` for the rest. The label stays whole
+      in ledger.tsv, which is where conservation reads it.
     - The bases come from the lines emitted, never from the whole map, so
       the block names a base only where a printed path resolves from it.
     """
@@ -949,8 +960,16 @@ def artifact_lines(
         if status != 'live':
             non_live[status] = non_live.get(status, 0) + 1
         elif rb in _FULL_RB:
-            full_lines.append(
-                f'{display}  {row["kind"]}  {rb}  c{row["cycle"]}  {row["label"]}')
+            stem = f'{display}  {row["kind"]}  {rb}  c{row["cycle"]}'
+            if rb == 'always':
+                full_lines.append(stem)
+            else:
+                label = row['label']
+                resident = resident_label(label)
+                full_lines.append(holdback_line(
+                    f'{stem}  {resident}',
+                    len(label) - len(resident),
+                    f'hq when {slug} {display}'))
             if base:
                 bases.add(base)
         else:
@@ -999,7 +1018,8 @@ def render_artifacts(
         counted by kind and the rows no longer live counted by status.
         A first line names every base the printed paths resolve from.
     """
-    full_lines, kind_never, non_live, bases = artifact_lines(walk, rows, shown)
+    full_lines, kind_never, non_live, bases = artifact_lines(
+        walk, rows, slug, shown)
     out = ['; '.join(sorted(bases))] if bases else []
     out += full_lines
     if kind_never:
@@ -1087,6 +1107,67 @@ def split_headline(content: str) -> tuple[str, str]:
     return content.strip(), ''
 
 
+def resident_label(label: str) -> str:
+    """Return the label text an index line carries, cut at a word boundary.
+
+    Parameters
+    ----------
+    label : str
+        The label as ledger.tsv stores it, of any length.
+
+    Returns
+    -------
+    str
+        The label unchanged when it is within ``_LABEL_RESIDENT``
+        characters, else its head cut at the last space inside that
+        width, or at the width itself when that space would leave under
+        half of it.
+
+    Notes
+    -----
+    - The renderer and ``open``'s label-drift guard both call this, so
+      the block the guard reads and the block the renderer wrote are
+      compared on one definition of resident.
+    """
+    if len(label) <= _LABEL_RESIDENT:
+        return label
+    head = label[:_LABEL_RESIDENT]
+    cut = head.rfind(' ')
+    return (head[:cut] if cut > _LABEL_RESIDENT // 2 else head).rstrip()
+
+
+def holdback_line(resident: str, held_chars: int, command: str) -> str:
+    """Join resident text to its held-back count and the command for the rest.
+
+    Parameters
+    ----------
+    resident : str
+        The text the block carries, with no trailing whitespace.
+    held_chars : int
+        Characters of the item left unprinted; 0 or less prints no suffix.
+    command : str
+        The command that prints the held text, runnable exactly as
+        written. A placeholder inside it is a defect: no reader can fill
+        one from the rendered file.
+
+    Returns
+    -------
+    str
+        ``<resident>  +<held>c - <command>``, or ``resident`` unchanged
+        when nothing is held back.
+
+    Notes
+    -----
+    - The count-line convention of the blocks applied per item: what is
+      resident, how much is not, and the command for the rest.
+    - A holdback is residency and never a cut. The held characters stay
+      in the append-only store, and the command prints them whole.
+    """
+    if held_chars <= 0:
+        return resident
+    return f'{resident}  +{held_chars}c - {command}'
+
+
 def render_standing(
     items: list[dict],
     superseded_ids: set[str],
@@ -1106,19 +1187,30 @@ def render_standing(
     Returns
     -------
     str
-        Block body: every live constraint in full and every live
-        decision and dead end as a headline, each kind under its heading,
-        then ``superseded N  - hq standing <slug>`` when any item was
-        superseded. No cap: the body of a decision or a dead end is the
-        one thing behind ``hq standing <slug> <id>``.
+        Block body: every live constraint as its headline and the first
+        sentence of its body, every live decision and dead end as a
+        headline alone, each kind under its heading, then
+        ``superseded N  - hq standing <slug>`` when any item was
+        superseded.
+
+    Notes
+    -----
+    - Residency, never a cut: a constraint whose body runs past its
+      first sentence ends in ``+<held>c - hq standing <slug> <id>``, and
+      the body stays whole in standing.md behind that command.
+    - The command carries the item's own id, so it runs as printed.
+    - A body with no sentence end stays resident whole: the split has
+      nothing to hold back.
+    - A decision or a dead end renders by headline alone, as it has
+      since the block existed; its body is read by the id form.
     """
     live = [i for i in items if i['id'] not in superseded_ids]
     sup_count = len(items) - len(live)
     out: list[str] = []
-    for prefix, heading, include_body in (
-        ('c', '### Constraints', True),
-        ('d', '### Decisions', False),
-        ('x', '### Dead ends', False),
+    for prefix, heading, body_mode in (
+        ('c', '### Constraints', 'sentence'),
+        ('d', '### Decisions', 'headline'),
+        ('x', '### Dead ends', 'headline'),
     ):
         group = [i for i in live if i['prefix'] == prefix]
         if not group:
@@ -1127,8 +1219,12 @@ def render_standing(
         for item in group:
             pfx = f'(c{item["cycle"]}) ' if item.get('cycle') else ''
             line = f'[{item["id"]}] {pfx}**{item["headline"]}**'
-            if include_body:
-                line = _join_headline_body(line, item.get('body', ''))
+            body = item.get('body', '')
+            if body_mode == 'sentence' and body:
+                resident, held = split_headline(body)
+                line = _join_headline_body(line, resident).rstrip()
+                line = holdback_line(
+                    line, len(held), f'hq standing {slug} {item["id"]}')
             out.append(line.rstrip())
     if sup_count:
         out.append(f'superseded {sup_count}  - hq standing {slug}')
@@ -4314,8 +4410,7 @@ def _note_line(
       the markers, since the line wraps the headline in a span of its
       own and the inner pair would close the outer one early.
     """
-    prefix_map = {'decision': 'd', 'constraint': 'c', 'dead-end': 'x'}
-    prefix = prefix_map.get(kind_str)
+    prefix = _KIND_PREFIX.get(kind_str)
     if not prefix:
         return None
     items, _ = _parse_standing(standing_text)
@@ -4828,6 +4923,13 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
     print(
         f'{handoff_path}  {cursor_lines} cursor lines  {payload_tokens} tokens'
         f' (cursor {len(cursor_clean) // 4}, {token_split})')
+    # The slope, not the level: every reset gets erased, and this is the
+    # only place a session sees the erasure while it can still act.
+    prev_tokens = manifest[-1].get('payload_tokens', '') if manifest else ''
+    if prev_tokens.isdigit():
+        print(
+            f'{payload_tokens - int(prev_tokens):+d} tok'
+            f' since c{manifest[-1]["cycle"]}')
     rf_rows, rf_spans, _, rf_tokens = read_first_data(folder, live)
     anchored = sum(
         1 for r in rf_rows
@@ -4901,8 +5003,13 @@ def _verb_open(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     #   the display.
     # - Both sides are compared stripped of trailing space: the block
     #   body loses it at its last line, and the ledger keeps it.
+    # - The artifacts block carries a capped label and no label at all
+    #   on an always row, so the comparand is the resident form and the
+    #   holdback suffix comes off first. An always row is judged against
+    #   the read block, the one place its label prints whole.
     shown = shown_paths(folder, live)
     artifacts_body = parsed.get('blocks', {}).get('artifacts', '')
+    read_body = parsed.get('blocks', {}).get('read', '')
     own_cycle = bool(lock) and lock.get('session') == anch['session']
     labeled = [] if own_cycle else [
         (p_key, row, shown.get(p_key, (p_key, ''))[0])
@@ -4913,17 +5020,32 @@ def _verb_open(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
         if displays.count(display) > 1:
             continue
         rendered: list[str] = []
+        expected = resident_label(row['label'])
         for spelling in dict.fromkeys((display, p_key)):
             rendered = re.findall(
                 '^' + re.escape(spelling) + r'  \S+  \S+  c\d+  (.*)$',
                 artifacts_body, re.MULTILINE)
             if rendered:
                 break
-        if len(rendered) == 1 and rendered[0].rstrip() != row['label'].rstrip():
-            print(
-                f'LEDGER BEHIND: block label differs: {p_key}'
-                ' - the block and the ledger disagree; trust the ledger,'
-                ' and the next finish re-renders the block')
+        if not rendered:
+            expected = row['label']
+            for spelling in dict.fromkeys((display, p_key)):
+                rendered = re.findall(
+                    '^' + re.escape(spelling)
+                    + r'(?::[\d,?-]+)?  \([^)]*\)  (.*)$',
+                    read_body, re.MULTILINE)
+                if rendered:
+                    break
+        if len(rendered) == 1:
+            block_label = rendered[0].rstrip()
+            cut = block_label.rfind('  +')
+            if cut != -1 and ' - hq when ' in block_label[cut:]:
+                block_label = block_label[:cut]
+            if block_label != expected.rstrip():
+                print(
+                    f'LEDGER BEHIND: block label differs: {p_key}'
+                    ' - the block and the ledger disagree; trust the ledger,'
+                    ' and the next finish re-renders the block')
     for row in check_r3(list(_reconcile_missing(folder, live).values()), sha_map):
         print(
             f'sha moved since stamp: {row["path"]}'
@@ -5468,20 +5590,25 @@ def _verb_standing(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -
         Anchors dict from ``anchors()``; unused but required by dispatch.
     argv : argparse.Namespace
         Parsed standing arguments; ``ids`` names items to print in full,
-        ``--all`` includes superseded items in the listing, ``--tsv``
+        ``--all`` includes superseded items in the listing, ``--grep``,
+        ``--kind`` and ``--in-cycle`` select within a listing, ``--tsv``
         prints a tab-separated table instead.
 
     Returns
     -------
     int
         0 with no id, one line per item; with ids, 0 once every id
-        printed and 1 when any id is not in standing.md; with ``--tsv``,
-        the header and one row per item instead of prose lines.
+        printed and 1 when any id is not in standing.md; 2 on a ``--grep``
+        that is not a regular expression; with ``--tsv``, the header and
+        one row per item instead of prose lines.
 
     Notes
     -----
-    - The block renders a decision or a dead end by its headline alone;
-      the id form is where its body is read.
+    - A named id outranks every filter: ``ids`` and ``--kind`` together
+      print the named items, never their intersection.
+    - The block renders a decision or a dead end by its headline alone,
+      and a constraint by its headline and first sentence; the id form is
+      where the rest of a body is read.
     - A superseded item names the id now current and the cycle that
       made it current, never the first hop out of a chain whose own
       successor was superseded later.
@@ -5517,6 +5644,28 @@ def _verb_standing(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -
     wanted = list(getattr(argv, 'ids', None) or [])
     by_id = {item['id']: item for item in items}
     tsv = getattr(argv, 'tsv', False)
+    grep = getattr(argv, 'grep', None)
+    kind = getattr(argv, 'kind', None)
+    in_cycle = getattr(argv, 'in_cycle', None)
+    # A named id is explicit and outranks a filter, so filtering runs only
+    # over a listing; by_id above already holds every item for the refusal.
+    if not wanted:
+        if grep:
+            try:
+                pattern = re.compile(grep, re.IGNORECASE)
+            except re.error as exc:
+                print(
+                    f'hq standing: --grep is not a regular expression: {exc}'
+                    ' - fix the pattern; hq standing --help lists the flags')
+                return 2
+            items = [
+                i for i in items
+                if pattern.search(f'{i["headline"]} {i["body"]}')
+                ]
+        if kind:
+            items = [i for i in items if i['prefix'] == _KIND_PREFIX[kind]]
+        if in_cycle:
+            items = [i for i in items if str(i['cycle']) == str(in_cycle)]
     rc = 0
     for item_id in wanted:
         if item_id not in by_id:
@@ -5875,7 +6024,11 @@ def _build_parser() -> argparse.ArgumentParser:
     _finish_epilog = (
         '--log is the one line the Log keeps for this cycle. --acknowledge\n'
         '"<reason>" turns a W1 or W2 witness break into an acknowledged line\n'
-        'and records the break and the reason in the manifest.'
+        'and records the break and the reason in the manifest.\n'
+        'After the size line the print carries +N tok since cNN, this\n'
+        "cycle's payload against the last one the manifest recorded: a\n"
+        'level cut shows here being erased, cycle by cycle, while a\n'
+        'session can still act on it. It is absent on the first cycle.'
     )
     fin = sub.add_parser(
         'finish',
@@ -5997,6 +6150,11 @@ def _build_parser() -> argparse.ArgumentParser:
         'd21 in c5]. Past one hop the id form adds the chain itself:\n'
         '[superseded by d21 in c5 - d18 -> d20 -> d21]. An id not in\n'
         'standing.md prints hq standing: <id> not in standing.md and exits 1.\n'
+        '--grep PATTERN keeps the items whose headline or\n'
+        'body matches the pattern, case-insensitively, and exits 2 when the\n'
+        'pattern is not a regular expression; --kind constraint|decision|\n'
+        'dead-end keeps one kind; --in-cycle N keeps the items recorded in\n'
+        'cycle N. The three compose, and a named id outranks all of them.\n'
         '--tsv prints one header line, id prefix cycle headline body\n'
         'superseded superseded_by superseded_in, then that row per item\n'
         'instead, cycles as bare numbers, a nil field as -, and\n'
@@ -6009,6 +6167,9 @@ def _build_parser() -> argparse.ArgumentParser:
     st.add_argument('slug')
     st.add_argument('ids', nargs='*')
     st.add_argument('--all', action='store_true')
+    st.add_argument('--grep')
+    st.add_argument('--kind', choices=tuple(_KIND_PREFIX))
+    st.add_argument('--in-cycle')
     st.add_argument('--tsv', action='store_true')
 
     _list_epilog = (

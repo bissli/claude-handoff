@@ -71,7 +71,8 @@ def test_an_artifacts_row_in_the_folder_opens_from_the_stated_base(
 
     Mutation: shown_paths passing over a folder-base row, which prints
     the bare stored path under a base line naming the root, where no
-    such file sits.
+    such file sits; or the always row's label restored after the cycle
+    field, where the Read first block already prints it whole.
     Oracle: the base line and the row's first field joined with
     pathlib, opened on disk.
     """
@@ -81,7 +82,7 @@ def test_an_artifacts_row_in_the_folder_opens_from_the_stated_base(
     base, row = lines[0], lines[1]
 
     assert base == f'root {root}'
-    assert row.startswith(f'.handoff/{_SLUG}/specs/SPEC.md  spec  always  c1  ')
+    assert row == f'.handoff/{_SLUG}/specs/SPEC.md  spec  always  c1'
     assert (_base_dir(base) / row.split('  ')[0]).is_file()
 
 

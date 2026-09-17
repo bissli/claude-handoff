@@ -45,7 +45,7 @@ root ~/code/poller
 ## Artifacts
 root ~/code/poller
 .handoff/auth-token-refresh/notes/idp-quirks.md  notes  edit  c1  staging IdP quirks, found the hard way
-.handoff/auth-token-refresh/specs/SPEC.md  spec  always  c1  refresh contract; s3 is the retry schedule
+.handoff/auth-token-refresh/specs/SPEC.md  spec  always  c1
 scripts/auth.py  draft  edit  c1  poller; the 401 branch is under edit
 <!-- /hq:artifacts -->
 

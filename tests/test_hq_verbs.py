@@ -2945,8 +2945,9 @@ def test_blocks_print_a_root_path_relative_to_its_base_with_sizes(
     """A repo file prints relative to the root, the base named once, sized.
 
     Mutation: the stored absolute path printed as is; the base line
-    dropped or repeated per row; or the span size dropped from the
-    read line.
+    dropped or repeated per row; the span size dropped from the read
+    line; or the always row's label restored in the Artifacts block,
+    where it duplicates the Read first copy byte for byte.
     Oracle: hand-computed - the anchored span is 13 characters, 3
     tokens; the root is under tmp_path, so its base prints absolutely;
     the Read first and Artifacts blocks each open with 'root <root>'
@@ -2969,7 +2970,7 @@ def test_blocks_print_a_root_path_relative_to_its_base_with_sizes(
         ]
     art = blocks['artifacts'].splitlines()
     assert art[:2] == ['## Artifacts', f'root {root}']
-    assert 'src/app.md  spec  always  c1  -' in art
+    assert 'src/app.md  spec  always  c1' in art
     assert art.count(f'root {root}') == 1
 
 
