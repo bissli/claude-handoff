@@ -18,13 +18,16 @@ _HOST = 'test-host'
 _NOW = '2026-09-09T12:00:00'
 
 
-def _visible(session, cwd, state_dir, monkeypatch):
+def _visible(session, cwd, state_dir, monkeypatch, project=None):
     """Render one status line with color stripped, against a temp cache."""
     monkeypatch.setattr(sl, 'STATE_DIR', str(state_dir))
+    workspace = {'current_dir': cwd}
+    if project is not None:
+        workspace['project_dir'] = project
     return re.sub(r'\x1b\[[0-9;]*m', '', sl.render({
         'session_id': session,
         'model': {'id': 'claude-opus-5', 'display_name': 'Opus 5'},
-        'workspace': {'current_dir': cwd},
+        'workspace': workspace,
         'context_window': {'total_input_tokens': 248_000},
         }))
 
@@ -56,6 +59,27 @@ def test_the_thread_is_named_after_the_directory_never_instead_of_it(
     (tmp_path / f'{_SESSION}.thread').write_text('auth-token\n')
     line = _visible(_SESSION, '/x/myproject', tmp_path, monkeypatch)
     assert line.endswith('opus myproject:auth-token')
+
+
+def test_a_cd_into_the_handoff_folder_does_not_rename_the_directory(
+        tmp_path, monkeypatch):
+    """Verify the directory field is the project, not the live shell cwd.
+
+    Mutation: taking the directory from workspace.current_dir, which a
+    Bash cd moves. A session that cds into its own handoff folder to
+    write the file renders 'auth-token:auth-token' until something cds
+    back, so the field reports the thread twice and the project never.
+    Oracle: differential - one session rendered from the project root
+    and from .handoff/auth-token under it must give the same line, and
+    that line is the hand-computed 'opus myproject:auth-token'.
+    """
+    (tmp_path / f'{_SESSION}.thread').write_text('auth-token\n')
+    home = _visible(_SESSION, '/x/myproject', tmp_path, monkeypatch,
+                    project='/x/myproject')
+    wandered = _visible(_SESSION, '/x/myproject/.handoff/auth-token',
+                        tmp_path, monkeypatch, project='/x/myproject')
+    assert home == wandered
+    assert wandered.endswith('opus myproject:auth-token')
 
 
 def test_a_session_on_no_thread_renders_the_line_it_always_did(

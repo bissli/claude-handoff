@@ -158,9 +158,13 @@ def render(payload: dict[str, Any]) -> str:
     model = payload.get('model') or {}
     label = str(model.get('display_name') or model.get('id') or '')
     workspace = payload.get('workspace') or {}
-    cwd = str(workspace.get('current_dir') or payload.get('cwd') or '')
+    # The project Claude Code started in, not the live shell cwd: a cd
+    # into the handoff folder renames the field to the slug, and the
+    # line then reads the thread twice and the project never.
+    project = str(workspace.get('project_dir')
+                  or workspace.get('current_dir') or payload.get('cwd') or '')
     session = str(payload.get('session_id') or '')
-    where = os.path.basename(cwd) or cwd
+    where = os.path.basename(project) or project
     thread = session_thread(session)
     if thread:
         where = f'{where}:{thread}'
