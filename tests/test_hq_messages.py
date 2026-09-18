@@ -1353,3 +1353,41 @@ def test_an_unparsed_batch_line_names_which_fault_stopped_it(
     assert len(rows) == 2
     assert rows[-1].endswith('\tgood')
 
+
+
+def test_note_prints_the_id_it_assigned(tmp_path, monkeypatch):
+    """Verify note echoes every id it allocates, single and batch.
+
+    Mutation: note appending to standing.md and returning 0 in silence,
+    echoing a constant, reusing the previous id, restarting a prefix at
+    01, or leaving the --batch path mute while the single path speaks.
+    Oracle: the ids standing.md itself holds after each call, parsed from
+    the file rather than read back from the printed line.
+    """
+    folder = _root(tmp_path, monkeypatch)
+    _run(['begin', _SLUG])
+    standing_path = folder / 'standing.md'
+    ids_seen = []
+    for kind, headline in (
+            ('decision', 'Refresh in process'),
+            ('constraint', 'Never log a token value'),
+            ('dead-end', 'Event hooks for auto-refresh'),
+            ('decision', 'Ship order fixed'),
+            ):
+        rc, out, _ = _run(
+            ['note', _SLUG, kind, '--headline', headline, 'a body'])
+        assigned = re.findall(r'\[([cdx]\d\d)\]', standing_path.read_text())
+        fresh = [item for item in assigned if item not in ids_seen]
+        assert (rc, fresh) != (0, []), 'note allocated no id'
+        assert fresh[0] in out, (fresh[0], out)
+        ids_seen.extend(fresh)
+    assert ids_seen == ['d01', 'c01', 'x01', 'd02']
+    monkeypatch.setattr('sys.stdin', io.StringIO(
+        'constraint --headline "Keep the floor" the floor holds\n'
+        'dead-end --headline "Sidecar" a sidecar was rejected\n'))
+    rc, out, _ = _run(['note', _SLUG, '--batch'])
+    assigned = re.findall(r'\[([cdx]\d\d)\]', standing_path.read_text())
+    fresh = [item for item in assigned if item not in ids_seen]
+    assert (rc, fresh) == (0, ['c02', 'x02'])
+    for batch_id in fresh:
+        assert batch_id in out, (batch_id, out)

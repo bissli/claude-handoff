@@ -103,8 +103,9 @@ Ask it of the content, never of how late the session is.
 | `/handoff done <slug> --undo`      | reopen it: `hq done --undo`            |
 
 `write` and `read` as the first word override the inference, an
-optional slug after each; `--no-check` anywhere skips the reviewer
-pass. A first argument matching a verb above is that verb, not a slug.
+optional slug after each; `--no-check` anywhere, from the user alone,
+skips the reviewer pass. A first argument matching a verb above is
+that verb, not a slug.
 
 Guess neither the verb nor the target. Where either is ambiguous,
 say so, list the candidates, and stop - touch nothing.

@@ -4704,6 +4704,9 @@ def _do_note(
     - The headline is required: an item with an empty bold span is
       invisible to ``_parse_standing``, so the block, ``standing``, and
       ``supersede`` never see it while ``_next_id`` reissues its id.
+    - The assigned id and its cycle are printed as the item lands, so a
+      caller cites the id it was handed rather than one reconstructed
+      from the ids it expects to be in use.
     """
     standing_path = folder / 'standing.md'
     text = (
@@ -4718,6 +4721,8 @@ def _do_note(
         print('hq note: --headline is required')
         return 2
     _append_lines(standing_path, [line])
+    item_id = _parse_standing(line)[0][0]['id']
+    print(f'{item_id} recorded in c{anch["cycle"]}')
     return 0
 
 
@@ -6419,7 +6424,8 @@ def _build_parser() -> argparse.ArgumentParser:
     stmp.add_argument('--batch', action='store_true')
 
     _note_epilog = (
-        'Kinds are decision, constraint, dead-end. --headline is required and\n'
+        'Kinds are decision, constraint, dead-end. Each item prints the id it\n'
+        'was given. --headline is required and\n'
         'one line; the body follows it as the last argument. --batch reads\n'
         'one note per stdin line: <kind> --headline "<h>" <body>, the body\n'
         'taken verbatim to the end of the line, quotes and apostrophes\n'
