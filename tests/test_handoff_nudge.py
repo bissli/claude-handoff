@@ -90,10 +90,18 @@ def _hq(argv):
 
 def _run():
     """Drive the hook's main() over the fed payload and return its stdout.
+
+    Notes
+    -----
+    - A suppressed path must write nothing anywhere, so stderr is
+      asserted empty here rather than at each call site. Noise there
+      reaches the user's terminal on every prompt while stdout stays
+      clean, which no assertion on the returned value would catch.
     """
-    out = io.StringIO()
-    with contextlib.redirect_stdout(out):
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         rc = handoff_nudge.main()
+    assert err.getvalue() == '', f'wrote to stderr: {err.getvalue()!r}'
     return rc, out.getvalue()
 
 
