@@ -380,18 +380,22 @@ returns one numbered item per finding, `<n>. <finding>`; re-check
 each in the write session and stop - never loop. A question it raises
 for the user goes under `## Open questions`; do not stop for it.
 
-- Skeptic (always; Agent tool, at the reviewer tier the host's own
-  agent rules name; a host with no such rules takes type
-  `general-purpose`, model `sonnet`): from the file alone, fill five
-  slots - the task, the next action, why it is next, how to verify it,
-  what to ask the user; an empty slot is a finding. For each line of
-  the read block, open the resolved span and report any point where
-  the Now step contradicts it. For each todo file the Plan points at,
-  verify that the Now step agrees with its live item. `finish` renders
-  the header line and the blocks after this pass, so they are a cycle
-  behind: a stale or absent sha, cycle, id, row, or label there is
-  never a finding. Read a standing id the cursor cites with
-  `hq standing <slug> <id>`, never from the block.
+- Skeptic (always; Agent tool, at the executing tier the host's agent
+  rules name - a host with none takes type `general-purpose`, model
+  `sonnet` - and at the judging tier, or model `opus` there, only
+  where the Now step's correctness turns on a span the skeptic must
+  read code to settle: absent one, the contradiction clause below is
+  vacuous; the session names its tier and reason before launching):
+  from the file alone, fill five slots - the task, the next action,
+  why it is next, how to verify it, what to ask the user; an empty
+  slot is a finding. For each line of the read block, open the
+  resolved span and report any point where the Now step contradicts
+  it. For each todo file the Plan points at, verify that the Now step
+  agrees with its live item. `finish` renders the header line and the
+  blocks after this pass, so they are a cycle behind: a stale or
+  absent sha, cycle, id, row, or label there is never a finding. Read
+  a standing id the cursor cites with `hq standing <slug> <id>`, never
+  from the block.
 
 ### Report
 
