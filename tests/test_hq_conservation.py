@@ -155,3 +155,66 @@ def test_adopt_counts_the_bullets_it_left_unfiled(tmp_path, monkeypatch, capsys)
     _write_handoff(clean)
     assert hq.main(['adopt', 'cons-clean']) == 0
     assert 'unfiled:' not in capsys.readouterr().out
+
+
+def _set_cursor(folder: pathlib.Path, body: str) -> None:
+    """Overwrite the cursor, keeping the header line the script owns.
+    """
+    handoff = folder / 'HANDOFF.md'
+    text = handoff.read_text()
+    handoff.write_text(text[:text.index('\n## ') + 1] + body)
+
+
+_MOVED_PARA = '- Verified: page_key() separates its two inputs with a null byte.\n'
+_WITH_PARA = (
+    '## Task\nSkip a rendered page.\n\n## Now\nWire page_key().\n\n'
+    f'## State\n{_MOVED_PARA}')
+_WITHOUT_PARA = '## Task\nSkip a rendered page.\n\n## Now\nBenchmark it.\n'
+
+
+def test_a_line_moved_into_a_file_stamped_this_cycle_is_carried(
+        tmp_path, monkeypatch, capsys):
+    """A rehome carries the line only when its file is stamped this cycle.
+
+    Mutation: the same-cycle texts dropped from the union, so a line
+    moved into a fresh output is reported; or the file set widened to
+    every live row, so a line matching a file stamped cycles ago is
+    suppressed with nothing prompting the re-stamp.
+    Oracle: the identical rehome either side of the cycle boundary the
+    rule is keyed on, with the file's kind deliberately not notes and
+    its grade not edit, so sibling_texts cannot be what passes it.
+    """
+    folder = _setup(tmp_path, monkeypatch, slug='cons-moved')
+    assert hq.main(['begin', 'cons-moved']) == 0
+    _set_cursor(folder, _WITH_PARA)
+    assert hq.main(['finish', 'cons-moved', '--log', 'one']) == 0
+    assert hq.main(['begin', 'cons-moved']) == 0
+    (folder / 'outputs').mkdir(exist_ok=True)
+    (folder / 'outputs' / 'moved.md').write_text('# Moved\n\n' + _MOVED_PARA)
+    assert hq.main([
+        'stamp', 'cons-moved', 'outputs/moved.md',
+        '--label', 'the state line this cycle rehomed']) == 0
+    rows = hq._read_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS)
+    row = {r['path']: r for r in rows}['outputs/moved.md']
+    assert (row['kind'], row['read_before']) == ('other', 'never')
+    _set_cursor(folder, _WITHOUT_PARA)
+    capsys.readouterr()
+    rc = hq.main(['finish', 'cons-moved', '--log', 'two'])
+    assert rc == 0
+    assert 'not carried' not in capsys.readouterr().out
+
+    earlier = _setup(tmp_path, monkeypatch, slug='cons-earlier')
+    assert hq.main(['begin', 'cons-earlier']) == 0
+    (earlier / 'outputs').mkdir(exist_ok=True)
+    (earlier / 'outputs' / 'moved.md').write_text('# Moved\n\n' + _MOVED_PARA)
+    assert hq.main([
+        'stamp', 'cons-earlier', 'outputs/moved.md',
+        '--label', 'the state line, stamped a cycle early']) == 0
+    _set_cursor(earlier, _WITH_PARA)
+    assert hq.main(['finish', 'cons-earlier', '--log', 'one']) == 0
+    assert hq.main(['begin', 'cons-earlier']) == 0
+    _set_cursor(earlier, _WITHOUT_PARA)
+    capsys.readouterr()
+    rc = hq.main(['finish', 'cons-earlier', '--log', 'two'])
+    assert rc == 1
+    assert f'  not carried: {_MOVED_PARA.strip()}' in capsys.readouterr().out

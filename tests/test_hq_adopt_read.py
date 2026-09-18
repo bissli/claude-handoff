@@ -713,7 +713,9 @@ def test_diff_summarizes_a_section_and_expands_it_without_a_cap(
     hq.main(['begin', _SLUG])
     (folder / 'HANDOFF.md').write_text(
         f'# Handoff: {_SLUG}\n\nWritten: 2026-09-01 | Cycle: 2\n\n## Task\n')
-    hq.main(['finish', _SLUG, '--log', 'two'])
+    hq.main([
+        'finish', _SLUG, '--log', 'two',
+        '--accept-not-carried', 'cycle-1 cursor settled'])
     capsys.readouterr()
     assert hq.main(['diff', _SLUG, '1', '2']) == 0
     assert capsys.readouterr().out.splitlines() == ['## Task  -61']

@@ -342,6 +342,104 @@ def test_acknowledge_with_no_break_is_an_advisory_and_records_nothing(
     assert rows[-1]['note'] == '-'
 
 
+def _cursor(folder, body):
+    """Overwrite the cursor, keeping the header line the script owns.
+    """
+    handoff = folder / 'HANDOFF.md'
+    text = handoff.read_text()
+    handoff.write_text(text[:text.index('\n## ') + 1] + body)
+
+
+def _drop_one_state_line(folder, monkeypatch):
+    """File cycle 1 with a State line, then open cycle 2 having cut it.
+    """
+    assert _run(['begin', _SLUG])[0] == 0
+    _cursor(
+        folder,
+        '## Task\nRefresh the poller token.\n\n'
+        '## Now\nWire refresh_token().\n\n'
+        '## State\n- Verified: refresh round-trips against staging.\n')
+    assert _run(['finish', _SLUG, '--log', 'one'])[0] == 0
+    monkeypatch.setenv('HQ_CYCLE', '2')
+    assert _run(['begin', _SLUG])[0] == 0
+    _cursor(folder, '## Task\nRefresh the poller token.\n\n## Now\nCap it.\n')
+
+
+def test_accept_not_carried_files_the_cycle_and_records_the_count(
+        tmp_path, monkeypatch):
+    """The flag files the cycle and writes the count and reason to the note.
+
+    Mutation: the flag honored but the count or the reason dropped from
+    the manifest note, or the flag passing silently with no accepted
+    line, so nothing in the record says a line was let go.
+    Oracle: the manifest row read back from cycles/manifest.tsv, and
+    cycles/c02.md existing where the refusal left it absent.
+    """
+    folder = _new_root(tmp_path, monkeypatch)
+    _drop_one_state_line(folder, monkeypatch)
+    rc, out, _ = _run([
+        'finish', _SLUG, '--log', 'two',
+        '--accept-not-carried', 'state moved to the note'])
+    assert rc == 0
+    assert (
+        'accepted: 1 cursor lines from c01 not carried;'
+        ' state moved to the note - recorded in the manifest'
+        in out.splitlines())
+    rows = hq._read_tsv(folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS)
+    assert rows[-1]['note'] == (
+        'accepted 1 not carried from c01; state moved to the note')
+    assert (folder / 'cycles' / 'c02.md').is_file()
+
+
+def test_the_acknowledged_clause_stays_first_in_a_two_clause_note(
+        tmp_path, monkeypatch):
+    """A cycle that acknowledges a break and accepts a drop records both.
+
+    Mutation: the accepted clause placed before the acknowledged one,
+    which breaks every assertion reading the note by its prefix; or one
+    clause overwriting the other so the note carries a single reason.
+    Oracle: the note read back, split on the ' | ' join.
+    """
+    folder = _new_root(tmp_path, monkeypatch)
+    _drop_one_state_line(folder, monkeypatch)
+    ledger = folder / 'ledger.tsv'
+    ledger.write_bytes(ledger.read_bytes().replace(b'path', b'pathh', 1))
+    rc, _, _ = _run([
+        'finish', _SLUG, '--log', 'two',
+        '--acknowledge', 'formatter ran',
+        '--accept-not-carried', 'state moved to the note'])
+    assert rc == 0
+    rows = hq._read_tsv(folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS)
+    clauses = rows[-1]['note'].split(' | ')
+    assert len(clauses) == 2
+    assert clauses[0].startswith('acknowledged ')
+    assert clauses[0].endswith('; formatter ran')
+    assert clauses[1] == (
+        'accepted 1 not carried from c01; state moved to the note')
+
+
+def test_accept_not_carried_with_no_drop_is_an_advisory_and_records_nothing(
+        tmp_path, monkeypatch):
+    """The flag on a clean cycle says so and leaves the note empty.
+
+    Mutation: the reason recorded whether or not a line was dropped, so
+    the manifest claims a loss that never happened; or the flag passing
+    in silence, which reads as an accepted drop.
+    Oracle: a finish whose cursor carries every previous line; note
+    stays '-'.
+    """
+    folder = _new_root(tmp_path, monkeypatch)
+    assert _run(['begin', _SLUG])[0] == 0
+    rc, out, _ = _run([
+        'finish', _SLUG, '--log', 'one', '--accept-not-carried', 'nothing went'])
+    assert rc == 0
+    assert (
+        'advisory: --accept-not-carried given, no cursor line was dropped'
+        ' - nothing to accept' in out)
+    rows = hq._read_tsv(folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS)
+    assert rows[-1]['note'] == '-'
+
+
 def test_the_collision_advisory_strips_heading_markers_and_backticks():
     """A collision quotes the heading text alone, with no ## and no ticks.
 

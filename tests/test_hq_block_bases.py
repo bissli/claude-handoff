@@ -5,6 +5,7 @@ result on disk, so a display the reader cannot follow fails here rather
 than costing a resuming session a search.
 """
 
+import io
 import pathlib
 import re
 
@@ -223,12 +224,13 @@ def test_stamp_takes_the_path_the_block_prints(tmp_path, monkeypatch, capsys):
     """The path a block prints is a path hq stamp accepts, and it keys on
     the row the bare spelling keys on.
 
-    Mutation: the root retry dropped from _stored_path, so the one
-    spelling the block offers is refused on the write path; or the retry
-    widened past the folder, so a repo file typed bare is recorded as a
-    file the folder holds.
-    Oracle: the ledger's own keys after a re-stamp by the printed path -
-    one key, 'specs/SPEC.md' - and a repo file typed bare still refused.
+    Mutation: the root rung dropped, so the one spelling the block
+    offers is refused on the write path; or the rung storing the token as
+    given, so a repo file typed bare is recorded as a file the folder
+    holds and the same file keeps two keys.
+    Oracle: the ledger's base column after both stamps - 'specs/SPEC.md'
+    the only folder-base key, the repo file keyed by the absolute path
+    the root rung resolved.
     """
     root, folder = _seeded(tmp_path, monkeypatch)
     (root / 'src').mkdir()
@@ -239,14 +241,18 @@ def test_stamp_takes_the_path_the_block_prints(tmp_path, monkeypatch, capsys):
 
     assert hq.main(['stamp', _SLUG, display, '--label', 'relabeled twice']) == 0
     capsys.readouterr()
-    refused = hq.main(['stamp', _SLUG, 'src/app.py', '--label', 'a repo file'])
+    accepted = hq.main(['stamp', _SLUG, 'src/app.py', '--label', 'a repo file'])
 
     rows = hq._read_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS)
+    repo_key = str(root / 'src' / 'app.py')
     assert display == f'.handoff/{_SLUG}/specs/SPEC.md'
-    assert {row['path'] for row in rows} == {'specs/SPEC.md'}
     assert hq.latest_rows(rows)['specs/SPEC.md']['label'] == 'relabeled twice'
-    assert refused == 2
-    assert 'no such file under' in capsys.readouterr().out
+    assert accepted == 0
+    assert {row['path'] for row in rows} == {'specs/SPEC.md', repo_key}
+    assert {
+        row['path'] for row in rows if row['base'] == 'folder'
+        } == {'specs/SPEC.md'}
+    assert hq.latest_rows(rows)[repo_key]['base'] == 'abs'
 
 
 def test_open_reads_a_block_an_older_version_rendered(tmp_path, monkeypatch, capsys):
@@ -284,3 +290,171 @@ def test_open_reads_a_block_an_older_version_rendered(tmp_path, monkeypatch, cap
     assert 'block sha mismatch' not in out
     assert 'LEDGER BEHIND: block label differs: specs/SPEC.md' in out
     assert 'span moved: specs/SPEC.md [(3, 5)] -> [(5, 7)]' in out
+
+
+def test_a_batch_line_never_folder_bases_another_slugs_file(
+        tmp_path, monkeypatch, capsys):
+    """A batch line keys each printed prefix on its own base: this
+    thread's folder for its own file, absolutely for another thread's.
+
+    Mutation: the in-folder retry widened from 'inside this folder' to
+    'under the root', so .handoff/<other-slug>/notes/x.md is recorded as
+    a file this thread holds and two threads share one row; or the root
+    rung storing the token as given, so the key is a bare relative path
+    belonging to neither base.
+    Oracle: the ledger's base column after the batch - 'specs/SPEC.md'
+    the only folder-base key, the other thread's file keyed by its
+    absolute path.
+    """
+    root, folder = _seeded(tmp_path, monkeypatch)
+    other = root / '.handoff' / 'other-slug' / 'notes'
+    other.mkdir(parents=True)
+    (other / 'x.md').write_text('# Other\n')
+    monkeypatch.setenv('HQ_CYCLE', '2')
+    assert hq.main(['begin', _SLUG]) == 0
+    monkeypatch.setattr('sys.stdin', io.StringIO(
+        f'.handoff/{_SLUG}/specs/SPEC.md --label "the cache contract again"\n'
+        '.handoff/other-slug/notes/x.md --label "another thread"\n'))
+    capsys.readouterr()
+    assert hq.main(['stamp', _SLUG, '--batch']) == 0
+    out = capsys.readouterr().out
+
+    rows = hq._read_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS)
+    other_key = str(other / 'x.md')
+    assert {
+        row['path'] for row in rows if row['base'] == 'folder'
+        } == {'specs/SPEC.md'}
+    assert hq.latest_rows(rows)[other_key]['base'] == 'abs'
+    assert (hq.latest_rows(rows)['specs/SPEC.md']['label']
+            == 'the cache contract again')
+    assert f'.handoff/other-slug/notes/x.md -> {other_key} (root)' in out
+
+
+def test_stamp_takes_the_repo_path_the_block_prints(
+        tmp_path, monkeypatch, capsys):
+    """The root-relative spelling a block prints re-stamps the row the
+    absolute path opened, never a second one.
+
+    Mutation: the root rung storing the token as given, so the printed
+    path opens a second folder-base row and the file's R1 history and R3
+    drift split across two keys; or the rung dropped, so the one
+    spelling the block offers exits 2 on the write path.
+    Oracle: the ledger's own key set after the re-stamp - one key, the
+    absolute path the first stamp wrote - and hq when's answer for the
+    same display string.
+    """
+    root, folder = _seeded(tmp_path, monkeypatch)
+    (root / 'src').mkdir()
+    repo_file = root / 'src' / 'app.py'
+    repo_file.write_text('x = 1\n')
+    monkeypatch.setenv('HQ_CYCLE', '2')
+    assert hq.main(['begin', _SLUG]) == 0
+    assert hq.main([
+        'stamp', _SLUG, str(repo_file), '--read-before', 'mention',
+        '--label', 'the loader']) == 0
+    assert hq.main(['finish', _SLUG, '--log', 'c2']) == 0
+    display = next(
+        ln.split('  ')[0] for ln in _block(folder, 'artifacts')
+        if 'the loader' in ln)
+    assert display == 'src/app.py'
+
+    monkeypatch.setenv('HQ_CYCLE', '3')
+    assert hq.main(['begin', _SLUG]) == 0
+    capsys.readouterr()
+    assert hq.main([
+        'stamp', _SLUG, display, '--label', 'the loader, relabeled']) == 0
+
+    rows = hq._read_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS)
+    key = str(repo_file)
+    assert {row['path'] for row in rows} == {'specs/SPEC.md', key}
+    assert hq.latest_rows(rows)[key]['label'] == 'the loader, relabeled'
+    capsys.readouterr()
+    assert hq.main(['when', _SLUG, display]) == 0
+    when_out = capsys.readouterr().out
+    assert when_out.count(key) == 2
+    assert hq.main(['finish', _SLUG, '--log', 'c3']) == 0
+    assert display in [
+        ln.split('  ')[0] for ln in _block(folder, 'artifacts')]
+
+
+def test_a_repo_row_recorded_missing_by_the_printed_path_stays_one_row(
+        tmp_path, monkeypatch, capsys):
+    """Retiring a repo row by the printed path retires the row the
+    absolute path opened.
+
+    Mutation: the base resolution gated behind not recorded_on_purpose,
+    so a repo row retired by the path the block prints opens a second
+    folder-base row and the live row is never retired.
+    Oracle: the ledger's key set after the missing stamp - one abs key -
+    and the latest row's status read back from ledger.tsv.
+    """
+    root, folder = _seeded(tmp_path, monkeypatch)
+    (root / 'src').mkdir()
+    repo_file = root / 'src' / 'app.py'
+    repo_file.write_text('x = 1\n')
+    monkeypatch.setenv('HQ_CYCLE', '2')
+    assert hq.main(['begin', _SLUG]) == 0
+    assert hq.main([
+        'stamp', _SLUG, str(repo_file), '--read-before', 'mention',
+        '--label', 'the loader']) == 0
+    assert hq.main(['finish', _SLUG, '--log', 'c2']) == 0
+    display = next(
+        ln.split('  ')[0] for ln in _block(folder, 'artifacts')
+        if 'the loader' in ln)
+    repo_file.unlink()
+
+    monkeypatch.setenv('HQ_CYCLE', '3')
+    assert hq.main(['begin', _SLUG]) == 0
+    capsys.readouterr()
+    assert hq.main([
+        'stamp', _SLUG, display, '--status', 'missing', '--label', 'gone']) == 0
+
+    rows = hq._read_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS)
+    key = str(repo_file)
+    assert {row['path'] for row in rows} == {'specs/SPEC.md', key}
+    assert hq.latest_rows(rows)[key]['status'] == 'missing'
+
+
+def test_a_stamp_of_a_pinned_work_dir_path_keys_the_row_when_answers(
+        tmp_path, monkeypatch, capsys):
+    """A pin-relative spelling stamps the row it names, and when agrees.
+
+    Mutation: the pin dropped from the base list stamp searches, so a
+    pinned thread's own made files are the one case the printed path
+    still refuses.
+    Oracle: the single ledger key after the re-stamp, against hq when's
+    answer for the same string.
+    """
+    root, folder = _seeded(tmp_path, monkeypatch)
+    # The pin has to sit outside the root, and every path a test can make
+    # is under the system temp directory the check otherwise refuses.
+    monkeypatch.setattr(hq, '_TEMP_DIRS', ())
+    pin = pathlib.Path(tmp_path) / 'worktree'
+    pin.mkdir()
+    (pin / 'w.py').write_text('w = 1\n')
+    monkeypatch.setenv('HQ_CYCLE', '2')
+    assert hq.main(['begin', _SLUG]) == 0
+    assert hq.main(['work-dir', _SLUG, str(pin)]) == 0
+    assert hq.main([
+        'stamp', _SLUG, str(pin / 'w.py'), '--kind', 'draft',
+        '--label', 'the loader']) == 0
+    assert hq.main(['finish', _SLUG, '--log', 'c2']) == 0
+    display = next(
+        ln.split('  ')[0] for ln in _block(folder, 'artifacts')
+        if 'the loader' in ln)
+    assert display == 'w.py'
+
+    monkeypatch.setenv('HQ_CYCLE', '3')
+    assert hq.main(['begin', _SLUG]) == 0
+    capsys.readouterr()
+    assert hq.main([
+        'stamp', _SLUG, display, '--label', 'the loader, relabeled']) == 0
+
+    rows = hq._read_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS)
+    key = str(pin / 'w.py')
+    assert {row['path'] for row in rows} == {'specs/SPEC.md', key}
+    assert hq.latest_rows(rows)[key]['label'] == 'the loader, relabeled'
+    capsys.readouterr()
+    assert hq.main(['when', _SLUG, display]) == 0
+    assert capsys.readouterr().out.count(key) == 2
+

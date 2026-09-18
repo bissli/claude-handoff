@@ -242,7 +242,9 @@ read_before is a tier - when the file is loaded, and what belongs there:
   .handoff/<slug>/specs/SPEC.md, so none of them reads as a repo
   path. Where the line names both bases, one spelling can sit
   under either. The ledger, hq artifacts, and the begin work list
-  keep the path as stamped, which stamp takes either way.
+  keep the path as stamped, which stamp takes either way; the
+  spelling a block prints is a spelling stamp takes too, and it
+  keys the row the stored spelling keys.
 - Standing block: constraints print in full, decisions and dead ends
   as headlines, no cap; hq standing <slug> <id> prints an item in
   full. Ids are d decision, c constraint, x dead end; (cN) is the
@@ -285,7 +287,17 @@ W1, W2  finish and open check that ledger.tsv and standing.md are
     byte-prefix-identical to their last finished state; an edited
     recorded line is a hard fail in finish. When a known tool caused
     the break (a formatter, a merge), pass --acknowledge "<reason>"
-    to finish; the reason lands in the manifest.""",
+    to finish; the reason lands in the manifest.
+
+not carried  finish compares the last finished cycle's cursor against
+    the new one, standing.md, the live labels and the stamped
+    siblings, and refuses on a line none of them carries. The Now step
+    is exempt, since the cycle completing it writes the next one. Carry
+    the line forward, rehome it to a sibling and stamp that sibling
+    this cycle, or pass --accept-not-carried "<reason>", which files
+    the cycle and records the count and the reason in the manifest.
+    hq open <slug> --not-carried lists every such line and writes
+    nothing.""",
     'stale-path': """\
 hq help stale-path - a folder path under a former directory
 
@@ -1551,7 +1563,12 @@ def conservation(
                 continue
             result.append(ln)
             continue
-        if norm in union_text:
+        # An item carried but annotated keeps every word of the
+        # original and appends after its final mark, so that mark is
+        # the only thing blocking the match.
+        trimmed = norm.rstrip('.,;:')
+        if norm in union_text or (
+                trimmed != norm and trimmed and trimmed in union_text):
             continue
         if is_heading and (kf_label or _heading_covered(norm)):
             continue
@@ -1597,6 +1614,113 @@ def sibling_texts(folder: pathlib.Path, live: dict[str, Row]) -> list[str]:
         except OSError:
             continue
     return texts
+
+
+def not_carried(
+    folder: pathlib.Path,
+    rows: list[Row],
+    live: dict[str, Row],
+    manifest: list[dict],
+    cursor: str,
+    standing: str,
+    cycle: int,
+) -> tuple[int, list[str]]:
+    """Return the last finished cycle and its cursor lines nothing carries.
+
+    Parameters
+    ----------
+    folder : pathlib.Path
+        Handoff folder, whose ``cycles/`` archive supplies the comparand.
+    rows : list[Row]
+        Every ledger row, read for the paths this cycle stamped.
+    live : dict[str, Row]
+        Live rows keyed by path, supplying the label and sibling witnesses.
+    manifest : list[dict]
+        Cycle manifest; its last row names the cycle compared against.
+    cursor : str
+        Cursor of the cycle being filed, with Unfiled already drained.
+    standing : str
+        ``standing.md`` text, including the items this cycle drained.
+    cycle : int
+        Cycle being filed, which gates the stamped-this-cycle witnesses.
+
+    Returns
+    -------
+    tuple[int, list[str]]
+        The previous cycle number, and its cursor lines that the new
+        cursor, ``standing.md``, the live labels and the stamped
+        siblings no longer carry. The list is empty where no archive
+        precedes this cycle.
+
+    Notes
+    -----
+    - A heading carries no fact, so a section omitted as empty is never
+      reported by its heading.
+    - A Now step is spent by design, since the cycle completing it
+      writes the next one in its place. That exemption reaches only
+      lines appearing nowhere else in the previous cursor, so a Plan
+      item the Now step quotes is still reported when it is dropped.
+    - A file stamped this cycle carries the lines rehomed into it. A
+      sibling stamped in an earlier cycle carries them only when its
+      kind is ``notes`` or its read obligation is ``edit``.
+    """
+    if not manifest:
+        return 0, []
+    prev_cycle = int(manifest[-1]['cycle'])
+    prev_archive = folder / 'cycles' / f'c{prev_cycle:02d}.md'
+    if not prev_archive.is_file():
+        return prev_cycle, []
+    prev_cursor = split_handoff(
+        prev_archive.read_text(encoding='utf-8', errors='replace'))['cursor']
+    witnesses: list[str] = []
+    for path, row in live.items():
+        if row['status'] != 'live' or row.get('label', '-') == '-':
+            continue
+        witnesses.extend((row['label'], f'{path} {row["label"]}'))
+    # The folder's own bookkeeping is no witness: cycles/cNN.md holds
+    # the very cursor being compared against and HANDOFF.md holds the
+    # one being filed, so stamping either would pass every line at once.
+    stamped_now = {
+        r['path'] for r in rows
+        if r['cycle'].strip() == str(cycle)
+        and 'cycles' not in pathlib.PurePath(r['path']).parts
+        and not pathlib.PurePath(r['path']).name.startswith('HANDOFF')}
+    for path in stamped_now:
+        row = live.get(path)
+        if row is None or row['status'] != 'live':
+            continue
+        target = (
+            pathlib.Path(path).expanduser() if row['base'] == 'abs'
+            else folder / path)
+        if not target.is_file():
+            continue
+        try:
+            witnesses.append(target.read_text(encoding='utf-8', errors='replace'))
+        except OSError:
+            continue
+    now_m = re.search(r'^## Now\s*$', prev_cursor, re.MULTILINE)
+    spent = ''
+    outside = prev_cursor
+    if now_m:
+        rest = prev_cursor[now_m.end():]
+        nxt = re.search(r'^## ', rest, re.MULTILINE)
+        spent = rest[:nxt.start()] if nxt else rest
+        outside = (
+            prev_cursor[:now_m.start()]
+            + prev_cursor[now_m.end() + len(spent):])
+    # A line the Now step shares with another section is not spent: a
+    # Now step written as the Plan item it names must not exempt that
+    # item's own drop.
+    spent_lines = {
+        ' '.join(ln.split()) for ln in spent.splitlines() if ln.strip()}
+    spent_lines -= {
+        ' '.join(ln.split()) for ln in outside.splitlines() if ln.strip()}
+    return prev_cycle, [
+        ln for ln in conservation(
+            prev_cursor, cursor, standing,
+            witnesses + sibling_texts(folder, live))
+        if not ln.lstrip().startswith('#')
+        and ' '.join(ln.split()) not in spent_lines]
 
 
 def split_handoff(text: str) -> dict:
@@ -2384,8 +2508,8 @@ def _pointer_path(
     - A foreign file names repo files relative to the repo root, so a
       token the folder does not hold is tried against the project root
       (the folder's grandparent), the cwd, and home before it is seeded
-      as a missing folder path. ``stamp`` never searches; only adoption
-      reads pointers it did not write.
+      as a missing folder path. ``stamp`` searches the bases a rendered
+      block prints against; the cwd and home are adoption's alone.
     """
     stored, path_obj, base = _stored_path(folder, token)
     if base == 'abs' or path_obj.exists():
@@ -2402,6 +2526,39 @@ def _successor_path(folder: pathlib.Path, successor: str) -> pathlib.Path:
     """Return the disk path a successor field names, keyed as an artifact is.
     """
     return _stored_path(folder, successor)[1]
+
+
+def _search_bases(folder: pathlib.Path) -> list[pathlib.Path]:
+    """Return the bases a relative path is tried against, in order.
+
+    Parameters
+    ----------
+    folder : pathlib.Path
+        Handoff folder; the project root is its grandparent and the pin
+        its ``work-dir`` file.
+
+    Returns
+    -------
+    list[pathlib.Path]
+        The project root, then the pinned work dir where one is pinned.
+        A pin spelled with ``/`` or ``~`` is expanded; any other pin
+        resolves against the root.
+
+    Notes
+    -----
+    - One list serves the write verb and the read-only verbs, so the
+      spelling a rendered block prints is the spelling every verb
+      takes. They differ in what counts as a hit: ``stamp`` matches on
+      the file existing, ``read`` and ``when`` on a row existing.
+    """
+    root = folder.parent.parent
+    bases = [root]
+    pin, _ = resolve_work_dir(folder)
+    if pin:
+        bases.append(
+            pathlib.Path(os.path.expanduser(pin)) if pin.startswith(('/', '~'))
+            else root / pin)
+    return bases
 
 
 def _stored_path(
@@ -2433,8 +2590,8 @@ def _stored_path(
     - Normalization is lexical, so a symlink in the spelling reaches the
       ledger as written.
     - An outside path stores as ``~/...`` under home, else absolute. A
-      relative token is never searched for under the cwd or home: a repo
-      file is stamped by its ``~`` or absolute path. The one retry is
+      relative token is never searched for under the cwd or home,
+      which are adoption's alone. The one retry is
       against the root, and it is kept only when it lands inside the
       folder, which is the block's own spelling and no repo file.
     """
@@ -4002,6 +4159,11 @@ def _do_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
 
     Notes
     -----
+    - The path resolves against the folder, then the project root, then
+      a pinned work dir, and the row stores the form it resolves to -
+      folder-relative with base ``folder``, else ``~`` or absolute with
+      base ``abs`` - so one file keeps one ledger key whichever
+      spelling stamps it.
     - A refusal appends a receipt row; a successful stamp appends the
       row; a ``--defer`` stamps with kind ``other`` and reason
       ``deferred``.
@@ -4038,13 +4200,29 @@ def _do_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
     ledger_path = folder / 'ledger.tsv'
     rows = _read_tsv(ledger_path, LEDGER_FIELDS)
     live = latest_rows(rows)
+    clean = path.strip('`')
     stored_path, path_obj, base = _stored_path(folder, path)
+    never_stamped = all(row['path'] != stored_path for row in rows)
+    # A rendered block prints a repo file root- or work-dir-relative,
+    # and the hq when command it prints beside it takes that spelling,
+    # so the write verb resolves it against the same bases. The rung is
+    # ungated by --status and --successor: a row retired by the printed
+    # path must retire the row the absolute path opened, not a twin.
+    if not (path_obj.exists() or not never_stamped
+            or clean.startswith(('/', '~'))):
+        for idx, base_dir in enumerate(_search_bases(folder)):
+            cand_path, cand_obj, cand_base = _stored_path(
+                folder, str(base_dir / clean))
+            if not (cand_obj.exists()
+                    or any(row['path'] == cand_path for row in rows)):
+                continue
+            base_name = 'root' if idx == 0 else 'work dir'
+            print(f'hq stamp: {clean} -> {cand_path} ({base_name})')
+            stored_path, path_obj, base = cand_path, cand_obj, cand_base
+            never_stamped = all(row['path'] != stored_path for row in rows)
+            break
     prev = live.get(stored_path, {})
     # Notes:
-    # - stamp never searches, so a relative token the folder does not
-    #   hold is a repo path typed folder-relative, not a file to record:
-    #   the row would sit live with no sha until finish called it
-    #   missing.
     # - An abs path not on disk is a file on another host or one still
     #   to come, and stays an advisory at begin and finish.
     # - A path gone on purpose is recorded with --status missing,
@@ -4054,7 +4232,6 @@ def _do_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
         getattr(argv, 'status', None) in {'missing', 'archived'}
         or getattr(argv, 'archive', False)
         or bool(getattr(argv, 'successor', None)))
-    never_stamped = all(row['path'] != stored_path for row in rows)
     if (never_stamped and base == 'folder' and not path_obj.exists()
             and not recorded_on_purpose):
         if path.strip('`').startswith(('/', '~')):
@@ -4064,7 +4241,8 @@ def _do_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
         else:
             print(
                 f'hq stamp: {stored_path}: no such file under {folder}'
-                ' - a file outside the folder is stamped by its ~ or absolute path')
+                ' - not under the folder, the root, or the work dir;'
+                ' create it first, or record it gone with --status missing')
         return 2
     if base == 'folder' and stored_path in _KIND_DIRS and path_obj.is_dir():
         print(
@@ -4354,17 +4532,39 @@ def _verb_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
             line = raw_line.strip()
             if not line or line == '-':
                 continue
-            # The batch reports a bad line by number on stdout, so the
-            # parser's own usage block is swallowed.
-            with contextlib.redirect_stderr(io.StringIO()):
+            # Notes:
+            # - The parser's own usage block is swallowed: the batch
+            #   reports a bad line by number on stdout instead.
+            # - Its last stderr line is the cause, and the report keeps
+            #   it: a batch of artifact rows carries long labels, and a
+            #   message naming only the line leaves the reader to guess
+            #   between a quote, a flag and a missing path.
+            usage_err = io.StringIO()
+            quote_fault = ''
+            with contextlib.redirect_stderr(usage_err):
                 try:
                     sub = parser.parse_args(['stamp', slug] + shlex.split(line))
-                except (SystemExit, ValueError):
+                except ValueError as exc:
+                    sub = None
+                    quote_fault = str(exc).lower()
+                except SystemExit:
                     sub = None
             if sub is None or not getattr(sub, 'path', ''):
+                if quote_fault:
+                    cause = (
+                        f'{quote_fault}: put the whole label in double'
+                        ' quotes, since an apostrophe opens a quote the'
+                        ' line never closes')
+                elif sub is None:
+                    usage_lines = usage_err.getvalue().strip().splitlines()
+                    cause = (
+                        usage_lines[-1].split('error: ')[-1]
+                        if usage_lines else 'arguments not understood')
+                else:
+                    cause = 'path is required: it is the first word of the line'
                 print(
                     f'hq stamp: batch line {line_no} not parsed: {line}'
-                    ' - fix that line and re-run it alone; the other lines ran')
+                    f' - {cause} - re-run that line alone; the other lines ran')
                 rc = max(rc, 2)
                 continue
             rc = max(rc, _do_stamp(folder, anch, sub))
@@ -4633,6 +4833,8 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
     manifest_path = folder / 'cycles' / 'manifest.tsv'
     walk, rows, live, sha_map, manifest, lb, sb = _folder_state(folder)
     ack = ' '.join((getattr(argv, 'acknowledge', None) or '').split())
+    accept_nc = ' '.join((getattr(argv, 'accept_not_carried', None) or '').split())
+    accepted_nc = ''
     breaks = witness(manifest[-1] if manifest else None, lb, sb)
     if breaks and not ack:
         for b in breaks:
@@ -4832,38 +5034,52 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
             return 1
         new_note_lines.append(line)
         standing_text_new += line + '\n'
-    # --- Advisory: cursor lines not carried ---
+    # --- Refusal: cursor lines not carried ---
     # Notes:
     # - The cursor is rewritten every cycle, so the previous archive is
     #   the one record of what it held; a line that neither the new
-    #   cursor, standing.md, a live label, nor a rehome sibling carries
-    #   is named here, and the agent settles whether it was done or lost.
+    #   cursor, standing.md, a live label, nor a rehomed sibling
+    #   carries blocks the write until it is carried or accepted.
+    # - The block sits one step above the first disk mutation, so a
+    #   refusal leaves the folder as it was and keeps the lock, and the
+    #   same session re-runs once the cursor is fixed.
     # - A cursor heading carries no fact, so a section omitted as empty
     #   is not reported by its heading.
-    if manifest:
-        prev_cycle = int(manifest[-1]['cycle'])
-        prev_archive = folder / 'cycles' / f'c{prev_cycle:02d}.md'
-        if prev_archive.is_file():
-            prev_cursor = split_handoff(
-                prev_archive.read_text(encoding='utf-8', errors='replace'))['cursor']
-            live_labels = [
-                row['label'] for row in live.values()
-                if row['status'] == 'live' and row.get('label', '-') != '-']
-            dropped_lines = [
-                ln for ln in conservation(
-                    prev_cursor, cursor_clean, standing_text_new,
-                    live_labels + sibling_texts(folder, live))
-                if not ln.lstrip().startswith('#')]
-            if dropped_lines:
-                print(
-                    f'advisory: {len(dropped_lines)} cursor lines from'
-                    f' c{prev_cycle:02d} not carried'
-                    ' - confirm each was settled or moved, else carry it forward'
-                    ' or rehome it; hq diff'
-                    f' {folder.name} {prev_cycle} {anch["cycle"]}'
-                    ' shows the whole change')
-                for dropped in dropped_lines:
-                    print(f'  not carried: {dropped.strip()}')
+    nc_given = getattr(argv, 'accept_not_carried', None) is not None
+    if nc_given and not accept_nc:
+        print(
+            'hq finish: --accept-not-carried was given with no reason'
+            ' - re-run naming what settles the drop')
+        return 1
+    prev_cycle, dropped_lines = not_carried(
+        folder, rows, live, manifest, cursor_clean, standing_text_new,
+        int(anch['cycle']))
+    if dropped_lines and not accept_nc:
+        print(
+            f'hq finish: {len(dropped_lines)} cursor lines from'
+            f' c{prev_cycle:02d} not carried'
+            ' - carry each forward, rehome it to a sibling and stamp'
+            ' that sibling this cycle, or re-run with'
+            ' --accept-not-carried "<reason>"')
+        for dropped in dropped_lines[:5]:
+            print(f'  not carried: {dropped.strip()}')
+        if len(dropped_lines) > 5:
+            print(
+                f'  ... and {len(dropped_lines) - 5} more'
+                f'; hq open {folder.name} --not-carried prints every one')
+        return 1
+    if dropped_lines:
+        accepted_nc = (
+            f'accepted {len(dropped_lines)} not carried from'
+            f' c{prev_cycle:02d}; {accept_nc}')
+        print(
+            f'accepted: {len(dropped_lines)} cursor lines from'
+            f' c{prev_cycle:02d} not carried; {accept_nc}'
+            ' - recorded in the manifest')
+    elif nc_given:
+        print(
+            'advisory: --accept-not-carried given, no cursor line was'
+            ' dropped - nothing to accept')
     log_text = ' '.join((getattr(argv, 'log', '') or '').split())
     branch, sha7, dirty = anch['branch'], anch['sha'], anch['dirty']
     if branch != '-':
@@ -4902,7 +5118,12 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
         for name in ('read', 'artifacts', 'standing'))
     takeover = ' '.join(lock.get('takeover', '').split())
     manifest_session = f'{session} took over {takeover}' if takeover else session
-    note_val = f'acknowledged {"; ".join(breaks)}; {ack}' if breaks and ack else '-'
+    note_parts: list[str] = []
+    if breaks and ack:
+        note_parts.append(f'acknowledged {"; ".join(breaks)}; {ack}')
+    if accepted_nc:
+        note_parts.append(accepted_nc)
+    note_val = ' | '.join(note_parts) or '-'
     manifest_row: dict = {
         'cycle': str(anch['cycle']),
         'written': anch['now'][:10],
@@ -4962,6 +5183,49 @@ def _verb_open(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
         0 always; findings print to stdout, never block.
     """
     walk, rows, live, sha_map, manifest, lb, sb = _folder_state(folder)
+    if getattr(argv, 'not_carried', False):
+        hf_path = folder / 'HANDOFF.md'
+        if not hf_path.is_file():
+            print('not carried: no HANDOFF.md here - nothing to check')
+            return 0
+        cursor_now = split_handoff(
+            hf_path.read_text(encoding='utf-8-sig', errors='replace'))['cursor']
+        unfiled_items, cursor_drained, _ = drain_unfiled(cursor_now)
+        standing_path = folder / 'standing.md'
+        standing_now = (
+            standing_path.read_text(encoding='utf-8')
+            if standing_path.exists() else '')
+        # finish compares against standing.md with this cycle's Unfiled
+        # items already filed, so the lister files them too; otherwise
+        # it reports a line the refusal passes.
+        for kind_str, headline, body in unfiled_items:
+            line = _note_line(
+                standing_now, kind_str, headline, body, int(anch['cycle']))
+            if line is None:
+                continue
+            standing_now += line + '\n'
+        if not manifest:
+            print(
+                'not carried: no finished cycle precedes this one'
+                ' - nothing to compare against')
+            return 0
+        prev_cycle = int(manifest[-1]['cycle'])
+        if not (folder / 'cycles' / f'c{prev_cycle:02d}.md').is_file():
+            print(
+                f'not carried: cycles/c{prev_cycle:02d}.md is absent, so'
+                ' the comparand is gone - restore it before trusting a'
+                ' count of zero')
+            return 0
+        _, dropped_now = not_carried(
+            folder, rows, _reconcile_missing(folder, live), manifest,
+            cursor_drained, standing_now, int(anch['cycle']))
+        print(
+            f'not carried from c{prev_cycle:02d}: {len(dropped_now)}'
+            ' - carry each forward, or rehome each to a sibling and'
+            ' stamp that sibling this cycle')
+        for dropped in dropped_now:
+            print(f'  not carried: {dropped.strip()}')
+        return 0
     for b in witness(manifest[-1] if manifest else None, lb, sb):
         print(f'WARNING: {b}')
     lock = _read_lock(folder)
@@ -5188,8 +5452,9 @@ def _ledger_key(folder: pathlib.Path, token: str, known: set[str]) -> str | None
     -----
     - A relative token is tried as ``stamp`` stores it, then against the
       project root, then against the pinned work dir, so a repo file
-      is found by the path the cursor names. ``stamp`` never searches:
-      this is the read-only verbs' courtesy alone.
+      is found by the path the cursor names. ``stamp`` searches the same
+      bases, matching on the file existing where these verbs match on a
+      row existing.
     """
     stored = _stored_path(folder, token)[0]
     if stored in known:
@@ -5197,14 +5462,7 @@ def _ledger_key(folder: pathlib.Path, token: str, known: set[str]) -> str | None
     clean = token.strip('`')
     if clean.startswith(('/', '~')):
         return None
-    root = folder.parent.parent
-    bases = [root]
-    pin, _ = resolve_work_dir(folder)
-    if pin:
-        bases.append(
-            pathlib.Path(os.path.expanduser(pin)) if pin.startswith(('/', '~'))
-            else root / pin)
-    for base in bases:
+    for base in _search_bases(folder):
         candidate = _stored_path(folder, str(base / clean))[0]
         if candidate in known:
             return candidate
@@ -5940,9 +6198,11 @@ def _build_parser() -> argparse.ArgumentParser:
     _stamp_epilog = (
         'The path is relative to the handoff folder: ./SPEC.md and\n'
         'sub/../SPEC.md are the row SPEC.md. A path outside it - a repo file,\n'
-        'a ~ path, an absolute path - is stored whole and gated the same way;\n'
-        'there is no search of the working directory, and a first stamp of a\n'
-        'relative token the folder does not hold exits 2. An outside .py/.sql/\n'
+        'a ~ path, an absolute path - is stored whole and gated the same way.\n'
+        'A relative token is tried against the folder, then the project root,\n'
+        'then a pinned work dir, and stores the form it resolves to; a token\n'
+        'none of the three holds exits 2. The cwd and home are never\n'
+        'searched. An outside .py/.sql/\n'
         '.js/.ts/.ps1 infers other/never: pass --kind draft to gate it at edit.\n'
         'A live always row needs --where: a stamp that would leave one with\n'
         "no anchor is refused and prints the file's headings.\n"
@@ -6025,6 +6285,10 @@ def _build_parser() -> argparse.ArgumentParser:
         '--log is the one line the Log keeps for this cycle. --acknowledge\n'
         '"<reason>" turns a W1 or W2 witness break into an acknowledged line\n'
         'and records the break and the reason in the manifest.\n'
+        'The cursor lines from the last finished cycle that nothing now\n'
+        'carries block the write; --accept-not-carried "<reason>" files\n'
+        'the cycle anyway and records the count and the reason in the\n'
+        'manifest. hq open <slug> --not-carried lists every such line.\n'
         'After the size line the print carries +N tok since cNN, this\n'
         "cycle's payload against the last one the manifest recorded: a\n"
         'level cut shows here being erased, cycle by cycle, while a\n'
@@ -6037,8 +6301,19 @@ def _build_parser() -> argparse.ArgumentParser:
     fin.add_argument('slug')
     fin.add_argument('--log', required=True)
     fin.add_argument('--acknowledge')
+    fin.add_argument('--accept-not-carried')
 
-    sub.add_parser('open').add_argument('slug')
+    _open_epilog = (
+        '--not-carried lists every cursor line from the last finished\n'
+        'cycle that the file on disk, standing.md, a live label, and the\n'
+        'stamped siblings no longer carry, and writes nothing.'
+    )
+    op = sub.add_parser(
+        'open',
+        epilog=_open_epilog,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    op.add_argument('slug')
+    op.add_argument('--not-carried', action='store_true')
 
     _read_epilog = (
         "The row's anchored spans, or the whole file where the row has no\n"

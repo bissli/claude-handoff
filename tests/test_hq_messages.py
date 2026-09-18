@@ -7,6 +7,7 @@ contract tests hold the same text to the skill.
 """
 
 import contextlib
+import hashlib
 import io
 import os
 import pathlib
@@ -792,26 +793,50 @@ def test_the_artifacts_block_prints_every_full_row_with_no_cap(
     assert not any(' - hq artifacts ' in ln for ln in block.splitlines())
 
 
-def test_finish_names_each_previous_cursor_line_nothing_now_carries(
-        tmp_path, monkeypatch):
-    """Finish lists the cycle-1 cursor lines that cycle 2 neither kept,
-    ticked, drained to standing.md, nor rehomed to a stamped sibling.
+_REFUSAL = (
+    'hq finish: {n} cursor lines from c{c:02d} not carried'
+    ' - carry each forward, rehome it to a sibling and stamp'
+    ' that sibling this cycle, or re-run with'
+    ' --accept-not-carried "<reason>"')
 
-    Mutation: the union built from the new cursor alone, so the drained
-    Plan item or the rehomed State line is reported; the checkbox kept in
-    the comparison, so the ticked item is reported; the omitted State
-    heading reported as a line; or the advisory silent.
-    Oracle: hand-built cursors - of the six cycle-1 lines exactly two
-    leave with no home, the old Now step and one State line; cycle 1
-    prints no advisory since no archive precedes it.
+
+def _digests(folder):
+    """Return a sha256 per bookkeeping file, None where it is absent.
+    """
+    names = ('HANDOFF.md', 'standing.md', 'ledger.tsv', 'cycles/manifest.tsv')
+    out = {}
+    for name in names:
+        path = folder / name
+        out[name] = (
+            hashlib.sha256(path.read_bytes()).hexdigest()
+            if path.is_file() else None)
+    return out
+
+
+def _cursor(folder, body):
+    """Overwrite the cursor, keeping the header line the script owns.
+    """
+    handoff = folder / 'HANDOFF.md'
+    text = handoff.read_text()
+    handoff.write_text(text[:text.index('\n## ') + 1] + body)
+
+
+def test_finish_reports_no_dropped_line_before_any_archive_exists(
+        tmp_path, monkeypatch):
+    """Cycle 1 finishes silently: no archive precedes it to compare against.
+
+    Mutation: the empty-manifest guard dropped, so not_carried reads a
+    c00 archive and the first cycle of every thread refuses; or the
+    comparand defaulted to the live cursor, which matches itself.
+    Oracle: a cycle-1 cursor with six content lines and no cycles/
+    directory, against an exit code of 0 and stdout carrying no
+    'not carried'.
     """
     folder = _root(tmp_path, monkeypatch)
     _run(['begin', _SLUG])
-    handoff = folder / 'HANDOFF.md'
-    header = handoff.read_text()
-    header = header[:header.index('\n## ') + 1]
-    handoff.write_text(
-        header + '## Task\nRefresh the poller token.\n\n'
+    _cursor(
+        folder,
+        '## Task\nRefresh the poller token.\n\n'
         '## Now\nWire refresh_token() into the 401 branch.\n\n'
         '## Plan\n- [ ] Pick the retry ceiling\n- [ ] Name the backoff cap\n\n'
         '## State\n- Verified: refresh round-trips against staging.\n'
@@ -819,26 +844,306 @@ def test_finish_names_each_previous_cursor_line_nothing_now_carries(
     rc, out, _ = _run(['finish', _SLUG, '--log', 'one'])
     assert rc == 0
     assert 'not carried' not in out
+
+
+def test_finish_refuses_before_the_archive_when_a_cursor_line_is_dropped(
+        tmp_path, monkeypatch):
+    """The refusal precedes every disk write, so the folder is untouched.
+
+    Mutation: the refusal left as an advisory that prints and falls
+    through to the write; or the return 1 placed after the cycles/
+    mkdir or the archive write, so the message changes but the order
+    does not.
+    Oracle: the absence of cycles/c02.md and four unchanged file
+    digests, against a hand-built pair of cursors whose one State line
+    has no home in the second.
+    """
+    folder = _root(tmp_path, monkeypatch)
     _run(['begin', _SLUG])
-    (folder / 'notes-state.md').write_text(
-        '# State notes\n\n- Unverified: retry backoff never exercised.\n')
-    assert _run(['stamp', _SLUG, 'notes-state.md', '--label', 'state moved'])[0] == 0
-    handoff.write_text(
-        header + '## Task\nRefresh the poller token.\n\n'
-        '## Now\nRun the integration test against staging.\n\n'
-        '## Plan\n- [x] Pick the retry ceiling\n\n'
-        '## Unfiled\n- decision: **Name the backoff cap** 60 s.\n')
+    _cursor(
+        folder,
+        '## Task\nRefresh the poller token.\n\n'
+        '## Now\nWire refresh_token() into the 401 branch.\n\n'
+        '## State\n- Verified: refresh round-trips against staging.\n')
+    assert _run(['finish', _SLUG, '--log', 'one'])[0] == 0
+    _run(['begin', _SLUG])
+    _cursor(
+        folder,
+        '## Task\nRefresh the poller token.\n\n'
+        '## Now\nRun the integration test against staging.\n')
+    before = _digests(folder)
+    rc, out, _ = _run(['finish', _SLUG, '--log', 'two'])
+    assert rc == 1
+    lines = out.splitlines()
+    assert _REFUSAL.format(n=1, c=1) in lines
+    assert (
+        '  not carried: - Verified: refresh round-trips against staging.'
+        in lines)
+    assert not (folder / 'cycles' / 'c02.md').exists()
+    assert _digests(folder) == before
+
+
+def test_a_spent_now_step_is_not_a_dropped_line(tmp_path, monkeypatch):
+    """Replacing the Now step alone finishes; cutting a State line refuses.
+
+    Mutation: the Now exemption dropped, so every healthy cycle
+    refuses; or the exemption widened past the Now section, so a
+    dropped State line passes.
+    Oracle: the pair of cursors straddling the real boundary - Now
+    alone replaced, versus Now replaced and a State line cut.
+    """
+    folder = _root(tmp_path, monkeypatch)
+    _run(['begin', _SLUG])
+    body = (
+        '## Task\nRefresh the poller token.\n\n'
+        '## Now\n{now}\n\n'
+        '## State\n- Verified: refresh round-trips against staging.\n'
+        '{tail}')
+    _cursor(folder, body.format(
+        now='Wire refresh_token() into the 401 branch.',
+        tail='- Unverified: retry backoff never exercised.\n'))
+    assert _run(['finish', _SLUG, '--log', 'one'])[0] == 0
+    _run(['begin', _SLUG])
+    _cursor(folder, body.format(
+        now='Run the integration test against staging.',
+        tail='- Unverified: retry backoff never exercised.\n'))
     rc, out, _ = _run(['finish', _SLUG, '--log', 'two'])
     assert rc == 0
-    lines = out.splitlines()
+    assert 'not carried' not in out
+    _run(['begin', _SLUG])
+    _cursor(folder, body.format(now='Cap the backoff.', tail=''))
+    rc, out, _ = _run(['finish', _SLUG, '--log', 'three'])
+    assert rc == 1
     assert (
-        'advisory: 2 cursor lines from c01 not carried'
-        ' - confirm each was settled or moved, else carry it forward'
-        ' or rehome it; hq diff msg-slug 1 2 shows the whole change'
+        '  not carried: - Unverified: retry backoff never exercised.'
+        in out.splitlines())
+
+
+def test_an_item_annotated_after_its_final_mark_is_carried(
+        tmp_path, monkeypatch):
+    """Ticking and annotating a Plan item carries it; deleting it refuses.
+
+    Mutation: the trailing-mark trim dropped, so the annotation moves
+    the period and a carried item reports as lost - the firing observed
+    in 17 of 22 retained c11 eval runs; or the trim applied to the
+    union side as well, so an item genuinely cut down to its opening
+    words passes.
+    Oracle: the same item in three states - ticked and annotated after
+    its period, ticked alone, and absent - against one exit code each.
+    """
+    folder = _root(tmp_path, monkeypatch)
+    _run(['begin', _SLUG])
+    body = '## Task\nSkip a rendered page.\n\n## Now\n{now}\n\n## Plan\n{plan}'
+    _cursor(folder, body.format(
+        now='Wire page_key() into render_page().',
+        plan='- [ ] Wire the key into render_page().\n'))
+    assert _run(['finish', _SLUG, '--log', 'one'])[0] == 0
+    _run(['begin', _SLUG])
+    _cursor(folder, body.format(
+        now='Benchmark a thousand-page site.',
+        plan='- [x] Wire the key into render_page()'
+             ' (cycle 2; written, never run).\n'))
+    rc, out, _ = _run(['finish', _SLUG, '--log', 'two'])
+    assert rc == 0
+    assert 'not carried' not in out
+    _run(['begin', _SLUG])
+    _cursor(folder, body.format(
+        now='Cap the cache.', plan='- [ ] Size the cache from the page count.\n'))
+    rc, out, _ = _run(['finish', _SLUG, '--log', 'three'])
+    assert rc == 1
+    assert any(
+        'Wire the key into render_page()' in ln
+        for ln in out.splitlines() if ln.startswith('  not carried:'))
+
+
+def test_stamping_the_previous_archive_does_not_clear_the_refusal(
+        tmp_path, monkeypatch):
+    """The cycles/ archive is no witness, so stamping it suppresses nothing.
+
+    Mutation: the cycles/ exclusion dropped from the stamped-this-cycle
+    witness set, which turns one hq stamp of the archive into a silent,
+    unrecorded bypass of --accept-not-carried; or the exclusion written
+    as a prefix test that an absolute ledger path slips past.
+    Oracle: the identical refused cycle run twice, once with the
+    previous archive stamped live this cycle.
+    """
+    folder = _root(tmp_path, monkeypatch)
+    _run(['begin', _SLUG])
+    _cursor(
+        folder,
+        '## Task\nRefresh the poller token.\n\n'
+        '## Now\nWire refresh_token().\n\n'
+        '## State\n- Verified: refresh round-trips against staging.\n')
+    assert _run(['finish', _SLUG, '--log', 'one'])[0] == 0
+    _run(['begin', _SLUG])
+    _cursor(folder, '## Task\nRefresh the poller token.\n\n## Now\nCap it.\n')
+    assert _run(['finish', _SLUG, '--log', 'two'])[0] == 1
+    assert _run(['stamp', _SLUG, 'cycles/c01.md', '--label', 'the archive'])[0] == 0
+    rc, out, _ = _run(['finish', _SLUG, '--log', 'two'])
+    assert rc == 1
+    assert _REFUSAL.format(n=1, c=1) in out.splitlines()
+    assert not (folder / 'cycles' / 'c02.md').exists()
+
+
+def test_a_now_step_quoting_a_plan_item_does_not_exempt_that_item(
+        tmp_path, monkeypatch):
+    """The spent exemption reaches the Now section alone, never a twin line.
+
+    Mutation: the spent set filtered against every reported line rather
+    than against lines the Now section alone holds, so a Now step
+    written as the Plan bullet it names silently exempts that bullet's
+    own drop.
+    Oracle: a cycle-1 cursor whose Now step and Plan bullet are the
+    same text, against the dropped bullet being named.
+    """
+    folder = _root(tmp_path, monkeypatch)
+    _run(['begin', _SLUG])
+    _cursor(
+        folder,
+        '## Task\nSkip a rendered page.\n\n'
+        '## Now\n- [ ] Wire the key into render_page().\n\n'
+        '## Plan\n- [ ] Wire the key into render_page().\n'
+        '- [ ] Benchmark a thousand-page site.\n')
+    assert _run(['finish', _SLUG, '--log', 'one'])[0] == 0
+    _run(['begin', _SLUG])
+    _cursor(
+        folder,
+        '## Task\nSkip a rendered page.\n\n'
+        '## Now\nBenchmark next.\n\n'
+        '## Plan\n- [ ] Benchmark a thousand-page site.\n')
+    rc, out, _ = _run(['finish', _SLUG, '--log', 'two'])
+    assert rc == 1
+    assert any(
+        'Wire the key into render_page().' in ln
+        for ln in out.splitlines() if ln.startswith('  not carried:'))
+
+
+def test_accept_not_carried_with_no_reason_refuses_on_its_own_line(
+        tmp_path, monkeypatch):
+    """An empty reason refuses and says so, rather than reprinting the list.
+
+    Mutation: the empty reason normalized to a falsy string and left to
+    fall into the not-carried branch, so an agent passing '' loops on an
+    unchanged message with no word that the flag was seen.
+    Oracle: the flag given as '' and as three spaces, against one
+    distinct line and exit 1 each.
+    """
+    folder = _root(tmp_path, monkeypatch)
+    _run(['begin', _SLUG])
+    _cursor(
+        folder,
+        '## Task\nRefresh the poller token.\n\n'
+        '## Now\nWire refresh_token().\n\n'
+        '## State\n- Verified: refresh round-trips against staging.\n')
+    assert _run(['finish', _SLUG, '--log', 'one'])[0] == 0
+    _run(['begin', _SLUG])
+    _cursor(folder, '## Task\nRefresh the poller token.\n\n## Now\nCap it.\n')
+    empty_line = (
+        'hq finish: --accept-not-carried was given with no reason'
+        ' - re-run naming what settles the drop')
+    for reason in ('', '   '):
+        rc, out, _ = _run([
+            'finish', _SLUG, '--log', 'two', '--accept-not-carried', reason])
+        assert rc == 1
+        assert empty_line in out.splitlines()
+        assert 'not carried - carry each forward' not in out
+
+
+def test_the_capped_refusal_names_the_command_that_prints_the_rest(
+        tmp_path, monkeypatch):
+    """Five lines print, the count names the rest, and the lister has them all.
+
+    Mutation: the cap removed, so a long list floods the refusal; the
+    cap applied with no count line, so the agent cannot tell how many
+    remain; or the listing flag made to block or to write.
+    Oracle: nine hand-built State lines against the printed five plus
+    the named four, and the lister's own nine.
+    """
+    folder = _root(tmp_path, monkeypatch)
+    _run(['begin', _SLUG])
+    state = ''.join(f'- Verified: probe {i} holds.\n' for i in range(9))
+    _cursor(
+        folder,
+        '## Task\nProbe the cache.\n\n## Now\nRun probe 0.\n\n'
+        f'## State\n{state}')
+    assert _run(['finish', _SLUG, '--log', 'one'])[0] == 0
+    _run(['begin', _SLUG])
+    _cursor(folder, '## Task\nProbe the cache.\n\n## Now\nRun probe 9.\n')
+    rc, out, _ = _run(['finish', _SLUG, '--log', 'two'])
+    assert rc == 1
+    lines = out.splitlines()
+    assert _REFUSAL.format(n=9, c=1) in lines
+    assert sum(ln.startswith('  not carried:') for ln in lines) == 5
+    assert (
+        f'  ... and 4 more; hq open {_SLUG} --not-carried prints every one'
         in lines)
-    assert '  not carried: Wire refresh_token() into the 401 branch.' in lines
-    assert '  not carried: - Verified: refresh round-trips against staging.' in lines
-    assert sum(ln.startswith('  not carried:') for ln in lines) == 2
+    before = _digests(folder)
+    rc, out, _ = _run(['open', _SLUG, '--not-carried'])
+    assert rc == 0
+    lines = out.splitlines()
+    assert sum(ln.startswith('  not carried:') for ln in lines) == 9
+    assert lines[0].startswith('not carried from c01: 9')
+    assert _digests(folder) == before
+
+
+def test_the_lister_and_the_refusal_agree_on_a_drained_unfiled_item(
+        tmp_path, monkeypatch):
+    """The lister files this cycle's Unfiled items, as the refusal does.
+
+    Mutation: the open branch passing standing.md without the drained
+    items, so the command the refusal names as authoritative reports a
+    line the refusal itself passes.
+    Oracle: one State line rehomed as a typed Unfiled decision, against
+    a zero from the lister and an exit 0 from finish on the same tree.
+    """
+    folder = _root(tmp_path, monkeypatch)
+    _run(['begin', _SLUG])
+    _cursor(
+        folder,
+        '## Task\nRefresh the poller token.\n\n'
+        '## Now\nWire refresh_token().\n\n'
+        '## State\n- Verified: refresh round-trips against staging.\n')
+    assert _run(['finish', _SLUG, '--log', 'one'])[0] == 0
+    _run(['begin', _SLUG])
+    _cursor(
+        folder,
+        '## Task\nRefresh the poller token.\n\n## Now\nCap it.\n\n'
+        '## Unfiled\n- decision: **Staging round-trip settled**'
+        ' - Verified: refresh round-trips against staging.\n')
+    rc, out, _ = _run(['open', _SLUG, '--not-carried'])
+    assert rc == 0
+    assert out.splitlines()[0].startswith('not carried from c01: 0')
+    assert _run(['finish', _SLUG, '--log', 'two'])[0] == 0
+
+
+def test_the_lister_says_when_the_comparand_is_gone(tmp_path, monkeypatch):
+    """A missing archive is named, never reported as nothing dropped.
+
+    Mutation: the archive guard left to not_carried, which returns an
+    empty list for a missing file, so the lister prints a count of zero
+    and a reader cannot tell it from a clean cycle.
+    Oracle: the same tree with cycles/c01.md moved aside, against the
+    two different first lines.
+    """
+    folder = _root(tmp_path, monkeypatch)
+    _run(['begin', _SLUG])
+    _cursor(
+        folder,
+        '## Task\nRefresh the poller token.\n\n'
+        '## Now\nWire refresh_token().\n\n'
+        '## State\n- Verified: refresh round-trips against staging.\n')
+    assert _run(['finish', _SLUG, '--log', 'one'])[0] == 0
+    _run(['begin', _SLUG])
+    _cursor(folder, '## Task\nRefresh the poller token.\n\n## Now\nCap it.\n')
+    assert _run(['open', _SLUG, '--not-carried'])[1].splitlines()[0].startswith(
+        'not carried from c01: 1')
+    archive = folder / 'cycles' / 'c01.md'
+    archive.rename(archive.with_suffix('.md.aside'))
+    rc, out, _ = _run(['open', _SLUG, '--not-carried'])
+    assert rc == 0
+    assert out.splitlines()[0] == (
+        'not carried: cycles/c01.md is absent, so the comparand is gone'
+        ' - restore it before trusting a count of zero')
 
 
 def test_supersede_prints_the_item_it_drops_from_the_block(tmp_path, monkeypatch):
@@ -1012,3 +1317,39 @@ def test_shorter_label_advisory_fires_at_the_stamp_against_an_earlier_cycle(
     rc, out_ab, _ = _run(['stamp', _SLUG, 'SPEC.md', '--label', 'ab'])
     assert rc == 0
     assert _lbl_short in out_ab.splitlines()
+
+
+def test_an_unparsed_batch_line_names_which_fault_stopped_it(
+        tmp_path, monkeypatch):
+    """Each unparsed stamp batch line names its own cause, not just itself.
+
+    Mutation: the causes collapsed to one generic clause, or the quote
+    fault and the flag fault swapped, so a reader retypes quotes at a
+    mistyped flag and retypes flags at an apostrophe.
+    Oracle: three hand-written lines, one per fault - an apostrophe, a
+    bad flag, a missing path - each matched against the clause that
+    fault and no other produces, plus the good fourth line's row.
+    """
+    folder = _root(tmp_path, monkeypatch)
+    _run(['begin', _SLUG])
+    (folder / 'notes-a.md').write_text('# A\n')
+    monkeypatch.setattr('sys.stdin', io.StringIO(
+        "notes-a.md --label the reader's own span\n"
+        'notes-a.md --successr NEXT.md\n'
+        '--label "orphan"\n'
+        'notes-a.md --label "good"\n'))
+    rc, out, err = _run(['stamp', _SLUG, '--batch'])
+    assert rc == 2
+    assert err == ''
+    assert 'batch line 1 not parsed' in out
+    assert 'no closing quotation: put the whole label in double quotes' in out
+    assert 'batch line 2 not parsed' in out
+    assert 'unrecognized arguments: --successr NEXT.md' in out
+    assert 'batch line 3 not parsed' in out
+    assert 'path is required: it is the first word of the line' in out
+    assert out.count('no closing quotation') == 1
+    assert out.count('unrecognized arguments') == 1
+    rows = (folder / 'ledger.tsv').read_text().splitlines()
+    assert len(rows) == 2
+    assert rows[-1].endswith('\tgood')
+

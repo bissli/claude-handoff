@@ -87,8 +87,7 @@ telling a fresh session?
 - No - none of that. A session whose opening move this is, and
   equally one that has only looked something up. Read.
 
-Ask it of the content, never the position: a session that answered one
-question and edited nothing holds nothing worth passing on.
+Ask it of the content, never of how late the session is.
 
 An argument is always a folder under `.handoff/`; the document inside
 is always `HANDOFF.md`, never named by the caller.
@@ -201,10 +200,11 @@ Rules:
   count.
 - Name where a credential lives, never its value.
 - Absolute dates. ASCII only.
-- Now is the single next action; Plan is what follows it. Plan
-  carries the approved plan; neither is re-opened.
-- An Open question leaves the cursor only when answered, a Plan item
-  only when done or rehomed.
+- Now is the single next action; Plan, the approved plan, is what
+  follows it; neither is re-opened.
+- Now alone is spent each cycle. Every other line stays (a done Plan
+  item ticked `- [x]`) or moves whole to a `note` body or a stamped
+  sibling; `finish` refuses a dropped line.
 - Anything still awaiting the user - a question, an unapproved plan -
   goes under `Open questions`; read stops there.
 - An item recorded with `note` or under `## Unfiled` is not repeated
@@ -266,9 +266,9 @@ notes/idp-quirks.md --read-before edit --label "staging IdP quirks"
 ROWS
 ```
 
-- A path is relative to the folder; a path outside it - a repo file, a
-  `~` or absolute path - is stored whole and gated the same way. There
-  is no search of the working directory.
+- A relative path resolves against the folder, root, then pin; a `~` or
+  absolute path is stored whole and gated the same way. One file is one
+  row however it is spelled.
 - `--kind`, `--read-before`, `--status`, `--where`, and `--label` each
   default to the previous row's value; omit them on a re-stamp.
 - `--where` names a heading: its text without its number (`3. Retry`

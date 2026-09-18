@@ -3,12 +3,16 @@ bullets, section-letter seeds, the Log roll-up, and the top-level
 HANDOFF rule.
 """
 
+import os
 import pathlib
+import shutil
 
 import pytest
 
 from bin import hq
 
+FIXTURES = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), 'fixtures', 'handoff')
 _SLUG = 'ptr-test'
 _SESSION = 'session-ptr'
 _NOW = '2026-09-01T12:00:00'
@@ -774,7 +778,9 @@ def test_missing_draft_pointer_stays_missing_never_and_finish_passes(
     assert 'Key files pointer not on disk: smooth.py' in out
     monkeypatch.setenv('HQ_CYCLE', '4')
     assert hq.main(['begin', _SLUG]) == 0
-    assert hq.main(['finish', _SLUG, '--log', 'kit']) == 0
+    assert hq.main([
+        'finish', _SLUG, '--log', 'kit',
+        '--accept-not-carried', 'multi-path pointer bullet']) == 0
     assert 'missing live gated' not in capsys.readouterr().out
 
 
@@ -1283,3 +1289,28 @@ def test_list_ending_in_a_word_drops_the_leading_comma(tmp_path, monkeypatch):
     rows = {r['path']: r for r in _ledger(folder)}
     for name in ('a.md', 'b.md'):
         assert rows[name]['label'] == 'and their tests - the shared text', name
+
+
+def test_a_pointer_the_ledger_absorbed_is_not_a_dropped_line(
+        tmp_path, monkeypatch, capsys):
+    """The first finish after an adopt passes on the absorbed pointers.
+
+    Mutation: the witness reduced to the bare ledger label, so the
+    path each Key files pointer carries in front of its text finds no
+    home and the first finish after every adoption refuses.
+    Oracle: the orbit fixture's two pointer rows, whose labels are
+    'cache schema and field contracts; s4 field-to-path mapping' and
+    'background on incremental diffing strategies'; only the
+    path-and-label witness carries the normalized line, which keeps the
+    path in front.
+    """
+    folder = _root(tmp_path, monkeypatch, slug='orbit-cache-rewrite')
+    shutil.rmtree(folder)
+    shutil.copytree(os.path.join(FIXTURES, 'orbit-cache-rewrite'), folder)
+    assert hq.main(['adopt', 'orbit-cache-rewrite']) == 0
+    assert hq.main(['begin', 'orbit-cache-rewrite']) == 0
+    capsys.readouterr()
+    rc = hq.main(['finish', 'orbit-cache-rewrite', '--log', 'after adopt'])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert 'not carried' not in out

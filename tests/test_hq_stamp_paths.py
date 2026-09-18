@@ -442,16 +442,17 @@ def test_read_and_when_find_a_row_by_any_spelling_of_its_path(
 
 def test_a_first_stamp_of_a_path_the_folder_lacks_is_a_usage_error(
         tmp_path, monkeypatch, capsys):
-    """A repo-relative token the folder does not hold exits 2 and writes no row.
+    """A token no base holds exits 2 and writes no row.
 
-    Mutation: the existence check dropped, so the stamp exits 0 and a live
-    row with sha '-' waits in the ledger until finish names it missing.
-    Oracle: exit 2 with the line naming the ~ or absolute form and a ledger
-    of header only; the same file by its absolute path exits 0 as base abs;
-    a token given --status missing, --successor, --archive, or --status
-    archived still writes its row, as does a re-stamp of a row whose file
-    is gone; an absolute token inside the folder is told to create the
-    file or record it gone.
+    Mutation: the existence check dropped at every rung, so a stamp of a
+    path nothing holds exits 0 and leaves a live row with sha '-' until
+    finish calls it missing.
+    Oracle: exit 2 with the line naming the three bases tried and a
+    ledger of header only; the same file by its absolute path exits 0 as
+    base abs; a token given --status missing, --successor, --archive, or
+    --status archived still writes its row, as does a re-stamp of a row
+    whose file is gone; an absolute token inside the folder is told to
+    create the file or record it gone.
     """
     folder = _root(tmp_path, monkeypatch)
     repo_file = pathlib.Path(tmp_path) / 'root' / 'docs' / 'SPEC-b.md'
@@ -461,11 +462,12 @@ def test_a_first_stamp_of_a_path_the_folder_lacks_is_a_usage_error(
     (folder / 'SPEC2.md').write_text('# Spec\n\nTwo.\n')
     capsys.readouterr()
 
-    assert hq.main(['stamp', _SLUG, 'docs/SPEC-b.md']) == 2
+    assert hq.main(['stamp', _SLUG, 'docs/SPEC-absent.md']) == 2
 
     out = capsys.readouterr().out
-    assert out.startswith(f'hq stamp: docs/SPEC-b.md: no such file under {folder}')
-    assert '~ or absolute path' in out
+    assert out.startswith(
+        f'hq stamp: docs/SPEC-absent.md: no such file under {folder}')
+    assert 'not under the folder, the root, or the work dir' in out
     assert _rows(folder) == []
     assert hq.main(['stamp', _SLUG, str(repo_file), '--where', 'Spec']) == 0
     assert hq.main([
