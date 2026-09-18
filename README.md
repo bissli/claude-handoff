@@ -7,6 +7,7 @@ room, that the conversation has grown expensive enough to hand off.
 248K/350K [=======---] handoff in 3  $1.09/t  opus myproject
 310K/350K [========--] handoff now   $1.36/t  opus myproject
 452K/350K  1.3x over                 $1.99/t  opus myproject
+248K/350K [=======---] handoff in 3  $1.09/t  opus myproject:auth-token
 ```
 
 ## Install
@@ -450,7 +451,12 @@ from a git clone instead? Point the command at
 `/path/to/clone/scripts/statusline.py`. The status line reads the growth rate
 and target from a file the hook writes each turn, so the two never
 disagree; without the hook it falls back to a default rate and still
-works.
+works. Once the session enters a handoff thread - `hq adopt`, `hq
+begin`, or `hq open` - the line names that thread's slug after the
+directory, `myproject:auth-token`. The slug is keyed by session id, so
+two sessions in one checkout each show their own thread, and it sits
+last on the line because it is the field a narrow pane can most afford
+to cut.
 
 ## Update
 

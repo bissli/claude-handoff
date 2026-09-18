@@ -73,6 +73,14 @@ STORE_VERBS = {
     'cycles': 'hq diff {slug} <c1> <c2>',
     }
 HANDOFF_DIRNAME = '.handoff'
+# The per-session cache the hooks key by session id. The status line
+# reads the thread file from it, so hq and the hooks must agree on the
+# directory and on the HQ_STATE_DIR that moves it.
+STATE_DIR = os.path.expanduser('~/.claude/cache/claude-handoff')
+# The verbs that put a session on a thread. A query against another
+# thread - when, diff, artifacts, standing, read - leaves the session
+# where it was.
+_THREAD_VERBS = ('adopt', 'begin', 'open')
 # Presence arms the nudge hook. The contents are free, so the file
 # carries a line naming what it does.
 SENTINEL = os.path.expanduser('~/.claude/.nudge-handoff')
@@ -6768,6 +6776,57 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _record_thread(session: str, slug: str) -> None:
+    """Record the handoff thread a session is on, for the status line.
+
+    Parameters
+    ----------
+    session : str
+        Session id, as ``anchors`` resolved it.
+    slug : str
+        Folder name of the thread the session just entered.
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    - The file holds the slug and nothing else, under HQ_STATE_DIR
+      beside the state the hooks keep. The status line repaints
+      continuously, so it reads one short line rather than parsing the
+      document two hooks already read and rewrite whole.
+    - One file per session id, and the id is the one the ledger
+      records. Concurrent sessions on different threads never write
+      the same path, and the line agrees with the ledger on whose
+      cycle this is.
+    - A cache that cannot be written costs the status line its slug
+      and nothing else, so nothing here raises into a verb that has
+      already done its work.
+    """
+    safe = session.replace('/', '_')
+    state_dir = pathlib.Path(os.environ.get('HQ_STATE_DIR', STATE_DIR))
+    final = state_dir / f'{safe}.thread'
+    # Notes:
+    # - The rename is what makes the write safe to read. A status line
+    #   repainting during a plain write reads a truncated slug, which
+    #   raises nothing and renders as a real thread. Two writers
+    #   racing one session now get one whole slug or the other.
+    # - The staging name carries the pid, so a subagent writing
+    #   beside its parent cannot land in the other's half-written
+    #   file before either rename runs.
+    staged = state_dir / f'{safe}.thread.{os.getpid()}'
+    try:
+        state_dir.mkdir(parents=True, exist_ok=True)
+        staged.write_text(f'{slug}\n', encoding='utf-8')
+        os.replace(staged, final)
+    except OSError:
+        try:
+            staged.unlink()
+        except OSError:
+            pass
+
+
 def main(argv: list[str]) -> int:
     """Entry point callable in-process from tests.
 
@@ -6842,6 +6901,8 @@ def main(argv: list[str]) -> int:
         if verb == 'work-dir':
             return _verb_work_dir(folder, args)
         anch = anchors(folder, args)
+        if verb in _THREAD_VERBS:
+            _record_thread(str(anch['session']), folder.name)
         dispatch = {
             'adopt': _verb_adopt,
             'begin': _verb_begin,

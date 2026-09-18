@@ -10,6 +10,11 @@ The line reads::
 
     262K/350K [=======---] handoff in 2  $1.15/t  opus myproject
 
+and, once the session is on a handoff thread, names it after the
+directory::
+
+    262K/350K [=======---] handoff in 2  $1.15/t  opus myproject:auth-token
+
 and turns amber when it is time to write a handoff, red once the budget
 is behind you, so the moment to hand off is visible several turns out.
 
@@ -30,7 +35,11 @@ Notes
 - Ordered by what has to survive truncation. A status line sharing a
   narrow pane is cut from the right, so the two numbers that carry the
   decision lead and the directory - which the shell prompt already shows
-  - goes last.
+  - goes last. The thread slug sits last of all, on the directory it
+  qualifies: it is the field a reader can most afford to lose.
+- The slug comes from a one-line file ``hq`` writes when a session
+  enters a thread, for the reason the thresholds come from the hook's
+  state file: the line repaints continuously and reads no transcript.
 - Over budget the bar is replaced by the multiplier, not filled in. A
   saturated bar reads the same at 1.1x as at 3x, which is exactly the
   range where the reader needs to tell them apart.
@@ -102,6 +111,34 @@ def session_state(session: str, tier: str) -> tuple[int, int, int]:
     return per_call, target, min(handoff, point) if handoff > 0 else point
 
 
+def session_thread(session: str) -> str:
+    """Read the handoff thread a session is on, if it is on one.
+
+    Parameters
+    ----------
+    session : str
+        Session id from the status line payload.
+
+    Returns
+    -------
+    str
+        The slug ``hq`` recorded when this session last ran adopt,
+        begin, or open, or '' when it has run none of them.
+
+    Notes
+    -----
+    - The record is sticky for the session. A thread entered once is
+      the thread the session is on until it enters another, which is
+      what a reader glancing at the line wants to know.
+    """
+    safe = session.replace('/', '_')
+    try:
+        with open(os.path.join(STATE_DIR, f'{safe}.thread')) as handle:
+            return handle.read().strip()
+    except OSError:
+        return ''
+
+
 def render(payload: dict[str, Any]) -> str:
     """Build the status line from one status-line payload.
 
@@ -121,20 +158,23 @@ def render(payload: dict[str, Any]) -> str:
     label = str(model.get('display_name') or model.get('id') or '')
     workspace = payload.get('workspace') or {}
     cwd = str(workspace.get('current_dir') or payload.get('cwd') or '')
-    plain = f'{DIM}{os.path.basename(cwd) or cwd}  {label}{RESET}'
+    session = str(payload.get('session_id') or '')
+    where = os.path.basename(cwd) or cwd
+    thread = session_thread(session)
+    if thread:
+        where = f'{where}:{thread}'
+    plain = f'{DIM}{where}  {label}{RESET}'
     if context <= 0:
         return plain
 
     tier = budget.model_tier(str(model.get('id') or ''))
     if tier is None:
         return plain
-    per_call, target, handoff_at = session_state(
-        str(payload.get('session_id') or ''), tier)
+    per_call, target, handoff_at = session_state(session, tier)
     per_turn = per_call * budget.CALLS_PER_TURN
 
     cost = budget.cost_per_turn(context, tier)
     size = f'{context // 1000}K/{target // 1000}K'
-    where = os.path.basename(cwd) or cwd
     tail = f'{DIM}${cost:.2f}/t  {tier} {where}{RESET}'
 
     if context >= target:
