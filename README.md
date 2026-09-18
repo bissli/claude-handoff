@@ -451,13 +451,16 @@ from a git clone instead? Point the command at
 `/path/to/clone/scripts/statusline.py`. The status line reads the growth rate
 and target from a file the hook writes each turn, so the two never
 disagree; without the hook it falls back to a default rate and still
-works. Once the session enters a handoff thread - `hq adopt`, `hq
-begin`, or `hq open`, each counted only when it succeeds - the line
-names that thread's slug after the directory, `myproject:auth-token`.
-It holds until the session enters another thread or `hq done` finishes
-that one. The slug is keyed by session id, so two sessions in one
-checkout each show their own thread, and it sits last on the line
-because it is the field a narrow pane can most afford to cut.
+works. The directory it names is the one Claude Code started in, so a
+`cd` deeper in the tree - into the handoff folder itself, say - leaves
+the field alone. Once the session enters a handoff thread - `hq
+adopt`, `hq begin`, or `hq open`, each counted only when it succeeds -
+the line names that thread's slug after the directory,
+`myproject:auth-token`. It holds until the session enters another
+thread or `hq done` finishes that one. The slug is keyed by session
+id, so two sessions in one checkout each show their own thread, and it
+sits last on the line because it is the field a narrow pane can most
+afford to cut.
 
 ## Update
 
