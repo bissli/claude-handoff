@@ -63,8 +63,10 @@ _TERMINAL_PRINTS = {
 # first 5,000 tokens, about four characters a token. The whole write
 # cycle has to sit inside that.
 _REATTACH_BUDGET_CHARS = 20_000
-# The room the read path and the query verbs take past the budget.
-_SKILL_CEILING_CHARS = 25_000
+# The room the read path and the query verbs take past the budget. The
+# re-attach budget above is the platform's; this one is the file's own
+# discipline, and every character of it is re-read on every load.
+_SKILL_CEILING_CHARS = 26_000
 # A printed line that carries its own move: ' - ' or '; ' and then the
 # move, at least six characters of it.
 _TAIL = re.compile(r'(?: - |; )\S.{5,}')

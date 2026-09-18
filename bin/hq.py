@@ -94,6 +94,7 @@ _SNAPSHOT_PATS = ['*.pre-*', '*.prev.*', '*.orig.*', '*.bak']
 _SPEC_PATS = ['SPEC*', 'DESIGN*', 'PROPOSAL*', '*-DECLARATION*']
 _DRAFT_EXTS = {'.py', '.sql', '.js', '.ts', '.ps1'}
 _WORK_PIN_NAME = 'work-dir'
+_DONE_NAME = '.hq.done'
 _TEMP_DIRS = (
     pathlib.Path(os.path.abspath(tempfile.gettempdir())), pathlib.Path('/tmp'))
 _KIND_DIRS = {'specs': 'spec', 'drafts': 'draft', 'notes': 'notes', 'outputs': 'other'}
@@ -2273,14 +2274,13 @@ def _walk_folder(folder: pathlib.Path) -> list[tuple[str, str]]:
     return results
 
 
-def _read_lock(folder: pathlib.Path) -> dict[str, str]:
-    """Read .hq.lock as a key=value dict; return {} when absent or unreadable.
+def _read_kv(path: pathlib.Path) -> dict[str, str]:
+    """Read a key=value file as a dict; return {} when absent or unreadable.
     """
-    lock_path = folder / '.hq.lock'
-    if not lock_path.exists():
+    if not path.exists():
         return {}
     try:
-        text = lock_path.read_text(encoding='utf-8')
+        text = path.read_text(encoding='utf-8')
     except OSError:
         return {}
     result: dict[str, str] = {}
@@ -2289,6 +2289,44 @@ def _read_lock(folder: pathlib.Path) -> dict[str, str]:
             k, _, v = line.partition('=')
             result[k.strip()] = v.strip()
     return result
+
+
+def _read_lock(folder: pathlib.Path) -> dict[str, str]:
+    """Read .hq.lock as a key=value dict; return {} when absent or unreadable.
+    """
+    return _read_kv(folder / '.hq.lock')
+
+
+def _done_refusal(folder: pathlib.Path, verb: str) -> str:
+    """Return the line refusing a folder marked done, '' when it is not.
+
+    Parameters
+    ----------
+    folder : pathlib.Path
+        Handoff folder to test for the ``.hq.done`` marker.
+    verb : str
+        The verb naming itself in the line, ``begin`` or ``adopt``.
+
+    Returns
+    -------
+    str
+        The refusal, or '' where the folder carries no marker.
+
+    Notes
+    -----
+    - The marker's existence is the whole test, and every reader of it
+      uses this one. A marker a hand edit left empty, unparseable, or a
+      directory still refuses; the fields it cannot read print as ``-``.
+      Reading the fields instead would hide a folder from ``list`` while
+      ``begin`` opened a cycle on it.
+    """
+    if not (folder / _DONE_NAME).exists():
+        return ''
+    done = _read_kv(folder / _DONE_NAME)
+    return (
+        f'hq {verb}: {folder.name} is marked done'
+        f' (c{done.get("cycle", "-")}, {done.get("time", "-")})'
+        f' - run hq done {folder.name} --undo to reopen it')
 
 
 def _norm_heading(text: str) -> str:
@@ -3035,14 +3073,21 @@ def _verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
     Returns
     -------
     int
-        0 on success; 1 when HANDOFF.md is absent, non-conforming, or
-        ledger.tsv already exists.
+        0 on success; 1 when HANDOFF.md is absent, non-conforming,
+        ledger.tsv already exists, or the thread is marked done.
 
     Notes
     -----
     - Writes ledger.tsv, standing.md, cycles/manifest.tsv, cycles/c<n>.md,
       and rewrites HANDOFF.md; a failed header check writes nothing.
+    - A marked folder is refused here as well as at ``begin``. Adoption
+      opens a ledger and a cycle on a folder that has none, which is
+      reopening the thread by another road.
     """
+    refusal = _done_refusal(folder, 'adopt')
+    if refusal:
+        print(refusal)
+        return 1
     handoff_path = folder / 'HANDOFF.md'
     if handoff_path.is_dir():
         print('hq: HANDOFF.md is a directory - move the directory aside and re-run')
@@ -4106,8 +4151,13 @@ def _verb_begin(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
     Returns
     -------
     int
-        0 once the lock is held; 1 when a young foreign lock blocks it.
+        0 once the lock is held; 1 when a young foreign lock blocks it,
+        or the thread is marked done.
     """
+    refusal = _done_refusal(folder, 'begin')
+    if refusal:
+        print(refusal)
+        return 1
     if (folder / 'HANDOFF.md').is_dir():
         print('hq: HANDOFF.md is a directory - move the directory aside and re-run')
         return 1
@@ -5162,6 +5212,100 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
     return 0
 
 
+def _verb_done(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int:
+    """Mark the thread finished, or reopen it, by the ``.hq.done`` marker.
+
+    Parameters
+    ----------
+    folder : pathlib.Path
+        Handoff folder; the marker is ``folder/.hq.done``.
+    anch : dict
+        Anchors dict from ``anchors()``; supplies the timestamp.
+    argv : argparse.Namespace
+        Parsed ``done`` arguments: ``reason`` records why, ``undo``
+        removes the marker, ``force`` marks a folder whose cycle is open.
+
+    Returns
+    -------
+    int
+        0 once the marker is written, removed, or already as asked; 1
+        when a cycle is open and ``--force`` is absent, or a directory
+        stands under the marker's name, with nothing written; 2 when
+        ``--undo`` is paired with ``--reason`` or ``--force``.
+
+    Notes
+    -----
+    - The marker's existence is the whole test, here as in ``list``,
+      ``begin``, and ``adopt``, so a marker a hand edit left empty or
+      unparseable still counts as marked and ``--undo`` clears it.
+    - The marker is a dot file, so the folder walk skips it and no
+      ledger row, work list, or conservation count sees it.
+    - Marking is not idempotent in silence: a second ``done`` prints the
+      time the first recorded and leaves it, so the finish date survives
+      a repeat and a new ``--reason`` needs ``--undo`` first.
+    - Nothing else changes. Every read verb still answers on a marked
+      folder; only ``list`` hides it, and ``begin`` and ``adopt`` refuse
+      it.
+    """
+    marker = folder / _DONE_NAME
+    undo = getattr(argv, 'undo', False)
+    if undo and (getattr(argv, 'reason', None) or getattr(argv, 'force', False)):
+        print(
+            'hq done: --undo takes neither --reason nor --force'
+            ' - reopen with --undo alone, or mark without it')
+        return 2
+    marked = marker.exists()
+    state = _read_kv(marker)
+    if undo:
+        if marker.is_dir():
+            print(
+                f'hq done: {HANDOFF_DIRNAME}/{folder.name}/{_DONE_NAME} is a'
+                ' directory - remove it by hand; no verb can clear the mark'
+                ' while a directory stands under the name')
+            return 1
+        if not marked:
+            print(
+                f'hq done: {folder.name} was not marked done'
+                ' - nothing to reopen, and hq list already shows it')
+            return 0
+        marker.unlink()
+        print(
+            f'hq done: {folder.name} reopened'
+            f' - run hq begin {folder.name} to open the next cycle')
+        return 0
+    if marked:
+        print(
+            f'hq done: {folder.name} was already marked done at'
+            f' {state.get("time", "-")} in c{state.get("cycle", "-")}'
+            f' - run hq done {folder.name} --undo to reopen it')
+        return 0
+    if (folder / '.hq.lock').exists() and not getattr(argv, 'force', False):
+        print(
+            f'hq done: cycle {_read_lock(folder).get("cycle", "?")} is still'
+            f' open - run hq finish {folder.name} --log "<line>" first,'
+            ' or pass --force to mark it done with the cycle open')
+        return 1
+    manifest = _read_tsv(folder / 'cycles' / 'manifest.tsv', MANIFEST_FIELDS)
+    cycle = manifest[-1]['cycle'] if manifest else '-'
+    reason = ' '.join((getattr(argv, 'reason', None) or '').split()) or '-'
+    fields = {
+        'slug': folder.name,
+        'time': anch['now'],
+        'cycle': cycle,
+        'reason': reason,
+        }
+    marker.write_text(
+        '\n'.join(f'{k}={v}' for k, v in fields.items()) + '\n',
+        encoding='utf-8')
+    print(
+        f'hq done: {folder.name} marked done at c{cycle}'
+        ' - it drops out of hq list from here')
+    print(
+        f'run hq list --done to see it; run hq done {folder.name} --undo'
+        ' to reopen it')
+    return 0
+
+
 def _verb_open(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int:
     """Run open: print status, drift, W1/W2, sha-moved rows, and stale paths.
 
@@ -6038,6 +6182,7 @@ def _verb_list(root: pathlib.Path, argv: argparse.Namespace) -> int:
         Project root; the handoff folders sit under ``root / HANDOFF_DIRNAME``.
     argv : argparse.Namespace
         Parsed ``list`` arguments; ``count`` caps the lines, None for all;
+        ``--done`` lists the folders marked done instead of the open ones;
         ``--tsv`` prints a tab-separated table instead.
 
     Returns
@@ -6048,6 +6193,14 @@ def _verb_list(root: pathlib.Path, argv: argparse.Namespace) -> int:
 
     Notes
     -----
+    - A folder holding the ``.hq.done`` marker is left out, and the run
+      closes with a ``<N> marked done`` line naming ``--done``, which
+      lists those folders and leaves the open ones out. The count line is
+      text only, so a ``--tsv`` run stays one header plus rows.
+    - The marker's existence is the whole test, as at ``begin``, so a
+      marker no key=value reader can parse still hides its folder.
+    - ``count`` caps what is shown, so ``hq list 5`` is the five most
+      recent of whichever set the flag selects.
     - Order is each ``HANDOFF.md``'s modification time, newest first,
       the order ``ls -t`` gives; files changed in the same second list
       A to Z by slug.
@@ -6075,12 +6228,26 @@ def _verb_list(root: pathlib.Path, argv: argparse.Namespace) -> int:
             (path for path in handoffs.glob('*/HANDOFF.md') if path.is_file()),
             key=lambda path: path.parent.name)
         files.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    only_done = getattr(argv, 'done', False)
+    done_cnt = sum((path.parent / _DONE_NAME).exists() for path in files)
+    files = [
+        path for path in files
+        if (path.parent / _DONE_NAME).exists() == only_done]
     tsv = getattr(argv, 'tsv', False)
     if not files:
         if tsv:
             print('slug\twritten\tcycle\tprogress\ttask')
             return 0
-        print(f'hq list: no handoff under {handoffs}')
+        if only_done:
+            print(
+                f'hq list: no handoff under {handoffs} is marked done'
+                ' - run hq done <slug> to mark one')
+        elif done_cnt:
+            print(
+                f'hq list: every handoff under {handoffs} is marked done'
+                ' - run hq list --done to see them')
+        else:
+            print(f'hq list: no handoff under {handoffs}')
         return 0
     rows: list[tuple[str, str, str, str, str]] = []
     for path in files[:count]:
@@ -6142,6 +6309,8 @@ def _verb_list(root: pathlib.Path, argv: argparse.Namespace) -> int:
             f'{cycle.ljust(col_widths[2])}  '
             f'{progress.ljust(col_widths[3])}  '
             f'{task}')
+    if done_cnt and not only_done:
+        print(f'{done_cnt} marked done - run hq list --done to see them')
     return 0
 
 
@@ -6151,7 +6320,7 @@ def _verb_list(root: pathlib.Path, argv: argparse.Namespace) -> int:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    """Return the top-level argument parser for all fifteen verbs.
+    """Return the top-level argument parser for all sixteen verbs.
     """
     _top_epilog = (
         'Every verb but list and help takes the slug first. A slug resolves\n'
@@ -6302,6 +6471,30 @@ def _build_parser() -> argparse.ArgumentParser:
     fin.add_argument('--log', required=True)
     fin.add_argument('--acknowledge')
     fin.add_argument('--accept-not-carried')
+
+    _done_epilog = (
+        'The finish line of the whole thread, not of one cycle: finish ends\n'
+        'a cycle and the thread goes on, done ends the thread. hq list stops\n'
+        'showing the folder and hq begin refuses it; every read verb still\n'
+        'answers, and nothing is deleted. The mark is one file, .hq.done in\n'
+        'the folder, holding the slug, the time, the last finished cycle,\n'
+        'and the reason.\n'
+        '--reason "<line>" records why; whitespace in it collapses to single\n'
+        'spaces. --undo removes the mark and the thread runs on. --force\n'
+        'marks a folder whose cycle is still open, which finish would\n'
+        'otherwise have to close first.\n'
+        'A second done leaves the first mark and prints its date, so the\n'
+        'finish date survives a repeat; change the reason by --undo and a\n'
+        'fresh done. hq list --done lists the marked folders.'
+    )
+    dn = sub.add_parser(
+        'done',
+        epilog=_done_epilog,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    dn.add_argument('slug')
+    dn.add_argument('--reason')
+    dn.add_argument('--undo', action='store_true')
+    dn.add_argument('--force', action='store_true')
 
     _open_epilog = (
         '--not-carried lists every cursor line from the last finished\n'
@@ -6456,6 +6649,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "date and the cycle; an unreadable file shows '-  -  -  unreadable:\n"
         "<reason>'. Ties in the same second list A to Z by slug. A bare list\n"
         'shows every one; list 5 the five most recent.\n'
+        'A folder marked by hq done is left out, and a closing line counts\n'
+        'them: --done lists those folders instead, the open ones left out,\n'
+        'and prints no count line. A count caps whichever set is shown.\n'
         '--tsv prints one header line, slug written cycle progress task,\n'
         'then that row per folder instead, tab-separated, the cycle a bare\n'
         'number and no padding or rule line; with no handoff it prints the\n'
@@ -6466,6 +6662,7 @@ def _build_parser() -> argparse.ArgumentParser:
         epilog=_list_epilog,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     lst.add_argument('count', nargs='?', type=int)
+    lst.add_argument('--done', action='store_true')
     lst.add_argument('--tsv', action='store_true')
 
     _work_dir_epilog = (
@@ -6575,6 +6772,7 @@ def main(argv: list[str]) -> int:
             'note': _verb_note,
             'supersede': _verb_supersede,
             'finish': _verb_finish,
+            'done': _verb_done,
             'open': _verb_open,
             'read': _verb_read,
             'when': _verb_when,

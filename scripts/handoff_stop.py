@@ -84,6 +84,9 @@ def report(payload: dict[str, Any]) -> int:
             continue
         if (folder / '.hq.lock').exists():
             continue
+        # A thread hq done has closed is no longer anyone's to file.
+        if (folder / hq._DONE_NAME).exists():
+            continue
         rows = hq._read_tsv(manifest, hq.MANIFEST_FIELDS)
         if not rows:
             continue

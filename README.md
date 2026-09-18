@@ -174,6 +174,7 @@ Using it:
 /handoff auth-token-refresh    reads that handoff back, resumes its plan
 /handoff list                  every handoff here, with plan progress
 /handoff check auth-token-refresh    re-reviews one in place
+/handoff done auth-token-refresh     marks the thread finished
 ```
 
 (`auth-token-refresh` stands for whatever folder name the writing
@@ -210,6 +211,11 @@ session chose.)
   because what is no longer live is counted, not printed, and what is
   read at resume is a spec's anchored span, its size beside it, never
   a whole file.
+- A thread ends with `/handoff done <task-name>`. The folder survives
+  whole and every query verb still answers it, but `/handoff list`
+  stops showing it and the next `hq begin` refuses it. `hq list --done`
+  names the finished threads, and `hq done <task-name> --undo` reopens
+  one. A task leaves the list without its folder being deleted.
 - Each write ends with a reviewer pass that must reconstruct the task
   from the file alone. Reading starts with `hq open`, which reports
   drift - a moved commit, a gated file edited since its stamp, a
