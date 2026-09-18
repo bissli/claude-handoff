@@ -175,11 +175,17 @@ Using it:
 /handoff list                  every handoff here, with plan progress
 /handoff check auth-token-refresh    re-reviews one in place
 /handoff done auth-token-refresh     marks the thread finished
+/handoff --no-check            writes without the reviewer pass
 ```
 
 (`auth-token-refresh` stands for whatever folder name the writing
 session chose.)
 
+- A write cycle ends with a reviewer pass: a fresh agent reads the
+  finished file cold and reports what a resuming session could not act
+  on. `--no-check` skips the pass, and only the person invoking the
+  command may pass that flag. A writing session never rules its own
+  cycle too small to review.
 - There is no verb to type. A session that edited a file or settled a
   decision holds something worth telling a fresh session, so `/handoff`
   writes; one that only looked something up reads a handoff back
@@ -305,6 +311,32 @@ the target, so a heavy session cannot march the loudest warning out to
 $5 a turn. Sonnet and Haiku are deliberately absent: a long session on
 either costs little enough that interrupting it would cost more
 attention than it saves.
+
+## Pushing the agent to hand off (optional)
+
+The warnings above reach the terminal, not the agent: a Stop hook
+writes its message for whoever reads the screen, so a session runs past
+its handoff point while the agent driving it never learns.
+
+Creating `~/.claude/.enforce-handoff` changes that. While the file
+exists, a `UserPromptSubmit` hook names the context and the handoff
+point to the agent at the top of each turn, and asks for a handoff at
+the next natural stopping point rather than at once. That is the one
+moment an instruction redirects a turn without interrupting work
+already under way.
+
+```
+touch ~/.claude/.enforce-handoff   # arm
+rm ~/.claude/.enforce-handoff      # disarm
+```
+
+Presence alone is the switch and it takes effect at the next prompt, so
+nothing sticks armed. The hook ignores the contents, which leaves room
+for a line recording what the file is for. The nudge keeps no state of
+its own. It measures the context from the transcript rather than
+trusting the figure the Stop hook stored, because `/clear` and
+`/compact` leave that figure behind them, and it stays silent below the
+handoff point and inside an open cycle.
 
 ## The math
 
