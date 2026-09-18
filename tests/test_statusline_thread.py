@@ -151,3 +151,76 @@ def test_a_write_that_dies_midway_leaves_the_last_whole_slug(
     monkeypatch.undo()
     assert record.read_text().strip() == 'auth-token-refresh'
     assert not list(tmp_path.glob(f'{_SESSION}.thread.*'))
+
+
+def test_done_takes_the_session_off_the_thread_it_finished(
+        tmp_path, monkeypatch):
+    """Verify a finished thread stops being named on the status line.
+
+    Mutation: leaving the record in place after done, or clearing it
+    on finish instead. The line then names a thread nobody is working,
+    or drops the slug at the end of every cycle.
+    Oracle: hand-computed - open auth-token-refresh, then done on it;
+    the read path must be gone, and the line back to the bare
+    directory.
+    """
+    _root(tmp_path, monkeypatch, 'auth-token-refresh')
+    assert hq.main(['open', 'auth-token-refresh']) == 0
+    assert hq.main(['done', 'auth-token-refresh']) == 0
+    assert not (tmp_path / f'{_SESSION}.thread').exists()
+    line = _visible(_SESSION, '/x/myproject', tmp_path, monkeypatch)
+    assert line.endswith('opus myproject')
+
+
+def test_done_on_a_neighbor_leaves_the_session_where_it_is(
+        tmp_path, monkeypatch):
+    """Verify clearing tests the recorded slug, not merely the verb.
+
+    Mutation: unlinking the record whatever thread done names. A
+    session filing a stale neighbor then loses the slug for the thread
+    it is actually working.
+    Oracle: hand-computed - open auth-token-refresh, then done on
+    rate-limits; the record must still name auth-token-refresh.
+    """
+    folder = _root(tmp_path, monkeypatch, 'auth-token-refresh')
+    (folder.parent / 'rate-limits').mkdir(parents=True, exist_ok=True)
+    assert hq.main(['open', 'auth-token-refresh']) == 0
+    assert hq.main(['done', 'rate-limits']) == 0
+    record = tmp_path / f'{_SESSION}.thread'
+    assert record.read_text().strip() == 'auth-token-refresh'
+
+
+def test_undo_reopens_without_dropping_the_slug(tmp_path, monkeypatch):
+    """Verify --undo is not read as the marking it reverses.
+
+    Mutation: clearing on every done, --undo included. Reopening a
+    thread would then take the session off the thread it just put
+    back in play.
+    Oracle: hand-computed - done then done --undo, both on the open
+    thread; the record must survive both.
+    """
+    _root(tmp_path, monkeypatch, 'auth-token-refresh')
+    assert hq.main(['open', 'auth-token-refresh']) == 0
+    assert hq.main(['done', 'auth-token-refresh']) == 0
+    assert hq.main(['open', 'auth-token-refresh']) == 0
+    assert hq.main(['done', 'auth-token-refresh', '--undo']) == 0
+    record = tmp_path / f'{_SESSION}.thread'
+    assert record.read_text().strip() == 'auth-token-refresh'
+
+
+def test_a_refused_begin_puts_the_session_on_no_thread(
+        tmp_path, monkeypatch):
+    """Verify entering is recorded on the exit code, not on the attempt.
+
+    Mutation: recording before dispatch. A begin refused for a lock
+    another live session holds would then relabel this session with a
+    thread it never entered.
+    Oracle: hand-computed - a lock held by another session minutes
+    old; begin exits 1 and must leave no record.
+    """
+    folder = _root(tmp_path, monkeypatch, 'auth-token-refresh')
+    (folder / '.hq.lock').write_text(
+        f'slug={folder.name}\nsession=other-session\nhost=other-host\n'
+        'time=2026-09-09T11:30:00\ncycle=1\n')
+    assert hq.main(['begin', 'auth-token-refresh']) == 1
+    assert not (tmp_path / f'{_SESSION}.thread').exists()

@@ -77,9 +77,10 @@ HANDOFF_DIRNAME = '.handoff'
 # reads the thread file from it, so hq and the hooks must agree on the
 # directory and on the HQ_STATE_DIR that moves it.
 STATE_DIR = os.path.expanduser('~/.claude/cache/claude-handoff')
-# The verbs that put a session on a thread. A query against another
-# thread - when, diff, artifacts, standing, read - leaves the session
-# where it was.
+# The verbs that put a session on a thread, each recorded only once it
+# exits 0: a refused begin entered nothing. done clears the record
+# instead, and a query against another thread - when, diff, artifacts,
+# standing, read - leaves the session where it was.
 _THREAD_VERBS = ('adopt', 'begin', 'open')
 # Presence arms the nudge hook. The contents are free, so the file
 # carries a line naming what it does.
@@ -6776,8 +6777,37 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _thread_record(session: str) -> pathlib.Path:
+    """Path of the file naming the thread a session is on.
+
+    Parameters
+    ----------
+    session : str
+        Session id, as ``anchors`` resolved it.
+
+    Returns
+    -------
+    pathlib.Path
+        ``<slug>.thread`` under HQ_STATE_DIR, beside the state the
+        hooks keep. The file need not exist.
+
+    Notes
+    -----
+    - The file holds the slug and nothing else. The status line
+      repaints continuously, so it reads one short line rather than
+      parsing the document two hooks already read and rewrite whole.
+    - One file per session id, and the id is the one the ledger
+      records. Concurrent sessions on different threads never write
+      the same path, and the line agrees with the ledger on whose
+      cycle this is.
+    """
+    safe = session.replace('/', '_')
+    state_dir = pathlib.Path(os.environ.get('HQ_STATE_DIR', STATE_DIR))
+    return state_dir / f'{safe}.thread'
+
+
 def _record_thread(session: str, slug: str) -> None:
-    """Record the handoff thread a session is on, for the status line.
+    """Put a session on a thread, for the status line to name.
 
     Parameters
     ----------
@@ -6792,21 +6822,11 @@ def _record_thread(session: str, slug: str) -> None:
 
     Notes
     -----
-    - The file holds the slug and nothing else, under HQ_STATE_DIR
-      beside the state the hooks keep. The status line repaints
-      continuously, so it reads one short line rather than parsing the
-      document two hooks already read and rewrite whole.
-    - One file per session id, and the id is the one the ledger
-      records. Concurrent sessions on different threads never write
-      the same path, and the line agrees with the ledger on whose
-      cycle this is.
     - A cache that cannot be written costs the status line its slug
       and nothing else, so nothing here raises into a verb that has
       already done its work.
     """
-    safe = session.replace('/', '_')
-    state_dir = pathlib.Path(os.environ.get('HQ_STATE_DIR', STATE_DIR))
-    final = state_dir / f'{safe}.thread'
+    final = _thread_record(session)
     # Notes:
     # - The rename is what makes the write safe to read. A status line
     #   repainting during a plain write reads a truncated slug, which
@@ -6815,9 +6835,9 @@ def _record_thread(session: str, slug: str) -> None:
     # - The staging name carries the pid, so a subagent writing
     #   beside its parent cannot land in the other's half-written
     #   file before either rename runs.
-    staged = state_dir / f'{safe}.thread.{os.getpid()}'
+    staged = final.with_name(f'{final.name}.{os.getpid()}')
     try:
-        state_dir.mkdir(parents=True, exist_ok=True)
+        final.parent.mkdir(parents=True, exist_ok=True)
         staged.write_text(f'{slug}\n', encoding='utf-8')
         os.replace(staged, final)
     except OSError:
@@ -6825,6 +6845,34 @@ def _record_thread(session: str, slug: str) -> None:
             staged.unlink()
         except OSError:
             pass
+
+
+def _clear_thread(session: str, slug: str) -> None:
+    """Take a session off a thread whose work is finished.
+
+    Parameters
+    ----------
+    session : str
+        Session id, as ``anchors`` resolved it.
+    slug : str
+        Folder name the verb was aimed at.
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    - Only a record naming this very thread is removed. Finishing one
+      thread from a session working another says nothing about the
+      one it is working.
+    """
+    final = _thread_record(session)
+    try:
+        if final.read_text(encoding='utf-8').strip() == slug:
+            final.unlink()
+    except OSError:
+        pass
 
 
 def main(argv: list[str]) -> int:
@@ -6901,8 +6949,6 @@ def main(argv: list[str]) -> int:
         if verb == 'work-dir':
             return _verb_work_dir(folder, args)
         anch = anchors(folder, args)
-        if verb in _THREAD_VERBS:
-            _record_thread(str(anch['session']), folder.name)
         dispatch = {
             'adopt': _verb_adopt,
             'begin': _verb_begin,
@@ -6918,7 +6964,13 @@ def main(argv: list[str]) -> int:
             'artifacts': _verb_artifacts,
             'standing': _verb_standing,
             }
-        return dispatch[verb](folder, anch, args)
+        result = dispatch[verb](folder, anch, args)
+        if result == 0:
+            if verb in _THREAD_VERBS:
+                _record_thread(str(anch['session']), folder.name)
+            elif verb == 'done' and not getattr(args, 'undo', False):
+                _clear_thread(str(anch['session']), folder.name)
+        return result
     except OSError as exc:
         path = exc.filename or '?'
         reason = exc.strerror or type(exc).__name__

@@ -122,14 +122,15 @@ def session_thread(session: str) -> str:
     Returns
     -------
     str
-        The slug ``hq`` recorded when this session last ran adopt,
-        begin, or open, or '' when it has run none of them.
+        The slug ``hq`` recorded when this session last entered a
+        thread, or '' when it is on none.
 
     Notes
     -----
-    - The record is sticky for the session. A thread entered once is
-      the thread the session is on until it enters another, which is
-      what a reader glancing at the line wants to know.
+    - The record is sticky across the turns between. A thread entered
+      once holds the line until the session enters another or ``hq
+      done`` finishes that one, which is what a reader glancing at
+      the line wants to know.
     """
     safe = session.replace('/', '_')
     try:
