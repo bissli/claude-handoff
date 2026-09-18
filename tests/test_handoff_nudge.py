@@ -8,10 +8,12 @@ envelope that carries it.
 import contextlib
 import io
 import json
+import os
 import pathlib
 import subprocess
 import sys
 
+from bin import hq
 from scripts import context_budget, handoff_nudge
 
 _SESSION = 'session-nudge'
@@ -44,7 +46,7 @@ def _arm(tmp_path, monkeypatch, context, handoff_at, sentinel=True):
     """
     tmp_path = pathlib.Path(tmp_path)
     tmp_path.mkdir(parents=True, exist_ok=True)
-    sentinel_path = tmp_path / '.enforce-handoff'
+    sentinel_path = tmp_path / '.nudge-handoff'
     if sentinel:
         sentinel_path.write_text('armed\n')
     monkeypatch.setattr(handoff_nudge, 'SENTINEL', str(sentinel_path))
@@ -72,6 +74,18 @@ def _arm(tmp_path, monkeypatch, context, handoff_at, sentinel=True):
     work = tmp_path / 'work'
     work.mkdir()
     return work
+
+
+def _hq(argv):
+    """Drive hq in process and return its exit code, stdout, and stderr.
+    """
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        try:
+            rc = hq.main(argv)
+        except SystemExit as exc:
+            rc = exc.code
+    return rc, out.getvalue(), err.getvalue()
 
 
 def _run():
@@ -287,3 +301,79 @@ def test_nudge_stays_silent_until_a_handoff_point_is_recorded(
     pathlib.Path(context_budget.STATE_DIR, f'{_SESSION}.json').unlink()
     _feed(monkeypatch, work)
     assert _run() == (0, ''), 'an unmeasured session has no point either'
+
+
+def test_nudge_verb_arms_disarms_and_reports_which(tmp_path, monkeypatch):
+    """Verify hq nudge writes, removes, and reports the sentinel.
+
+    Mutation: off unlinking nothing, on truncating a file it should
+    leave alone, the report inverted, a repeat exiting non-zero, or the
+    explaining body dropped so the file cannot say what it is for.
+    Oracle: the file on disk after each call, read independently of the
+    line the verb prints.
+    """
+    sentinel = tmp_path / '.nudge-handoff'
+    monkeypatch.setattr(hq, 'SENTINEL', str(sentinel))
+
+    rc, out, _ = _hq(['nudge'])
+    assert (rc, sentinel.exists()) == (0, False)
+    assert 'nudge is off' in out
+
+    assert _hq(['nudge', 'on'])[0] == 0
+    body = sentinel.read_text()
+    assert 'hq nudge off' in body, 'the file must say how to disarm it'
+    assert 'nudge is on' in _hq(['nudge'])[1]
+
+    rc, out, _ = _hq(['nudge', 'on'])
+    assert (rc, 'already on' in out) == (0, True)
+    assert sentinel.read_text() == body, 'a repeat must not rewrite it'
+
+    assert _hq(['nudge', 'off'])[0] == 0
+    assert not sentinel.exists()
+    rc, out, _ = _hq(['nudge', 'off'])
+    assert (rc, 'already off' in out) == (0, True)
+
+
+def test_nudge_verb_and_hook_agree_on_the_sentinel_path(tmp_path):
+    """Verify the verb arms the very file the hook reads.
+
+    Mutation: either half holding its own copy of the path, which every
+    test that drives one side alone passes while the shipped feature
+    cannot be turned on at all.
+    Oracle: the verb and the hook run as separate processes under one
+    redirected HOME, so only a shared path makes the hook fire.
+    """
+    home = tmp_path / 'home'
+    (home / '.claude' / 'cache' / 'claude-handoff').mkdir(parents=True)
+    (home / '.claude' / 'cache' / 'claude-handoff' / 'sid.json').write_text(
+        json.dumps({'handoff': 290000, 'context': 1}))
+    transcript = tmp_path / 'tr.jsonl'
+    transcript.write_text(json.dumps({
+        'message': {'id': 'm1', 'role': 'assistant', 'model': 'claude-opus-5',
+                    'usage': {'cache_read_input_tokens': 300000,
+                              'cache_creation_input_tokens': 0,
+                              'input_tokens': 0, 'output_tokens': 0}},
+        }) + '\n')
+    payload = json.dumps({'session_id': 'sid', 'cwd': str(tmp_path),
+                          'transcript_path': str(transcript)})
+
+    def hook():
+        done = subprocess.run(
+            [sys.executable, str(_REPO / 'scripts' / 'handoff_nudge.py')],
+            input=payload, capture_output=True, text=True,
+            env={**os.environ, 'HOME': str(home)}, timeout=60)
+        assert done.returncode == 0, done.stderr
+        return done.stdout
+
+    def verb(*args):
+        done = subprocess.run(
+            [str(_REPO / 'bin' / 'hq'), 'nudge', *args],
+            capture_output=True, text=True,
+            env={**os.environ, 'HOME': str(home)}, timeout=60)
+        assert done.returncode == 0, done.stderr
+
+    assert hook() == '', 'disarmed by default'
+    verb('on')
+    assert 'additionalContext' in hook(), 'hq nudge on must arm the hook'
+    verb('off')
+    assert hook() == '', 'hq nudge off must disarm the hook'

@@ -7,7 +7,7 @@ reaches the terminal and never the model. So an agent works on past the
 point it should have handed off, and only the user knows.
 
 This hook puts the same fact in front of the agent, at the top of a
-turn, while the sentinel ``~/.claude/.enforce-handoff`` exists.
+turn, while the sentinel ``~/.claude/.nudge-handoff`` exists.
 
 Notes
 -----
@@ -21,8 +21,8 @@ Notes
   handoff written at 290K leaves a session at 295K and climbing, where
   asking again is right and ``hq begin`` opens the next cycle.
 - The hook reads the sentinel by presence alone and never writes it, so
-  arming and disarming are ``touch`` and ``rm`` and take effect at the
-  next prompt. Nothing can stick armed.
+  ``hq nudge on`` and ``hq nudge off`` take effect at the next prompt.
+  Nothing can stick armed.
 - The hook measures context from the transcript rather than reading the
   context the budget hook stored. ``/clear`` and ``/compact`` both keep
   the session id and leave that stored figure behind them, so a
@@ -58,7 +58,9 @@ except ImportError:
     import context_budget
     import hq
 
-SENTINEL = os.path.expanduser('~/.claude/.enforce-handoff')
+# hq owns the path so the verb that writes it and the hook that reads
+# it cannot disagree.
+SENTINEL = hq.SENTINEL
 
 
 def open_cycle_above(start: pathlib.Path, now: str) -> bool:

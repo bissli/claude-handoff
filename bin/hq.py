@@ -73,6 +73,14 @@ STORE_VERBS = {
     'cycles': 'hq diff {slug} <c1> <c2>',
     }
 HANDOFF_DIRNAME = '.handoff'
+# Presence arms the nudge hook. The contents are free, so the file
+# carries a line naming what it does.
+SENTINEL = os.path.expanduser('~/.claude/.nudge-handoff')
+_SENTINEL_BODY = (
+    '# claude-handoff: while this file exists, the nudge asks the'
+    ' agent\n# to hand off once the session passes its handoff'
+    ' point.\n# Remove it with: hq nudge off\n'
+    )
 # The directories earlier plugin versions kept the folder under; a
 # path written under one of them names where a folder used to be.
 _FORMER_HANDOFF_DIRNAMES = ('working', 'scratch')
@@ -4784,6 +4792,49 @@ def _verb_note(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
         getattr(argv, 'body', '') or '')
 
 
+def _verb_nudge(state: str | None) -> int:
+    """Run nudge: report, arm, or disarm the handoff nudge.
+
+    Parameters
+    ----------
+    state : str | None
+        ``'on'`` to arm, ``'off'`` to disarm, ``None`` to report only.
+
+    Returns
+    -------
+    int
+        0 in every case. Arming an armed sentinel and disarming a
+        disarmed one are both reported rather than refused, since
+        presence alone decides and neither is a mistake worth an exit
+        code.
+
+    Notes
+    -----
+    - The file is machine-wide rather than per handoff, so this verb
+      takes no slug and reads no root.
+    """
+    armed = os.path.exists(SENTINEL)
+    if state is None:
+        where = SENTINEL
+        print(f'nudge is {"on" if armed else "off"}: {where}')
+        return 0
+    if state == 'on':
+        if armed:
+            print(f'nudge was already on: {SENTINEL}')
+            return 0
+        path = pathlib.Path(SENTINEL)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(_SENTINEL_BODY, encoding='utf-8')
+        print(f'nudge on: {SENTINEL}')
+        return 0
+    if not armed:
+        print(f'nudge was already off: {SENTINEL}')
+        return 0
+    pathlib.Path(SENTINEL).unlink()
+    print(f'nudge off: {SENTINEL}')
+    return 0
+
+
 def _verb_supersede(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int:
     """Run supersede: append a supersession line to standing.md.
 
@@ -6693,6 +6744,24 @@ def _build_parser() -> argparse.ArgumentParser:
     wd.add_argument('dir', nargs='?')
     wd.add_argument('--clear', action='store_true')
 
+    _nudge_epilog = (
+        'With no argument it prints nudge is on or nudge is off and the\n'
+        'path. on writes ~/.claude/.nudge-handoff and prints nudge on: and\n'
+        'that path; off removes the file and prints nudge off: and the\n'
+        'path. Arming an armed sentinel prints nudge was already on: and\n'
+        'disarming a disarmed one prints nudge was already off:, both\n'
+        'exiting 0, since presence alone decides and neither is a mistake.\n'
+        'While the file exists the UserPromptSubmit hook asks the agent to\n'
+        'hand off at its next stopping point once the session passes its\n'
+        'handoff point. The file is machine-wide, so this verb takes no\n'
+        'slug, and its contents are free: the line the verb writes says\n'
+        'what the file is for.')
+    nud = sub.add_parser(
+        'nudge',
+        epilog=_nudge_epilog,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    nud.add_argument('state', nargs='?', choices=('on', 'off'))
+
     hlp = sub.add_parser('help')
     hlp.add_argument('topic', nargs='?')
 
@@ -6762,6 +6831,8 @@ def main(argv: list[str]) -> int:
                 return 2
             print(HELP_TOPICS[topic])
             return 0
+        if verb == 'nudge':
+            return _verb_nudge(getattr(args, 'state', None))
         root = _resolve_root(args)
         if verb == 'list':
             return _verb_list(root, args)

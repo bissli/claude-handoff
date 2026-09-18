@@ -318,7 +318,7 @@ The warnings above reach the terminal, not the agent: a Stop hook
 writes its message for whoever reads the screen, so a session runs past
 its handoff point while the agent driving it never learns.
 
-Creating `~/.claude/.enforce-handoff` changes that. While the file
+Creating `~/.claude/.nudge-handoff` changes that. While the file
 exists, a `UserPromptSubmit` hook names the context and the handoff
 point to the agent at the top of each turn, and asks for a handoff at
 the next natural stopping point rather than at once. That is the one
@@ -326,8 +326,9 @@ moment an instruction redirects a turn without interrupting work
 already under way.
 
 ```
-touch ~/.claude/.enforce-handoff   # arm
-rm ~/.claude/.enforce-handoff      # disarm
+hq nudge on    # arm
+hq nudge off   # disarm
+hq nudge       # report which it is
 ```
 
 Presence alone is the switch and it takes effect at the next prompt, so
