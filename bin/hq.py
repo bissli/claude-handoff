@@ -1058,8 +1058,10 @@ def render_artifacts(
     if non_live:
         ordered = [k for k in _NON_LIVE_ORDER if k in non_live]
         ordered += sorted(k for k in non_live if k not in ordered)
-        parts = '  '.join(f'{k} {non_live[k]}' for k in ordered)
-        out.append(f'{parts}  - hq when {slug} <path>')
+        for status in ordered:
+            out.append(
+                f'{status} {non_live[status]}'
+                f'  - hq artifacts {slug} --status {status}')
     return '\n'.join(out)
 
 
@@ -1220,7 +1222,7 @@ def render_standing(
         Block body: every live constraint as its headline and the first
         sentence of its body, every live decision and dead end as a
         headline alone, each kind under its heading, then
-        ``superseded N  - hq standing <slug>`` when any item was
+        ``superseded N  - hq standing <slug> --all`` when any item was
         superseded.
 
     Notes
@@ -1257,7 +1259,7 @@ def render_standing(
                     line, len(held), f'hq standing {slug} {item["id"]}')
             out.append(line.rstrip())
     if sup_count:
-        out.append(f'superseded {sup_count}  - hq standing {slug}')
+        out.append(f'superseded {sup_count}  - hq standing {slug} --all')
     return '\n'.join(out)
 
 

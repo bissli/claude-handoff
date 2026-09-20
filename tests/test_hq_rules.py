@@ -918,9 +918,9 @@ def test_artifacts_render_trusts_row_status_for_abs_rows():
 def test_non_live_count_line_has_a_fixed_order():
     """Verify the non-live count line reads superseded, archived, missing.
 
-    Mutation: counts joined in ledger insertion order.
-    Oracle: hand-computed line for rows inserted archived, missing,
-    superseded.
+    Mutation: counts emitted in ledger insertion order.
+    Oracle: hand-computed order for rows inserted archived, missing,
+    superseded; each count owns a line, so the order reads across them.
     """
     rows = {
         'a.md': _ledger_row(path='a.md', status='archived'),
@@ -928,7 +928,10 @@ def test_non_live_count_line_has_a_fixed_order():
         'c.md': _ledger_row(path='c.md', status='superseded'),
     }
     result = hq.render_artifacts([], rows, 'slug')
-    assert 'superseded 1  archived 1  missing 1  - hq when slug <path>' in result
+    counted = [
+        ln.split()[0] for ln in result.splitlines()
+        if ln.startswith(('superseded', 'archived', 'missing'))]
+    assert counted == ['superseded', 'archived', 'missing']
 
 
 def test_standing_renders_every_live_constraint_and_keeps_the_superseded_line():
@@ -946,7 +949,7 @@ def test_standing_renders_every_live_constraint_and_keeps_the_superseded_line():
     ]
     result = hq.render_standing(items, {'c86'}, 'slug').splitlines()
     assert len(result) == 87
-    assert result[-1] == 'superseded 1  - hq standing slug'
+    assert result[-1] == 'superseded 1  - hq standing slug --all'
     assert result[-2] == '[c85] (c1) **rule 85** body'
     assert '[c86]' not in '\n'.join(result)
 

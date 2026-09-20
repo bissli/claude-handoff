@@ -295,3 +295,80 @@ def test_finish_prints_the_payload_delta_against_the_last_cycle(
     # The first row of the manifest is cycle 1, so a guard that read it
     # rather than the last would print this larger figure instead.
     assert delta != f'{tokens(second) - tokens(first):+d} tok since c2'
+
+
+def test_the_standing_superseded_count_names_a_command_that_returns_them(
+        tmp_path, monkeypatch, capsys):
+    """Verify the superseded count names a command printing those items.
+
+    Mutation: the count line ending in 'hq standing <slug>' without
+    --all, which exits 0 and lists the live items instead, so a count
+    points at text its own command never returns.
+    Oracle: the command parsed out of the rendered line and run as
+    printed against a store whose c01 really is superseded; its output
+    must carry [c01].
+    """
+    _folder(tmp_path, monkeypatch)
+    assert hq.main(['begin', _SLUG]) == 0
+    assert hq.main([
+        'note', _SLUG, 'constraint', '--headline', 'Never reuse a nonce',
+        'The verifier caches each nonce it accepts.']) == 0
+    assert hq.main([
+        'note', _SLUG, 'constraint', '--headline', 'Never reuse a key',
+        'The signer caches each key it accepts.']) == 0
+    assert hq.main(['supersede', _SLUG, 'c01', 'c02']) == 0
+    capsys.readouterr()
+
+    items = [
+        _item('c01', 'c', 'Never reuse a nonce', 'The verifier caches it.'),
+        _item('c02', 'c', 'Never reuse a key', 'The signer caches it.'),
+        ]
+    line = hq.render_standing(items, {'c01'}, _SLUG).splitlines()[-1]
+    assert line.startswith('superseded 1')
+
+    argv = line.split('- ', 1)[1].split()
+    assert '<' not in ' '.join(argv)
+    assert hq.main(argv[1:]) == 0
+    assert '[c01]' in capsys.readouterr().out
+
+
+def test_every_non_live_artifact_count_names_a_command_that_runs_as_printed(
+        tmp_path, monkeypatch, capsys):
+    """Verify each non-live count ends in a command returning that status.
+
+    Mutation: the three counts joined into one line ending in
+    'hq when <slug> <path>', a placeholder no reader can fill and a verb
+    that answers for one path rather than for a status.
+    Oracle: each command parsed out of its own line and run; the path
+    stamped at that status appears in its output and the paths stamped at
+    the other two do not.
+    """
+    folder = _folder(tmp_path, monkeypatch)
+    at_status = {
+        'superseded': 'old.md',
+        'archived': 'done.md',
+        'missing': 'gone.md',
+        }
+    rows = {}
+    for status, path in at_status.items():
+        rows[path] = _row(path=path, status=status, label=f'{status} row')
+        hq._append_tsv(
+            folder / 'ledger.tsv', hq.LEDGER_FIELDS, rows[path],
+            hq._LEDGER_HEADER)
+    capsys.readouterr()
+
+    block = hq.render_artifacts([], rows, _SLUG)
+    counted = [
+        ln for ln in block.splitlines() if ln.startswith(tuple(at_status))]
+    assert len(counted) == len(at_status)
+
+    for line in counted:
+        status = line.split()[0]
+        argv = line.split('- ', 1)[1].split()
+        assert '<' not in ' '.join(argv)
+        assert hq.main(argv[1:]) == 0
+        out = capsys.readouterr().out
+        assert at_status[status] in out
+        for other, other_path in at_status.items():
+            if other != status:
+                assert other_path not in out

@@ -196,7 +196,7 @@ def test_render_standing_prints_every_live_item_and_the_superseded_tail():
     Mutation: a line cap that cuts items and prints '... N more'; or the
     superseded tail dropped, so the block never says a ruling left it.
     Oracle: hand-counted - 79 live items under one heading plus the tail
-    'superseded 1  - hq standing demo' make 81 lines, [c80] absent.
+    'superseded 1  - hq standing demo --all' make 81 lines, [c80] absent.
     """
     items = _make_items(80, 'c')
     superseded_ids = {items[-1]['id']}
@@ -206,7 +206,7 @@ def test_render_standing_prints_every_live_item_and_the_superseded_tail():
     assert sum(ln.startswith('[c') for ln in lines) == 79
     assert not any(ln.startswith('... ') for ln in lines)
     assert '[c80]' not in '\n'.join(lines)
-    assert lines[-1] == 'superseded 1  - hq standing demo'
+    assert lines[-1] == 'superseded 1  - hq standing demo --all'
 
 
 def test_read_tsv_continues_past_empty_line(tmp_path):
@@ -1266,13 +1266,17 @@ def test_render_artifacts_non_live_missing_before_custom_status():
     statuses changes.
     Oracle: non_live with 'missing' and 'aborted' (sorts before 'missing');
     original gives 'missing' first (canonical), mutant gives 'aborted' first
-    (sorted alphabetically).
+    (sorted alphabetically). Each count owns a line, so the order reads
+    across them.
     """
     row_m = _row(status='missing', kind='notes', read_before='never')
     row_a = _row(status='aborted', kind='notes', read_before='never')
     rows = {'a.md': row_a, 'b.md': row_m}
     result = hq.render_artifacts([], rows, 'slug')
-    assert 'missing 1  aborted 1' in result, (
+    counted = [
+        ln.split()[0] for ln in result.splitlines()
+        if ln.startswith(('missing', 'aborted'))]
+    assert counted == ['missing', 'aborted'], (
         f'Expected missing before aborted; got: {result!r}'
     )
 

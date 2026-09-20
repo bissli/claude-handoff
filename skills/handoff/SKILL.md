@@ -19,8 +19,8 @@ One folder per task thread, `.handoff/<slug>/` at the repo root
 of the cwd that already holds `.handoff/`, else the cwd). Its
 `HANDOFF.md` carries what a fresh session needs to resume and nothing
 the repo already records. Write near the budget, then kill the session:
-a total clear; only this folder and the repo survive. Run
-`/handoff <slug>` in a fresh one.
+only this folder and the repo survive. Run `/handoff <slug>` in a
+fresh one.
 
 The plugin puts `hq` on the agent's PATH. After a plugin update
 mid-session `hq` fails with `command not found`: run `/reload-plugins`,
@@ -352,7 +352,6 @@ Run these steps in order:
 4. Rewrite the cursor from `## Task` down, above the first `<!-- hq:`
    marker, carrying forward every line this session did not settle;
    leave the header line and everything below the marker alone.
-   Anything settled with no `note` call goes under `## Unfiled`.
 5. Run the Reviewer pass (below); each surviving finding becomes a
    `note`, a `stamp`, or a cursor edit in this cycle - return to step 2
    for it.
@@ -462,13 +461,13 @@ disk reads `missing` however the ledger stored it. `Standing` ids are
 headline and the first sentence of its body, a decision or dead end
 its headline alone. A line holding text back ends in the command that
 prints the rest, runnable as printed: `- hq artifacts <slug>` on the
-`never` count; `- hq when <slug> <path>` on the non-live counts and,
-as `+Nc - hq when <slug> <path>`, on an `edit` or `mention` label past
-120 characters; `- hq standing <slug>` on the superseded count and
-`+Nc - hq standing <slug> <id>` on a constraint body past its first
-sentence. Every path resolves from the base the first line names; the
-folder's own files carry `.handoff/<slug>/`. In `Log`, `+1` counts
-dirty paths.
+`never` count and `- hq artifacts <slug> --status <status>` on each
+non-live count; `+Nc - hq when <slug> <path>` on an `edit` or
+`mention` label past 120 characters; `- hq standing <slug> --all` on
+the superseded count and `+Nc - hq standing <slug> <id>` on a
+constraint body past its first sentence. Every path resolves from the
+base the first line names; the folder's own files carry
+`.handoff/<slug>/`. In `Log`, `+1` counts dirty paths.
 
 ## check
 
