@@ -458,10 +458,11 @@ it - and `path spec? unstamped` for a file with no row; live
 `never` rows collapse to a count, and rows no longer live to
 `superseded`, `archived`, or `missing` counts - a file gone from the
 disk reads `missing` however the ledger stored it. `Standing` ids are
-`d` decision, `c` constraint, `x` dead end: a constraint prints its
-headline and the first sentence of its body, a decision or dead end
-its headline; the rest is held back. A line holding text back ends in
-the command that prints the rest, runnable as printed:
+`d` decision, `c` constraint, `x` dead end; each kind prints its
+newest cycle first, one cycle's items in recorded order. A constraint
+prints its headline and the first sentence of its body, a decision or
+dead end its headline. A line holding text back ends in the command
+that prints the rest, runnable as printed:
 `- hq artifacts <slug>` on the `never` count and
 `- hq artifacts <slug> --status <status>` on each non-live count;
 `+Nc - hq when <slug> <path>` on an `edit` or `mention` label past
@@ -502,14 +503,13 @@ under `## Plan`, `-` when there are none.
 
 `done` ends the thread; `finish` ends one cycle and leaves it running.
 It writes `.hq.done` in the folder - `slug=`, `time=`, `cycle=` (the
-last finished), `reason=` - and deletes nothing: `list` drops the
-folder, `begin` and `adopt` refuse it and name the undo, every read
-verb still answers. `--undo` removes the marker; `--force` marks a
-folder whose cycle is still open, which otherwise refuses and names
+last finished), `reason=` - and deletes nothing: `list` hides it,
+`begin` and `adopt` refuse it and name the undo, every other read verb
+still answers. `--undo` removes the marker; `--force` marks a folder
+whose cycle is still open, which otherwise refuses and names
 `hq finish`. A repeat keeps the first marker and prints its date; a
-new reason takes `--undo`, then a fresh `hq done`. A directory
-standing under the name `.hq.done` refuses `--undo`: remove it by
-hand; no verb clears it.
+new reason takes `--undo`, then a fresh `hq done`. A directory named
+`.hq.done` refuses `--undo`: remove it by hand; no verb clears it.
 
 ## when, diff, artifacts, standing
 

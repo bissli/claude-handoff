@@ -1203,3 +1203,30 @@ def test_render_standing_holds_each_kind_back_and_the_eighty_line_boundary():
     lines = hq.render_standing(more, set(), 'slug').splitlines()
     assert len(lines) == 81
     assert lines[-1] == '[c80] (c1) **r80** b'
+
+
+def test_standing_sorts_each_kind_by_cycle_descending_and_stably():
+    """Newest cycle first within a kind, recording order kept inside one
+    cycle.
+
+    Mutation: the sort dropped, which leaves plain recording order; the
+    sign flipped, which puts the oldest cycle first; or an id added to
+    the key, which reorders a cycle's own items into id order.
+    Oracle: hand-computed - three constraints fed in an order that is
+    neither the expected output nor its reverse, so only a stable sort
+    keyed on the cycle alone produces the listed lines.
+    """
+    items = [
+        {'id': 'c05', 'prefix': 'c', 'cycle': '1', 'headline': 'Never log tokens',
+         'body': 'Not at debug.'},
+        {'id': 'c02', 'prefix': 'c', 'cycle': '1', 'headline': 'Cache the nonce',
+         'body': 'The verifier keeps it.'},
+        {'id': 'c09', 'prefix': 'c', 'cycle': '3', 'headline': 'Rotate the key',
+         'body': 'Every quarter.'},
+        ]
+    assert hq.render_standing(items, set(), 'slug').splitlines() == [
+        '### Constraints',
+        '[c09] (c3) **Rotate the key** Every quarter.',
+        '[c05] (c1) **Never log tokens** Not at debug.',
+        '[c02] (c1) **Cache the nonce** The verifier keeps it.',
+        ]

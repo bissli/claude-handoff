@@ -1221,9 +1221,9 @@ def render_standing(
     str
         Block body: every live constraint as its headline and the first
         sentence of its body, every live decision and dead end as its
-        headline, each kind under its heading, then
-        ``superseded N  - hq standing <slug> --all`` when any item was
-        superseded.
+        headline, each kind under its heading and newest cycle first
+        within it, then ``superseded N  - hq standing <slug> --all``
+        when any item was superseded.
 
     Notes
     -----
@@ -1232,6 +1232,8 @@ def render_standing(
       whole in standing.md behind that command.
     - A constraint holds back its body past the first sentence; a
       decision or a dead end holds back its body whole.
+    - The sort keys on the cycle alone and is stable, so a cycle's own
+      items stay in the order they were recorded.
     - The command carries the item's own id, so it runs as printed.
     - A constraint body with no sentence end stays resident whole: the
       split has nothing to hold back.
@@ -1247,6 +1249,7 @@ def render_standing(
         group = [i for i in live if i['prefix'] == prefix]
         if not group:
             continue
+        group.sort(key=lambda i: -int(i.get('cycle') or 0))
         out.append(heading)
         for item in group:
             pfx = f'(c{item["cycle"]}) ' if item.get('cycle') else ''
