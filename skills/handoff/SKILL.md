@@ -17,10 +17,9 @@ allowed-tools: Bash(hq *)
 One folder per task thread, `.handoff/<slug>/` at the repo root
 (`git rev-parse --show-toplevel`; outside a repo, the nearest ancestor
 of the cwd that already holds `.handoff/`, else the cwd). Its
-`HANDOFF.md` carries what a fresh session needs to resume and nothing
-the repo already records. Write near the budget, then kill the session:
-only this folder and the repo survive. Run `/handoff <slug>` in a
-fresh one.
+`HANDOFF.md` carries what a fresh session needs to resume. Write near
+the budget, then kill the session: only this folder and the repo
+survive.
 
 The plugin puts `hq` on the agent's PATH. After a plugin update
 mid-session `hq` fails with `command not found`: run `/reload-plugins`,
@@ -364,7 +363,7 @@ Run these steps in order:
    `resume: /handoff <slug>`. A `:?` in the read block does not
    block.
 
-The pair that brackets a cycle, on the example thread:
+The pair that brackets a cycle:
 
 ```
 hq begin auth-token-refresh
@@ -440,9 +439,11 @@ Resume: kill this session, start a fresh one, run
    what is open or done, the handoff on approach and decisions. Note
    drift in one line and proceed.
 5. Do not re-plan and do not reopen a Standing item. Open questions
-   present: put them to the user and stop. Otherwise state the task
-   and the Now step in two sentences, then execute Now; the Plan
-   follows.
+   present: recap in six lines at most - the task, what is settled,
+   what each question decides, each restated for a reader outside
+   the thread - then put them to the user and stop. Otherwise state
+   the task and the Now step in two sentences, then execute Now; the
+   Plan follows.
 6. A later bare `/handoff` targets this handoff - write rule 2.
 
 In the generated blocks, `Read first` has one line per live `always`
