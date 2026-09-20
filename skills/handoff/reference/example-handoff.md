@@ -54,10 +54,10 @@ scripts/auth.py  draft  edit  c1  poller; the 401 branch is under edit
 ### Constraints
 [c01] (c1) **Never log token values** Not even at debug; the user said so.
 ### Decisions
-[d01] (c1) **Refresh in-process, no sidecar**
+[d01] (c1) **Refresh in-process, no sidecar**  +37c - hq standing auth-token-refresh d01
 ### Dead ends
-[x01] (c1) **httpx event hooks for auto-refresh**
-[x02] (c1) **A pid in the lock.**
+[x01] (c1) **httpx event hooks for auto-refresh**  +41c - hq standing auth-token-refresh x01
+[x02] (c1) **A pid in the lock.**  +29c - hq standing auth-token-refresh x02
 <!-- /hq:standing -->
 
 ## Log

@@ -1156,31 +1156,41 @@ def test_conservation_passes_a_rewrap_and_still_flags_a_drop():
         '- Then ship it. - Rework the loader']
 
 
-def test_render_standing_bodies_headings_and_the_eighty_line_boundary():
-    """Constraint bodies print, other kinds print headlines, each kind has
-    its heading, and the cap bites at 81 lines and not at 80.
+def test_render_standing_holds_each_kind_back_and_the_eighty_line_boundary():
+    """Each kind holds its body back by its own resident rule, each kind
+    has its heading, and the cap bites at 81 lines and not at 80.
 
-    Mutation: include_body flipped for a kind, the dead-end prefix letter
-    changed, or the boundary moved either way.
-    Oracle: hand-computed lines for one item per kind; no cap binds the
-    block, so 79 constraints render as 80 lines and 80 render as 81, the
-    last of them the item itself and never an overflow marker.
+    Mutation: split_headline applied to a decision or a dead end, which
+    leaves a first sentence resident and undercounts the hold; the whole
+    body held for a constraint, which drops the sentence the block
+    carries; the dead-end prefix letter changed; or the boundary moved
+    either way.
+    Oracle: hand-computed - the constraint holds its second sentence
+    alone while the decision and the dead end hold their bodies whole,
+    so each count equals a spelled-out length; no cap binds the block,
+    so 79 constraints render as 80 lines and 80 render as 81, the last
+    of them the item itself and never an overflow marker.
     """
+    held_c = 'The sink redacts nothing.'
+    held_d = 'One caller.'
+    held_x = 'Cannot retry.'
     items = [
         {'id': 'c01', 'prefix': 'c', 'cycle': '1', 'headline': 'Never log tokens',
-         'body': 'Not at debug.'},
+         'body': f'Not at debug. {held_c}'},
         {'id': 'd01', 'prefix': 'd', 'cycle': '1', 'headline': 'In process',
-         'body': 'One caller.'},
+         'body': held_d},
         {'id': 'x01', 'prefix': 'x', 'cycle': '2', 'headline': 'Hooks',
-         'body': 'Cannot retry.'},
+         'body': held_x},
         ]
+    assert (len(held_c), len(held_d), len(held_x)) == (25, 11, 13)
     assert hq.render_standing(items, set(), 'slug').splitlines() == [
         '### Constraints',
-        '[c01] (c1) **Never log tokens** Not at debug.',
+        ('[c01] (c1) **Never log tokens** Not at debug.'
+         f'  +{len(held_c)}c - hq standing slug c01'),
         '### Decisions',
-        '[d01] (c1) **In process**',
+        f'[d01] (c1) **In process**  +{len(held_d)}c - hq standing slug d01',
         '### Dead ends',
-        '[x01] (c2) **Hooks**',
+        f'[x01] (c2) **Hooks**  +{len(held_x)}c - hq standing slug x01',
         ]
     many = [
         {'id': f'c{n:02d}', 'prefix': 'c', 'cycle': '1', 'headline': f'r{n}', 'body': 'b'}

@@ -460,15 +460,15 @@ it - and `path spec? unstamped` for a file with no row; live
 disk reads `missing` however the ledger stored it. `Standing` ids are
 `d` decision, `c` constraint, `x` dead end: a constraint prints its
 headline and the first sentence of its body, a decision or dead end
-its headline alone. A line holding text back ends in the command that
-prints the rest, runnable as printed: `- hq artifacts <slug>` on the
-`never` count and `- hq artifacts <slug> --status <status>` on each
-non-live count; `+Nc - hq when <slug> <path>` on an `edit` or
-`mention` label past 120 characters; `- hq standing <slug> --all` on
-the superseded count and `+Nc - hq standing <slug> <id>` on a
-constraint body past its first sentence. Every path resolves from the
-base the first line names; the folder's own files carry
-`.handoff/<slug>/`. In `Log`, `+1` counts dirty paths.
+its headline; the rest is held back. A line holding text back ends in
+the command that prints the rest, runnable as printed:
+`- hq artifacts <slug>` on the `never` count and
+`- hq artifacts <slug> --status <status>` on each non-live count;
+`+Nc - hq when <slug> <path>` on an `edit` or `mention` label past
+120 characters; `- hq standing <slug> --all` on the superseded count
+and `+Nc - hq standing <slug> <id>` on a held body. Every path
+resolves from the base the first line names; the folder's own files
+carry `.handoff/<slug>/`. In `Log`, `+1` counts dirty paths.
 
 ## check
 

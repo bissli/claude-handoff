@@ -372,3 +372,36 @@ def test_every_non_live_artifact_count_names_a_command_that_runs_as_printed(
         for other, other_path in at_status.items():
             if other != status:
                 assert other_path not in out
+
+
+def test_a_held_decision_body_names_a_command_that_returns_it(
+        tmp_path, monkeypatch, capsys):
+    """Verify a decision's held count names a command printing that body.
+
+    Mutation: split_headline applied to a decision, which leaves its
+    first sentence resident and counts only the remainder, so the count
+    names fewer characters than the command reveals; or no suffix at
+    all, which leaves the body behind no pointer.
+    Oracle: the command parsed out of the rendered line and run as
+    printed; its output equals the resident line plus a space and the
+    body, and the count equals that body's length.
+    """
+    folder = _folder(tmp_path, monkeypatch)
+    body = 'One caller keeps it simple. Latency is fine.'
+    assert hq.main(['begin', _SLUG]) == 0
+    assert hq.main([
+        'note', _SLUG, 'decision', '--headline', 'Refresh in process',
+        body]) == 0
+    capsys.readouterr()
+
+    items, sup = hq._parse_standing((folder / 'standing.md').read_text())
+    line = next(
+        ln for ln in hq.render_standing(items, sup, _SLUG).splitlines()
+        if ln.startswith('[d01]'))
+    resident, suffix = line.split('  +', 1)
+    assert suffix == f'{len(body)}c - hq standing {_SLUG} d01'
+
+    argv = line.split('- ', 1)[1].split()
+    assert '<' not in ' '.join(argv)
+    assert hq.main(argv[1:]) == 0
+    assert capsys.readouterr().out.strip() == f'{resident} {body}'

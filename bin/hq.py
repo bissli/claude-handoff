@@ -1220,21 +1220,21 @@ def render_standing(
     -------
     str
         Block body: every live constraint as its headline and the first
-        sentence of its body, every live decision and dead end as a
-        headline alone, each kind under its heading, then
+        sentence of its body, every live decision and dead end as its
+        headline, each kind under its heading, then
         ``superseded N  - hq standing <slug> --all`` when any item was
         superseded.
 
     Notes
     -----
-    - Residency, never a cut: a constraint whose body runs past its
-      first sentence ends in ``+<held>c - hq standing <slug> <id>``, and
-      the body stays whole in standing.md behind that command.
+    - Residency, never a cut: a line that holds text back ends in
+      ``+<held>c - hq standing <slug> <id>``, and the held text stays
+      whole in standing.md behind that command.
+    - A constraint holds back its body past the first sentence; a
+      decision or a dead end holds back its body whole.
     - The command carries the item's own id, so it runs as printed.
-    - A body with no sentence end stays resident whole: the split has
-      nothing to hold back.
-    - A decision or a dead end renders by headline alone, as it has
-      since the block existed; its body is read by the id form.
+    - A constraint body with no sentence end stays resident whole: the
+      split has nothing to hold back.
     """
     live = [i for i in items if i['id'] not in superseded_ids]
     sup_count = len(items) - len(live)
@@ -1252,11 +1252,15 @@ def render_standing(
             pfx = f'(c{item["cycle"]}) ' if item.get('cycle') else ''
             line = f'[{item["id"]}] {pfx}**{item["headline"]}**'
             body = item.get('body', '')
-            if body_mode == 'sentence' and body:
-                resident, held = split_headline(body)
-                line = _join_headline_body(line, resident).rstrip()
+            if body:
+                if body_mode == 'sentence':
+                    resident, held = split_headline(body)
+                    line = _join_headline_body(line, resident).rstrip()
+                else:
+                    held = body
                 line = holdback_line(
-                    line, len(held), f'hq standing {slug} {item["id"]}')
+                    line.rstrip(), len(held),
+                    f'hq standing {slug} {item["id"]}')
             out.append(line.rstrip())
     if sup_count:
         out.append(f'superseded {sup_count}  - hq standing {slug} --all')
@@ -4866,9 +4870,9 @@ def _verb_supersede(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) 
     Notes
     -----
     - Appends one line to standing.md; writes nothing on refusal.
-    - Prints the superseded item as standing.md holds it: the block
-      renders a decision or a dead end by its headline alone, so a
-      ruling still live inside the body would otherwise leave unseen.
+    - Prints the superseded item as standing.md holds it: the item
+      leaves the block entirely, so a ruling still live inside its
+      body would otherwise go unseen.
     """
     old_id = getattr(argv, 'old_id', '')
     new_id = getattr(argv, 'new_id', '')
@@ -4898,9 +4902,9 @@ def _verb_supersede(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) 
         return 1
     line = f'- (c{anch["cycle"]}) {old_id} -> {new_id}'
     _append_lines(standing_path, [line])
-    # The block shows a decision or a dead end by its headline alone, so
-    # a ruling still live inside the body would leave unseen; the item
-    # is echoed as standing.md holds it on its way out.
+    # The item leaves the block entirely, so a ruling still live inside
+    # its body would go unseen; the item is echoed as standing.md holds
+    # it on its way out.
     old_item = next(item for item in items if item['id'] == old_id)
     pfx = f'(c{old_item["cycle"]}) ' if old_item['cycle'] else ''
     shown = f'[{old_id}] {pfx}**{old_item["headline"]}** {old_item["body"]}'
@@ -6075,9 +6079,9 @@ def _verb_standing(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -
     -----
     - A named id outranks every filter: ``ids`` and ``--kind`` together
       print the named items, never their intersection.
-    - The block renders a decision or a dead end by its headline alone,
-      and a constraint by its headline and first sentence; the id form is
-      where the rest of a body is read.
+    - The block renders a decision or a dead end by its headline, and a
+      constraint by its headline and first sentence; the id form the
+      block names is where the rest of a body is read.
     - A superseded item names the id now current and the cycle that
       made it current, never the first hop out of a chain whose own
       successor was superseded later.
