@@ -1209,3 +1209,108 @@ def test_store_guard_reports_one_store_once(monkeypatch, capsys, tmp_path):
 
     assert count('GA0', f'cat {stored}/ledger.tsv {stored}/ledger.tsv') == 1
     assert count('GA1', f'cat {stored}/ledger.tsv {stored}/standing.md') == 2
+
+
+def test_gate_fires_on_heredoc_interpreter_write(monkeypatch, capsys, tmp_path):
+    """Verify a heredoc-fed interpreter that writes a gated file is a write.
+
+    Mutation: testing only redirect operators and in-place flags, so python3
+    fed a heredoc calling write_text escapes the write test entirely.
+    Oracle: a spy on stdout - the sed -i form reports (control) and the
+    heredoc-interpreter form on the same file also reports.
+    """
+    root, folder = _handoff_root(tmp_path)
+    monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
+    tr = _transcript(tmp_path / 't.jsonl',
+                     [_bash(f'python3 bin/hq.py open {_SLUG}')])
+
+    def run(session, command):
+        payload = _payload(root, tr, session, 'Bash', {'command': command})
+        return _run(monkeypatch, capsys, handoff_gate, payload)
+
+    assert 'SPEC.md' in run('HD1', "sed -i 's/x/y/' src/app.py")
+    heredoc = (
+        "python3 - <<'PY'\n"
+        "import pathlib\n"
+        "pathlib.Path('src/app.py').write_text('y = 2\\n')\n"
+        "PY"
+    )
+    assert 'SPEC.md' in run('HD2', heredoc)
+
+
+def test_gate_exempts_only_segments_whose_command_word_is_hq(monkeypatch,
+                                                             capsys,
+                                                             tmp_path):
+    """Verify hq on the line does not exempt writes in other segments.
+
+    Mutation: searching the whole command line for any hq command pattern,
+    which exempts a write chained after hq and a redirect in an echo whose
+    argument mentions hq.
+    Oracle: a spy on stdout - echo x alone reports (control), the hq-then-sed
+    chain reports, and the echo-hq redirect also reports.
+    """
+    root, folder = _handoff_root(tmp_path)
+    monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
+    tr = _transcript(tmp_path / 't.jsonl',
+                     [_bash(f'python3 bin/hq.py open {_SLUG}')])
+
+    def run(session, command):
+        payload = _payload(root, tr, session, 'Bash', {'command': command})
+        return _run(monkeypatch, capsys, handoff_gate, payload)
+
+    assert 'SPEC.md' in run('EX1', 'echo x > src/app.py')
+    assert 'SPEC.md' in run('EX2',
+                            f'hq artifacts {_SLUG}; sed -i "s/x/y/" src/app.py')
+    assert 'SPEC.md' in run('EX3', f'echo "hq open {_SLUG}" > src/app.py')
+
+
+def test_gate_denies_read_credit_for_a_redirected_cat(monkeypatch, capsys,
+                                                      tmp_path):
+    """Verify cat redirected to a file does not clear a gated path.
+
+    Mutation: stripping only the redirect target from the segment tokens but
+    still counting the segment as a read, so cat f > /tmp/copy.md silences
+    the gate even though the content never reached the model.
+    Oracle: a spy on stdout - ls correctly still reports (control) and the
+    redirected cat also still reports.
+    """
+    root, folder = _handoff_root(tmp_path)
+    monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
+    spec = folder / 'SPEC.md'
+    armed = [_bash(f'python3 bin/hq.py open {_SLUG}')]
+
+    def run(session, extra):
+        tr = _transcript(tmp_path / f'{session}.jsonl', armed + extra)
+        payload = _payload(root, tr, session, 'Edit',
+                           {'file_path': 'src/app.py'})
+        return _run(monkeypatch, capsys, handoff_gate, payload)
+
+    assert 'SPEC.md' in run('RR1', [_bash(f'ls -l {spec}')])
+    assert 'SPEC.md' in run('RR2', [_bash(f'cat {spec} > /tmp/copy.md')])
+
+
+def test_gate_ignores_hq_open_inside_a_heredoc_body(monkeypatch, capsys,
+                                                    tmp_path):
+    """Verify a mention of hq open in a heredoc body does not re-arm the gate.
+
+    Mutation: running _OPEN_VERB.finditer on the raw command instead of the
+    heredoc-stripped command, so prose naming hq open inside a batch body
+    overwrites the armed slug with a garbage word, resolving to no folder.
+    Oracle: a spy on stdout - the write after the note command still reports
+    SPEC.md; the state slug is the real slug, not the word from the body.
+    """
+    root, folder = _handoff_root(tmp_path)
+    monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
+    note_cmd = (
+        f"hq note {_SLUG} --batch <<'ROWS'\n"
+        "The reader runs hq open by hand.\n"
+        "ROWS"
+    )
+    tr = _transcript(tmp_path / 't.jsonl',
+                     [_bash(f'python3 bin/hq.py open {_SLUG}'),
+                      _bash(note_cmd)])
+    payload = _payload(root, tr, 'HA1', 'Edit', {'file_path': 'src/app.py'})
+    out = _run(monkeypatch, capsys, handoff_gate, payload)
+    assert 'SPEC.md' in out
+    state_path = (tmp_path / 'state') / 'HA1.handoff.json'
+    assert json.loads(state_path.read_text())['gate']['slug'] == _SLUG

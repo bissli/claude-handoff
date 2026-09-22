@@ -91,7 +91,18 @@ _QUOTED = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"", re.S)
 _FD_REDIRECT = re.compile(r'\d?>\s*&\s*\d')
 _NULL_REDIRECT = re.compile(r'(?:\d|&)?>\s*/dev/null')
 _INPLACE = re.compile(r'\bsed\s+-[a-zA-Z]*i|\bsed\s+--in-place')
-_WRITE_VERB = re.compile(r'\btee\s|\bgit\s+add\b|\bgit\s+commit\b')
+_WRITE_VERB = re.compile(
+    r'\btee\s|\bgit\s+add\b|\bgit\s+commit\b|\b(?:mv|cp|rsync)\s')
+# An interpreter fed a heredoc runs whatever the body holds, so the
+# body's own writes never surface as an operator on the command line.
+# The name has to be a command word: the `.sh` of a script argument
+# carries a word boundary too.
+_INTERPRETER = re.compile(
+    r'(?:^|[\s;|&(])(?:python3?|perl|ruby|node|php|ba?sh|zsh)\b')
+# Stdout carries the read to the model. A leading `2` names stderr and
+# leaves stdout alone, so the digit is part of the test rather than
+# stripped before it.
+_STDOUT_REDIRECT = re.compile(r'(?<![\d>])[1&]?>>?\|?\s*\S')
 # The command word of a read segment, after an opening paren and any
 # variable assignments, is a read verb; sed counts only with -n, since
 # a bare sed edits and prints alike.
@@ -130,8 +141,12 @@ _HQ_COMMAND = re.compile(
 #   so an echo earlier on the line says nothing about a later `bash
 #   -c`, and a `|` inside an earlier argument does not cut the segment.
 _MENTION_VERB = re.compile(
-    r'\b(?:grep|rg|ag|ack|sed|awk|perl|echo|printf|git\s+commit)\b')
+    r'\b(?:grep|rg|ag|ack|sed|awk|perl|echo|printf|memman|git\s+commit)\b')
 _SEGMENT_SPLIT = re.compile(r'[;|&\n]')
+# A pipeline is the run between `;`, `&&`, `||`, `&`, and newline. A
+# single `|` stays inside it, so `hq begin | tee log` tees the tooling's
+# own output rather than writing a file of its own.
+_PIPELINE_SPLIT = re.compile(r'\|\||[;&\n]')
 _TOKEN_SPLIT = re.compile(r'[\s\'"]+')
 
 
@@ -147,29 +162,72 @@ def bash_writes(command: str) -> bool:
     -------
     bool
         True when the command redirects to a file, edits in place, tees,
-        or stages or commits to git.
+        moves or copies, stages or commits to git, or feeds a heredoc to
+        an interpreter.
 
     Notes
     -----
-    - Heredoc bodies, then quoted spans, then the redirections that go
-      to another descriptor or to /dev/null are removed first. What
+    - The test runs per pipeline, not per line: one pipeline running the
+      handoff tooling exempts itself alone, and a write chained after it
+      still counts. A quoted mention of ``hq`` that a printing or
+      recording verb owns exempts nothing.
+    - Heredoc bodies, then the redirections that go to another
+      descriptor or to /dev/null, then quoted spans are removed. What
       survives holds only the redirections that reach a file, so a bare
       ``>`` in the remainder is the whole test.
     - ``&> file`` writes and ``&>/dev/null`` does not, which is why the
       /dev/null forms are stripped by name rather than by operator.
-    - A segment whose command word is ``hq`` or ``hq.py`` runs the
-      handoff tooling itself and never counts, whatever it redirects;
-      the word elsewhere on the line is a mention and exempts nothing.
+    - An interpreter fed a heredoc counts whatever the body holds. The
+      bytes reach the file through code the gate cannot parse, and the
+      call spells no target, so an ``always`` row reports and an
+      ``edit`` row cannot.
     """
     text = _strip_heredocs(command)
-    if _HQ_COMMAND.search(text):
-        return False
-    text = _QUOTED.sub(' ', text)
-    text = _FD_REDIRECT.sub(' ', text)
-    text = _NULL_REDIRECT.sub(' ', text)
-    if '>' in text:
-        return True
-    return bool(_INPLACE.search(text) or _WRITE_VERB.search(text))
+    text = _NULL_REDIRECT.sub(' ', _FD_REDIRECT.sub(' ', text))
+    for beg, end in reversed(_mention_spans(text)):
+        text = text[:beg] + ' ' * (end - beg) + text[end:]
+    for run in _PIPELINE_SPLIT.split(text):
+        pipeline = run.strip()
+        if _HQ_COMMAND.search(pipeline):
+            continue
+        if '<<' in pipeline and _INTERPRETER.search(pipeline):
+            return True
+        bare = _QUOTED.sub(' ', pipeline)
+        if '>' in bare:
+            return True
+        if _INPLACE.search(bare) or _WRITE_VERB.search(bare):
+            return True
+    return False
+
+
+def _mention_spans(text: str) -> list[tuple[int, int]]:
+    """Return the spans of quoted text a printing or recording verb owns.
+
+    Parameters
+    ----------
+    text : str
+        A command line with its heredoc bodies already removed.
+
+    Returns
+    -------
+    list[tuple[int, int]]
+        Half-open offsets into ``text``, in source order.
+
+    Notes
+    -----
+    - The owner is read from the span's own shell segment, past the last
+      ``;``, ``|``, ``&``, or newline, with earlier quoted spans blanked
+      first, so an echo earlier on the line says nothing about a later
+      ``bash -c``.
+    - A ``$(`` inside the span runs whatever follows it, whoever owns
+      the quote, so such a span is never a mention.
+    """
+    return [
+        m.span() for m in _QUOTED.finditer(text)
+        if '$(' not in m.group(0)
+        and _MENTION_VERB.search(_SEGMENT_SPLIT.split(
+            _QUOTED.sub(' ', text[:m.start()]))[-1])
+        ]
 
 
 def _strip_heredocs(command: str) -> str:
@@ -199,13 +257,16 @@ def _strip_heredocs(command: str) -> str:
     return '\n'.join(kept)
 
 
-def read_segments(command: str) -> list[str]:
+def read_segments(command: str, printed: bool = False) -> list[str]:
     """Return the shell segments of a command that read a file.
 
     Parameters
     ----------
     command : str
         The command line as sent in ``tool_input.command``.
+    printed : bool, default False
+        When True, keep only the segments whose stdout reached the
+        model, dropping one the shell redirected into a file.
 
     Returns
     -------
@@ -219,13 +280,21 @@ def read_segments(command: str) -> list[str]:
       heredoc bodies dropped first. ``cat f | head`` yields ``cat f``;
       ``hq when s f | head`` and ``grep x f | head`` yield ``head``,
       which names no path.
-    - The write gate's read credit and the store guard both read a
-      command through this one function, so the evidence they accept
-      cannot drift apart.
+    - One function serves the write gate's read credit and the store
+      guard, and ``printed`` is where the two part. The guard asks which
+      store a call opens, and a redirected ``cat`` opens it. Read credit
+      asks what the model saw, and that same ``cat`` showed it nothing -
+      the same standard ``hq read`` holds itself to when it withholds a
+      receipt.
     """
-    return [_REDIRECT_TARGET.sub(' ', segment).strip()
-            for segment in _SEGMENT_SPLIT.split(_strip_heredocs(command))
-            if _READ_SEGMENT.match(segment)]
+    kept: list[str] = []
+    for segment in _SEGMENT_SPLIT.split(_strip_heredocs(command)):
+        if not _READ_SEGMENT.match(segment):
+            continue
+        if printed and _STDOUT_REDIRECT.search(_QUOTED.sub(' ', segment)):
+            continue
+        kept.append(_REDIRECT_TARGET.sub(' ', segment).strip())
+    return kept
 
 
 def _resolved(target: str, cwd: str) -> str:
@@ -312,16 +381,16 @@ def scan_transcript(text: str) -> tuple[str, list[str], list[str]]:
                     reads.append(str(target))
             elif block.get('name') == 'Bash':
                 command = str(fields.get('command') or '')
-                mention_spans = [
-                    m.span() for m in _QUOTED.finditer(command)
-                    if '$(' not in m.group(0)
-                    and _MENTION_VERB.search(_SEGMENT_SPLIT.split(
-                        _QUOTED.sub(' ', command[:m.start()]))[-1])
-                    ]
-                for opened in _OPEN_VERB.finditer(command):
+                # A heredoc body is data the command feeds a program,
+                # never a command word the session ran, so prose naming
+                # `hq open` inside one arms the gate onto a word that
+                # resolves to no folder and silences it for good.
+                text = _strip_heredocs(command)
+                mention_spans = _mention_spans(text)
+                for opened in _OPEN_VERB.finditer(text):
                     if not any(a <= opened.start() < b for a, b in mention_spans):
                         slug = opened.group(1)
-                segments.extend(read_segments(command))
+                segments.extend(read_segments(command, printed=True))
     return slug, reads, segments
 
 
