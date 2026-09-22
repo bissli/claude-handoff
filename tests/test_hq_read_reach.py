@@ -108,12 +108,15 @@ def test_whole_prints_past_the_anchored_span(tmp_path, monkeypatch):
 
 
 def test_section_resolves_an_anchor_the_row_does_not_carry(tmp_path, monkeypatch):
-    """--section s3 prints s3 when the row's where is s1 only.
+    """--section s3 prints s3, and earns no receipt, when the row wants s1.
 
     Mutation: --section falling through to row['where'], so resolve_where
-    is called on s1 and s3 content never appears in stdout.
+    is called on s1 and s3 content never appears in stdout; or the
+    section's own span counting as the row's required content, so reading
+    one section discharges the obligation to read another.
     Oracle: hq.resolve_where(text, ['s3']) computed in the test, compared
-    with stdout; s1 heading absent from output confirms isolation.
+    with stdout; s1 heading absent from output confirms isolation, and
+    the remedy line names the bare form that reads s1.
     """
     folder = _new_root(tmp_path, monkeypatch)
     hq.main(['begin', _SLUG])
@@ -128,8 +131,11 @@ def test_section_resolves_an_anchor_the_row_does_not_carry(tmp_path, monkeypatch
     file_lines = _SPEC_TEXT.splitlines()
     expected = '\n'.join(
         '\n'.join(file_lines[sp[0] - 1:sp[1]]) for sp in spans)
-    assert out.strip() == expected.strip()
+    assert out.startswith(expected)
     assert '## 1. Scope' not in out
+    assert out.strip().endswith(
+        'hq read: no receipt for SPEC.md - the gate still reports it;'
+        f' run: hq read {_SLUG} SPEC.md')
 
 
 def test_section_takes_the_joined_anchor_grammar(tmp_path, monkeypatch):
@@ -155,17 +161,18 @@ def test_section_takes_the_joined_anchor_grammar(tmp_path, monkeypatch):
     # Risks (## 4. Risks) at lines 15-17 in the fixture
     risks_block = '\n'.join(file_lines[14:17])
     expected = s2_block + '\n' + risks_block + '\n'
-    assert out == expected
+    assert out.startswith(expected)
 
 
-def test_an_unresolved_section_keeps_the_receipt_and_exits_zero(tmp_path, monkeypatch):
-    """--section Ghost exits 0, prints the unresolved marker, and writes receipt.
+def test_an_unresolved_section_earns_no_receipt_and_exits_zero(tmp_path, monkeypatch):
+    """--section Ghost exits 0, prints the marker, and records no receipt.
 
-    Mutation: The --section path exiting 1 on an unresolved anchor, or
-    returning before the receipt write, which breaks gate credit keyed on
-    the path (constraint c54).
-    Oracle: Exit code 0, the exact message pinned in test_hq_messages.py,
-    and the receipt file holding one line with slug and path.
+    Mutation: the receipt written whatever the read printed, so a command
+    that resolved no span discharges the artifact's read obligation; or
+    the unresolved read exiting 1, which costs a caller the diagnostic.
+    Oracle: exit code 0, the unresolved marker pinned in
+    test_hq_messages.py, a remedy naming the bare form the row's own
+    anchor answers, and no receipt file at all.
     """
     folder = _new_root(tmp_path, monkeypatch)
     hq.main(['begin', _SLUG])
@@ -177,24 +184,21 @@ def test_an_unresolved_section_keeps_the_receipt_and_exits_zero(tmp_path, monkey
     assert rc == 0
     assert out.strip() == (
         '? unresolved: Ghost'
-        ' - use --whole to read the whole file when no span printed above')
-    receipt = pathlib.Path(tmp_path) / f'hq-reads-{_SESSION}.txt'
-    assert receipt.exists()
-    lines = receipt.read_text().splitlines()
-    assert len(lines) == 1
-    assert _SLUG in lines[0]
-    assert 'SPEC.md' in lines[0]
+        ' - use --whole to read the whole file when no span printed above\n'
+        'hq read: no receipt for SPEC.md - the gate still reports it;'
+        f' run: hq read {_SLUG} SPEC.md')
+    assert not (pathlib.Path(tmp_path) / f'hq-reads-{_SESSION}.txt').exists()
 
 
-def test_whole_and_section_each_write_the_receipt_the_bare_form_writes(
+def test_the_receipt_follows_the_content_the_row_requires(
         tmp_path, monkeypatch):
-    """Bare, --whole, and --section each append one identical receipt line.
+    """Bare and --whole each append one identical line; a foreign section none.
 
-    Mutation: The receipt write moved inside the anchored branch, or made
-    conditional on spans being non-empty, so --whole or an unresolved
-    --section skips the write.
-    Oracle: The bare form's own receipt line as comparand; all three lines
-    in the file must equal it, and the total line count must be 3.
+    Mutation: the receipt write moved inside the anchored branch, so
+    --whole skips it; or written for every form, so reading s3 clears a
+    row that requires s1.
+    Oracle: the bare form's own receipt line as comparand - the file
+    holds it twice after --whole and still twice after --section s3.
     """
     folder = _new_root(tmp_path, monkeypatch)
     hq.main(['begin', _SLUG])
@@ -207,8 +211,8 @@ def test_whole_and_section_each_write_the_receipt_the_bare_form_writes(
 
     receipt = pathlib.Path(tmp_path) / f'hq-reads-{_SESSION}.txt'
     lines = receipt.read_text().splitlines()
-    assert len(lines) == 3
-    assert lines[0] == lines[1] == lines[2]
+    assert len(lines) == 2
+    assert lines[0] == lines[1]
 
 
 def test_whole_with_section_is_refused_and_writes_nothing(tmp_path, monkeypatch):

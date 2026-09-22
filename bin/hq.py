@@ -82,6 +82,10 @@ STATE_DIR = os.path.expanduser('~/.claude/cache/claude-handoff')
 # instead, and a query against another thread - when, diff, artifacts,
 # standing, read - leaves the session where it was.
 _THREAD_VERBS = ('adopt', 'begin', 'open')
+# The verbs that write inside an open cycle. Each answers to the lock
+# begin took, on the same terms begin itself applies: no lock, this
+# session's lock, and a lock past two hours all pass.
+_CYCLE_WRITE_VERBS = ('note', 'stamp', 'supersede')
 # Presence arms the nudge hook. The contents are free, so the file
 # carries a line naming what it does.
 SENTINEL = os.path.expanduser('~/.claude/.nudge-handoff')
@@ -3910,8 +3914,8 @@ def _lock_age(lock: dict[str, str], now: str) -> float | None:
     return (now_dt - lock_time).total_seconds()
 
 
-def _lock_refusal(folder: pathlib.Path, anch: dict, force: bool) -> str:
-    """Return the line that refuses begin for a foreign lock, or ''.
+def _lock_refusal(folder: pathlib.Path, anch: dict, force: bool, verb: str) -> str:
+    """Return the line that refuses a verb for a foreign lock, or ''.
 
     Parameters
     ----------
@@ -3921,11 +3925,15 @@ def _lock_refusal(folder: pathlib.Path, anch: dict, force: bool) -> str:
         Anchors for this invocation; supplies session and time.
     force : bool
         True when ``--force`` was given; every lock then passes.
+    verb : str
+        The verb being refused; names itself in the line. ``begin``
+        takes ``--force`` as its remedy, every other verb a ``begin``
+        that carries it.
 
     Returns
     -------
     str
-        The refusal line to print, or '' when begin may proceed.
+        The refusal line to print, or '' when the verb may proceed.
 
     Notes
     -----
@@ -3941,13 +3949,23 @@ def _lock_refusal(folder: pathlib.Path, anch: dict, force: bool) -> str:
     if lock.get('session') == anch['session']:
         return ''
     age = _lock_age(lock, anch['now'])
+    if verb == 'begin':
+        if age is None:
+            return 'hq begin: lock file unreadable; use --force to take over'
+        if age < _TWO_HOURS:
+            return (
+                f'hq begin: lock held by {lock.get("session")} on'
+                f' {lock.get("host")} since {lock.get("time")};'
+                ' use --force to take over')
+        return ''
+    takeover = f'run hq begin {folder.name} --force to take over'
     if age is None:
-        return 'hq begin: lock file unreadable; use --force to take over'
+        return f'hq {verb}: lock file unreadable; {takeover}'
     if age < _TWO_HOURS:
         return (
-            f'hq begin: lock held by {lock.get("session")} on'
+            f'hq {verb}: lock held by {lock.get("session")} on'
             f' {lock.get("host")} since {lock.get("time")};'
-            ' use --force to take over')
+            f' {takeover}')
     return ''
 
 
@@ -3990,7 +4008,7 @@ def _take_lock(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
         created = False
     takeover_from = ''
     if not created:
-        refusal = _lock_refusal(folder, anch, force)
+        refusal = _lock_refusal(folder, anch, force, 'begin')
         if refusal:
             print(refusal)
             return 1
@@ -4204,7 +4222,8 @@ def _verb_begin(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
             _MANIFEST_HEADER + '\n', encoding='utf-8')
         print(f'hq begin: created {folder}')
     elif (folder / 'HANDOFF.md').exists() and not (folder / 'ledger.tsv').exists():
-        refusal = _lock_refusal(folder, anch, getattr(argv, 'force', False))
+        refusal = _lock_refusal(
+            folder, anch, getattr(argv, 'force', False), 'begin')
         if refusal:
             print(refusal)
             return 1
@@ -4936,11 +4955,19 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
     Notes
     -----
     - Check order (design section 5, step 7): the lock is not this
-      session's; W1 or W2; an R3 sha mismatch; a live gated row absent
-      from disk; an ``## Unfiled`` section below the first block marker;
-      an untyped ``## Unfiled`` bullet.
-    - Nothing is written until every check passes, so a failed run leaves
-      the folder byte-identical and a re-run appends nothing twice.
+      session's; a path it writes that it cannot write; W1 or W2;
+      an R3 sha mismatch; a live gated row absent from disk; an
+      ``## Unfiled`` section below the first block marker; an untyped
+      ``## Unfiled`` bullet.
+    - Every check, the path preflight included, precedes the first
+      write, so a refusal leaves the folder byte-identical and a re-run
+      appends nothing twice.
+    - The four writes go standing, handoff, archive, manifest. An
+      interruption between them leaves the drained decision in
+      standing.md and the ``## Unfiled`` section still in HANDOFF.md,
+      so the re-run records that decision a second time under a fresh
+      id, which ``hq supersede`` retires. The reverse order would lose
+      the decision instead, which nothing retrieves.
     """
     if (folder / 'HANDOFF.md').is_dir():
         print('hq: HANDOFF.md is a directory - move the directory aside and re-run')
@@ -4955,6 +4982,28 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
     ledger_path = folder / 'ledger.tsv'
     standing_path = folder / 'standing.md'
     manifest_path = folder / 'cycles' / 'manifest.tsv'
+    blocked = []
+    for target in (
+            standing_path, folder / 'HANDOFF.md',
+            folder / 'cycles' / f'c{anch["cycle"]:02d}.md', manifest_path):
+        # Notes:
+        # - A target that does not exist yet is created, so what has
+        #   to be writable is the nearest directory that does exist -
+        #   the archive's `cycles/` is itself made by this command.
+        # - A target that does exist has to be a regular file: a
+        #   directory in its place takes a hand to move, not a retry.
+        base = target
+        while not base.exists():
+            base = base.parent
+        if not os.access(base, os.W_OK) or (base == target
+                                            and not target.is_file()):
+            blocked.append(target)
+    if blocked:
+        for target in blocked:
+            print(
+                f'hq finish: cannot write {target.relative_to(folder)}'
+                ' - move it aside or restore its permissions, then re-run')
+        return 1
     walk, rows, live, sha_map, manifest, lb, sb = _folder_state(folder)
     ack = ' '.join((getattr(argv, 'acknowledge', None) or '').split())
     accept_nc = ' '.join((getattr(argv, 'accept_not_carried', None) or '').split())
@@ -5711,10 +5760,13 @@ def _verb_read(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     - The spans print before the receipt is written, so a state directory
       the receipt cannot reach costs the caller the exit code, never
       the content it asked for.
-    - ``--whole`` prints the file whole whatever the row anchors and
-      ``--section`` resolves an anchor of its own; both write the
-      receipt, because gate credit is keyed on the path and never on
-      the span.
+    - The gate matches a receipt on the path and never on the span,
+      and the receipt is written only where the read covered the row's
+      required content: ``--whole`` covers any row, a ``--section``
+      covers one whose required spans sit inside the span it printed,
+      and a row whose ``where`` holds any unresolved anchor is covered
+      by ``--whole`` alone. An uncovered read prints the remedy and
+      exits 0.
     - The path keys as ``stamp`` stores it, else relative to the root or
       the pinned work dir (``_ledger_key``), and the file opens where the
       stored path resolves; the receipt carries the stored path, which
@@ -5763,6 +5815,7 @@ def _verb_read(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     if where != '-':
         anchor_list = _split_where(where)
         spans, unresolved = resolve_where(file_text, anchor_list)
+        printed = spans
         for span in spans:
             print('\n'.join(file_lines[span[0] - 1:span[1]]))
         for anchor_str in unresolved:
@@ -5770,7 +5823,27 @@ def _verb_read(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
                 f'? unresolved: {anchor_str}'
                 ' - use --whole to read the whole file when no span printed above')
     else:
+        printed = [(1, len(file_lines))]
         print('\n'.join(file_lines))
+    # Notes:
+    # - A receipt stands for the row's required content, so a read
+    #   leaving any of it unprinted earns none and the gate keeps
+    #   reporting the path.
+    # - One unresolved anchor withholds the receipt even where its
+    #   siblings printed: the row asks for every span it names.
+    if whole or row['where'] == '-':
+        covered, absent = where == '-', []
+    else:
+        required, absent = resolve_where(file_text, _split_where(row['where']))
+        covered = not absent and all(
+            any(beg <= span[0] and span[1] <= end for beg, end in printed)
+            for span in required)
+    if not covered:
+        recover = ' --whole' if absent else ''
+        print(
+            f'hq read: no receipt for {stored_path} - the gate still'
+            f' reports it; run: hq read {folder.name} {stored_path}{recover}')
+        return 0
     state_path = pathlib.Path(os.environ.get('HQ_STATE_DIR', str(_DEFAULT_STATE)))
     session_name = re.sub(r'[/\\]', '_', str(anch['session']))
     try:
@@ -6586,8 +6659,10 @@ def _build_parser() -> argparse.ArgumentParser:
     _read_epilog = (
         "The row's anchored spans, or the whole file where the row has no\n"
         'anchor, then the receipt the gate credits. Gate credit is keyed on\n'
-        'the path, so every form of the verb records it, an anchor matching\n'
-        'no heading included.\n'
+        'the path, and the receipt is recorded where the read covered the\n'
+        "row's required content: a read leaving any required anchor\n"
+        'unresolved, or printing a different section, prints the remedy\n'
+        'instead.\n'
         '--whole prints the file whole whatever the row anchors. --section\n'
         '<anchor> resolves an anchor of its own instead, in the hq help\n'
         "anchors grammar and joined with ';' for several, whether or not the\n"
@@ -6958,6 +7033,11 @@ def main(argv: list[str]) -> int:
         if verb == 'work-dir':
             return _verb_work_dir(folder, args)
         anch = anchors(folder, args)
+        if verb in _CYCLE_WRITE_VERBS:
+            refusal = _lock_refusal(folder, anch, False, verb)
+            if refusal:
+                print(refusal)
+                return 1
         dispatch = {
             'adopt': _verb_adopt,
             'begin': _verb_begin,

@@ -667,7 +667,9 @@ def test_read_and_diff_refusals_print_their_documented_lines(tmp_path, monkeypat
     assert (rc, out.strip()) == (
         0,
         ('? unresolved: Ghost'
-         ' - use --whole to read the whole file when no span printed above'))
+         ' - use --whole to read the whole file when no span printed above\n'
+         'hq read: no receipt for SPEC.md - the gate still reports it;'
+         f' run: hq read {_SLUG} SPEC.md --whole'))
     (folder / 'SPEC.md').unlink()
     rc, out, _ = _run(['read', _SLUG, 'SPEC.md'])
     assert (rc, out.strip()) == (
@@ -1352,7 +1354,6 @@ def test_an_unparsed_batch_line_names_which_fault_stopped_it(
     rows = (folder / 'ledger.tsv').read_text().splitlines()
     assert len(rows) == 2
     assert rows[-1].endswith('\tgood')
-
 
 
 def test_note_prints_the_id_it_assigned(tmp_path, monkeypatch):
