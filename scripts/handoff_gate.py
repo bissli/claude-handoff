@@ -409,10 +409,9 @@ def _emit(message: str) -> int:
 
     Notes
     -----
-    - A report carries ``additionalContext`` and no permission
-      decision, so the call takes the approval path it would have
-      taken unhooked. ``allow`` would skip the user's prompt for the
-      whole tool call, on exactly the calls the gate has doubts about.
+    - A report leaves the call on the approval path it would take
+      unhooked. ``allow`` would skip the user's prompt for the whole
+      tool call, on exactly the calls the gate has doubts about.
     - ``HQ_GATE_DENY=1`` turns the report into a refusal, and is the
       one operator switch that blocks the call.
     - The ``handoff gate:`` prefix belongs here, the one place that

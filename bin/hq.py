@@ -4962,12 +4962,14 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
     - Every check, the path preflight included, precedes the first
       write, so a refusal leaves the folder byte-identical and a re-run
       appends nothing twice.
-    - The four writes go standing, handoff, archive, manifest. An
-      interruption between them leaves the drained decision in
+    - An interruption between the writes leaves the drained decision in
       standing.md and the ``## Unfiled`` section still in HANDOFF.md,
       so the re-run records that decision a second time under a fresh
-      id, which ``hq supersede`` retires. The reverse order would lose
-      the decision instead, which nothing retrieves.
+      id, which ``hq supersede`` retires. Writing HANDOFF.md first
+      would lose the decision instead, which nothing retrieves.
+    - standing.md takes no preflight entry: it is written first, and
+      only where a note drained, so a failure there half-writes
+      nothing and the append reports for itself.
     """
     if (folder / 'HANDOFF.md').is_dir():
         print('hq: HANDOFF.md is a directory - move the directory aside and re-run')
@@ -4984,7 +4986,7 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
     manifest_path = folder / 'cycles' / 'manifest.tsv'
     blocked = []
     for target in (
-            standing_path, folder / 'HANDOFF.md',
+            folder / 'HANDOFF.md',
             folder / 'cycles' / f'c{anch["cycle"]:02d}.md', manifest_path):
         # Notes:
         # - A target that does not exist yet is created, so what has

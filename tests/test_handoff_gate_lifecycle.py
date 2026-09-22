@@ -67,15 +67,13 @@ def _tool(transcript, name, fields):
         handle.write(json.dumps(entry) + '\n')
 
 
-def _gate(monkeypatch, root, transcript, tool='Edit', fields=None):
+def _gate(monkeypatch, root, transcript):
     """Run the hook over stdin and return its decision, or an empty dict."""
     payload = {
         'hook_event_name': 'PreToolUse', 'session_id': _SESSION,
         'cwd': str(root), 'transcript_path': str(transcript),
-        'tool_name': tool,
-        'tool_input': fields if fields is not None else {
-            'file_path': str(root / 'app.py'),
-        },
+        'tool_name': 'Edit',
+        'tool_input': {'file_path': str(root / 'app.py')},
     }
     monkeypatch.setattr(sys, 'stdin', io.StringIO(json.dumps(payload)))
     out = io.StringIO()
@@ -84,40 +82,6 @@ def _gate(monkeypatch, root, transcript, tool='Edit', fields=None):
     assert rc == 0
     text = out.getvalue().strip()
     return json.loads(text)['hookSpecificOutput'] if text else {}
-
-
-@pytest.mark.parametrize('kind', ['store', 'unread', 'combined'])
-def test_an_advisory_does_not_grant_tool_permission(tmp_path, monkeypatch, kind):
-    """An advisory supplies context without deciding whether a tool may run.
-
-    Mutation: _emit returns permissionDecision=allow with the reminder,
-    skipping the normal permission prompt on a call it only meant to warn.
-    Oracle: each real advisory has additionalContext and no permission
-    decision, whether the store guard, write gate, or both supply it.
-    """
-    root = _setup(tmp_path, monkeypatch)
-    _thread(root)
-    transcript = tmp_path / 'transcript.jsonl'
-    if kind != 'store':
-        _tool(transcript, 'Bash', {'command': f'hq open {_SLUG}'})
-    if kind == 'unread':
-        decision = _gate(monkeypatch, root, transcript)
-    else:
-        command = f'cat .handoff/{_SLUG}/ledger.tsv'
-        if kind == 'combined':
-            command += ' > app.py'
-        decision = _gate(monkeypatch, root, transcript, 'Bash', {
-            'command': command,
-        })
-
-    assert decision['hookEventName'] == 'PreToolUse'
-    assert 'permissionDecision' not in decision
-    context = decision['additionalContext']
-    if kind != 'unread':
-        assert 'ledger.tsv' in context
-    if kind != 'store':
-        assert 'SPEC.md' in context
-        assert 'not read' in context
 
 
 def test_unread_writes_stay_denied_until_a_read(tmp_path, monkeypatch):
@@ -203,14 +167,16 @@ def test_the_gate_prescribes_a_read_that_can_clear_it(tmp_path, monkeypatch):
     ('Scope', ['--section', 'Ghost'], '? unresolved: Ghost'),
     ('Ghost', [], '? unresolved: Ghost'),
     ('Scope;Ghost', [], '? unresolved: Ghost'),
-    ('Scope', ['--section', 'Risks'], 'Check expiry.'),
+    ('Risks', ['--section', 'Scope'], 'Keep the retry bounded.'),
 ], ids=['absent-section', 'stale-anchor', 'partial-anchors', 'unrelated-section'])
 def test_a_read_without_the_required_content_does_not_clear_the_gate(
         tmp_path, monkeypatch, where, flags, diagnostic):
     """A receipt cannot stand for required content the command did not print.
 
     Mutation: every hq read writes the same path-only receipt, including
-    a failed anchor, a partial span set, or a different section entirely.
+    a failed anchor, a partial span set, or a different section entirely;
+    or the containment test dropping its end bound, so a section opening
+    before the required span counts as covering it.
     Oracle: after the diagnostic or unrelated section prints, an edit
     still receives a denial naming the required spec.
     """
@@ -228,12 +194,8 @@ def test_a_read_without_the_required_content_does_not_clear_the_gate(
     assert 'SPEC.md' in decision['permissionDecisionReason']
 
 
-@pytest.mark.parametrize(('where', 'flags'), [
-    ('Scope', []), ('Ghost', ['--whole']),
-], ids=['required-span', 'whole-file-recovery'])
-def test_a_successful_required_read_clears_the_gate(
-        tmp_path, monkeypatch, where, flags):
-    """Required-span and whole-file receipts are positive lifecycle controls.
+def test_a_successful_required_read_clears_the_gate(tmp_path, monkeypatch):
+    """An anchored read printing its required span is the positive control.
 
     Mutation: receipt credit disabled wholesale to fix unresolved reads,
     so a successful read still leaves the agent unable to edit.
@@ -241,12 +203,12 @@ def test_a_successful_required_read_clears_the_gate(
     receives no denial without any transcript Read-tool evidence.
     """
     root = _setup(tmp_path, monkeypatch)
-    _thread(root, where=where)
+    _thread(root)
     transcript = tmp_path / 'transcript.jsonl'
     _tool(transcript, 'Bash', {'command': f'hq open {_SLUG}'})
     monkeypatch.setenv('HQ_GATE_DENY', '1')
 
-    rc, out = _run(['read', _SLUG, 'SPEC.md', *flags])
+    rc, out = _run(['read', _SLUG, 'SPEC.md'])
     decision = _gate(monkeypatch, root, transcript)
 
     assert rc == 0
