@@ -878,10 +878,12 @@ def resolve_where(
                 end_line = heading_info[k][0] - 1
                 break
         spans.append((start_line, end_line))
-    # A selected child heading nests inside its parent's span, so the
-    # parent ends where the child begins and every line resolves once.
-    # Only a strictly later start trims, which leaves two anchors
-    # landing on one heading alone.
+    # Notes:
+    # - A selected child heading nests inside its parent's span, so
+    #   the parent ends where the child begins and every line
+    #   resolves once.
+    # - Only a strictly later start trims, so two anchors landing on
+    #   one heading leave each other alone.
     trimmed = [
         (beg, min([b for b, _ in spans if beg < b <= end], default=end + 1) - 1)
         for beg, end in spans
@@ -4006,7 +4008,12 @@ def _lock_refusal(folder: pathlib.Path, anch: dict, force: bool, verb: str) -> s
     return ''
 
 
-def _take_lock(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int:
+def _take_lock(
+    folder: pathlib.Path,
+    anch: dict,
+    argv: argparse.Namespace,
+    seeded_handoff: bool,
+) -> int:
     """Acquire .hq.lock, refusing a young or unreadable foreign lock.
 
     Parameters
@@ -4017,6 +4024,9 @@ def _take_lock(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
         Anchors for this invocation; supplies session, host, time, cycle.
     argv : argparse.Namespace
         Parsed flags; ``--force`` takes over any lock.
+    seeded_handoff : bool
+        True where this run wrote HANDOFF.md itself, which suppresses
+        the rescue copy.
 
     Returns
     -------
@@ -4033,6 +4043,10 @@ def _take_lock(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
       the takeover recorded.
     - A lock taken over but not writable is replaced whole, so a lock
       whose permissions were lost cannot hold the folder forever.
+    - The rescue copy saves a hand edit, so a HANDOFF.md this run
+      seeded is never rescued: its stub carries nothing to fold back,
+      and the name keys on the last finished cycle, whose genuine
+      rescue it would overwrite.
     """
     lock_path = folder / '.hq.lock'
     session = anch['session']
@@ -4085,7 +4099,7 @@ def _take_lock(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     # an adopt row records, not the archive its handoff_sha names.
     manifest_rows = _read_tsv(folder / 'cycles' / 'manifest.tsv', MANIFEST_FIELDS)
     handoff = folder / 'HANDOFF.md'
-    if manifest_rows and handoff.exists():
+    if manifest_rows and handoff.exists() and not seeded_handoff:
         last = manifest_rows[-1]
         if _sha12_path(handoff) != live_sha(last):
             hand_path = folder / 'cycles' / f'c{int(last["cycle"]):02d}.hand.md'
@@ -4251,7 +4265,8 @@ def _verb_begin(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
         return 1
     no_handoff = not (folder / 'HANDOFF.md').exists()
     no_ledger = not (folder / 'ledger.tsv').exists()
-    if not folder.exists() or (no_handoff and no_ledger):
+    seeded_handoff = not folder.exists() or (no_handoff and no_ledger)
+    if seeded_handoff:
         folder.mkdir(parents=True, exist_ok=True)
         (folder / 'cycles').mkdir(exist_ok=True)
         # Notes:
@@ -4263,14 +4278,14 @@ def _verb_begin(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
         kept: list[str] = []
         for name, seed in (
             ('HANDOFF.md',
-             f'# Handoff: {folder.name}\n\n'
-             f'Written: {anch["now"][:10]} | Cycle: 1\n\n'
-             '## Task\n\n## Now\n\n## Plan\n\n## State\n\n'
-             '## Environment\n\n## Open questions\n\n## Log\n'),
+             (f'# Handoff: {folder.name}\n\n'
+              f'Written: {anch["now"][:10]} | Cycle: 1\n\n'
+              '## Task\n\n## Now\n\n## Plan\n\n## State\n\n'
+              '## Environment\n\n## Open questions\n\n## Log\n')),
             ('ledger.tsv', _LEDGER_HEADER + '\n'),
             ('standing.md', ''),
             ('cycles/manifest.tsv', _MANIFEST_HEADER + '\n'),
-        ):
+            ):
             path = folder / name
             if path.exists():
                 kept.append(name)
@@ -4294,7 +4309,7 @@ def _verb_begin(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
             return rc
         print('hq begin: ran adopt on existing HANDOFF.md')
         anch = anchors(folder, argv)
-    return _take_lock(folder, anch, argv)
+    return _take_lock(folder, anch, argv, seeded_handoff)
 
 
 def _do_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int:
@@ -4994,7 +5009,8 @@ def _verb_supersede(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) 
         print(
             f'hq supersede: {new_id!r} was itself superseded'
             f'; run hq standing {folder.name} to list the live ids'
-            ' - hq note the replacement, then supersede onto its id')
+            ' - record the replacement with a note, then supersede'
+            ' onto its id')
         return 1
     line = f'- (c{anch["cycle"]}) {old_id} -> {new_id}'
     _append_lines(standing_path, [line])
