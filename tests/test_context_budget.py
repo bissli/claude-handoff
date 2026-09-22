@@ -24,27 +24,47 @@ import statusline as sl  # noqa: E402  (same)
 def test_every_model_is_held_to_the_same_cost_per_turn():
     """Verify targets are derived from price, not set per model by hand.
 
-    Mutation: hard-coding a token target per model, which is how a 2x
-    model ends up with the same room as opus and quietly costs double.
-    Oracle: differential - at a slow growth rate, where the compaction
-    cycle floor does not bind, each tier's derived target must reproduce
-    the declared dollar budget when run back through the cost formula.
+    Mutation: hard-coding a token target per model, which is how a
+    costlier model ends up with the same room and quietly costs more.
+    Oracle: differential - on the tiers whose cost parity clears the
+    compaction cycle floor, each derived target must reproduce the
+    declared dollar budget when run back through the cost formula, and
+    the costlier of the two must be given the smaller target.
     """
-    assert budget.model_tier('claude-fable-5') == 'fable'
-    assert budget.model_tier('claude-opus-5') == 'opus'
     slow = 1_200
-    for tier in ('fable', 'opus'):
+    for tier in ('fable-5-1', 'opus-5-5'):
         target = budget.target_tokens(tier, slow)
         assert abs(budget.cost_per_turn(target, tier)
                    - budget.COST_PER_TURN_TARGET) < 0.02
-    assert (budget.target_tokens('fable', slow)
-            < budget.target_tokens('opus', slow))
+    assert (budget.target_tokens('fable-5-1', slow)
+            < budget.target_tokens('opus-5-5', slow))
+
+
+def test_a_generation_priced_on_its_own_is_not_read_as_its_family():
+    """Verify a model with its own cache rate matches before its family.
+
+    Mutation: ordering CACHE_READ_PER_MTOK family-first, so 'opus'
+    matches claude-opus-5-5 and prices its cache reads at $0.50 against
+    the $0.20 it is billed - two and a half times the real cost, and a
+    target held to two fifths of the room already paid for.
+    Oracle: the published cache-read price per million tokens, run
+    through cost_per_turn at a context of exactly one million.
+    """
+    assert budget.model_tier('claude-opus-5-5') == 'opus-5-5'
+    assert budget.model_tier('claude-opus-5') == 'opus'
+    assert budget.model_tier('claude-fable-5-1') == 'fable-5-1'
+    assert budget.model_tier('claude-fable-5') == 'fable'
+    assert budget.model_tier('claude-sonnet-5') is None
+    for tier, price in (('opus-5-5', 0.20), ('opus', 0.50),
+                        ('fable-5-1', 0.25), ('fable', 1.00)):
+        assert abs(budget.cost_per_turn(1_000_000, tier)
+                   - price * budget.CALLS_PER_TURN) < 1e-9
 
 
 def test_a_cheap_model_is_left_alone(monkeypatch, capsys, tmp_path):
     """Verify a Sonnet or Haiku session raises no warning at all.
 
-    Mutation: model_tier falling back to 'opus' for an unlisted model,
+    Mutation: model_tier falling back to 'opus-5-5' for an unlisted model,
     which is what makes a plugin nag about a session whose whole cost is
     a few cents and train the user to ignore it.
     Oracle: a spy on stdout - the same 600K transcript prints on opus and
@@ -69,7 +89,7 @@ def test_a_cheap_model_is_left_alone(monkeypatch, capsys, tmp_path):
         cb.main()
         return capsys.readouterr().out.strip()
 
-    assert run('claude-opus-5', 'a')
+    assert run('claude-opus-5-5', 'a')
     assert run('claude-sonnet-5', 'b') == ''
 
 
@@ -86,10 +106,14 @@ def test_the_over_band_holds_the_dollar_limit_and_the_order():
     where cost decides, and the target itself where the cycle floor has
     passed the limit.
     """
-    for tier in budget.PRICE_PER_MTOK:
-        over = budget.over_budget_tokens(tier, budget.target_tokens(tier))
-        assert abs(budget.cost_per_turn(over, tier)
-                   - budget.COST_PER_TURN_LIMIT) < 0.02
+    for tier in budget.CACHE_READ_PER_MTOK:
+        seeded = budget.target_tokens(tier)
+        over = budget.over_budget_tokens(tier, seeded)
+        if budget.tokens_for_cost(budget.COST_PER_TURN_LIMIT, tier) > seeded:
+            assert abs(budget.cost_per_turn(over, tier)
+                       - budget.COST_PER_TURN_LIMIT) < 0.02
+        else:
+            assert over == seeded
         for per_call in (1_200, 1_900, 2_500, 6_300, 10_000):
             target = budget.target_tokens(tier, per_call)
             assert budget.over_budget_tokens(tier, target) >= target
@@ -103,9 +127,9 @@ def test_the_over_band_prices_a_turn_in_dollars_not_in_tokens():
     Mutation: printing context/target in the band-2 message. It reads
     1.2x at the very point the turn costs 1.4x the target, so the number
     that decides whether to keep going is understated by a fifth.
-    Oracle: hand-computed - fable crosses the over band at the $2.20
-    point, 250,000 tokens, which is 1.4286x the $1.54 target, while the
-    same context against fable's 206,600 target is only 1.21x.
+    Oracle: hand-computed - fable crosses the over band at 250,000
+    tokens, where a turn costs $2.20, which is 3.55x the $0.62 target,
+    while the same context against fable's 206,600 target is 1.21x.
     """
     target = budget.target_tokens('fable')
     assert target == 206_600
@@ -113,7 +137,7 @@ def test_the_over_band_prices_a_turn_in_dollars_not_in_tokens():
                                cb.latched_handoff(target, 1_900, 0))
     assert band == 2
     assert '$2.20' in message
-    assert '1.4x' in message
+    assert '3.5x' in message
     assert '1.2x' not in message
 
 
@@ -130,12 +154,12 @@ def test_the_countdown_rounds_up_so_it_never_sticks():
     """
     line = re.sub(r'\x1b\[[0-9;]*m', '', sl.render({
         'session_id': 'none',
-        'model': {'id': 'claude-opus-5', 'display_name': 'Opus 5'},
+        'model': {'id': 'claude-opus-5-5', 'display_name': 'Opus 5'},
         'workspace': {'current_dir': '/x/proj'},
         'context_window': {'total_input_tokens': 266_592},
         }))
     assert 'handoff in 2' in line
-    _, message = cb.compose(300_000, 'opus', 1_900, 350_000, 290_000)
+    _, message = cb.compose(300_000, 'opus-5-5', 1_900, 350_000, 290_000)
     assert 'About 3 turns' in message
 
 
@@ -207,12 +231,12 @@ def test_bands_fire_in_order_and_not_before_the_handoff_point():
     """
     per_call = 1_900
     assert budget.reserve_tokens(350_000, per_call) == 60_000
-    assert cb.compose(289_999, 'opus', per_call, 350_000, 290_000)[0] == -1
-    assert cb.compose(290_000, 'opus', per_call, 350_000, 290_000)[0] == 0
-    assert cb.compose(349_999, 'opus', per_call, 350_000, 290_000)[0] == 0
-    assert cb.compose(350_000, 'opus', per_call, 350_000, 290_000)[0] == 1
-    assert cb.compose(499_999, 'opus', per_call, 350_000, 290_000)[0] == 1
-    assert cb.compose(500_000, 'opus', per_call, 350_000, 290_000)[0] == 2
+    assert cb.compose(289_999, 'opus-5-5', per_call, 350_000, 290_000)[0] == -1
+    assert cb.compose(290_000, 'opus-5-5', per_call, 350_000, 290_000)[0] == 0
+    assert cb.compose(349_999, 'opus-5-5', per_call, 350_000, 290_000)[0] == 0
+    assert cb.compose(350_000, 'opus-5-5', per_call, 350_000, 290_000)[0] == 1
+    assert cb.compose(499_999, 'opus-5-5', per_call, 350_000, 290_000)[0] == 1
+    assert cb.compose(500_000, 'opus-5-5', per_call, 350_000, 290_000)[0] == 2
 
 
 def test_handoff_warning_arrives_earlier_when_the_session_fills_faster():
@@ -226,9 +250,9 @@ def test_handoff_warning_arrives_earlier_when_the_session_fills_faster():
     the point at 290,000 and stays silent, the fast rate puts it at
     262,500 and is already warning.
     """
-    slow = cb.compose(270_000, 'opus', 1_900, 350_000,
+    slow = cb.compose(270_000, 'opus-5-5', 1_900, 350_000,
                       cb.latched_handoff(350_000, 1_900, 0))
-    fast = cb.compose(270_000, 'opus', 6_000, 350_000,
+    fast = cb.compose(270_000, 'opus-5-5', 6_000, 350_000,
                       cb.latched_handoff(350_000, 6_000, 0))
     assert slow[0] == -1
     assert fast[0] == 0
@@ -242,7 +266,7 @@ def test_message_names_the_numbers_the_reader_has_to_act_on():
     Oracle: the hand-computed strings for a 300K context on a 350K
     target growing 16,720 tokens a turn.
     """
-    _, message = cb.compose(300_000, 'opus', 1_900, 350_000, 290_000)
+    _, message = cb.compose(300_000, 'opus-5-5', 1_900, 350_000, 290_000)
     assert '300K' in message
     assert '350K' in message
     assert 'handoff' in message
@@ -266,7 +290,7 @@ def test_the_warning_names_the_skill_the_plugin_ships():
         front = handle.read().split('---\n', 2)[1]
     name = re.search(r'^name:\s*(\S+)', front, re.M).group(1)
     for context in (300_000, 360_000, 600_000):
-        _, message = cb.compose(context, 'opus', 1_900, 350_000, 290_000)
+        _, message = cb.compose(context, 'opus-5-5', 1_900, 350_000, 290_000)
         assert re.search(rf'/{name}\b', message)
 
 
@@ -289,7 +313,7 @@ def test_repeated_stream_snapshots_do_not_inflate_the_series(tmp_path):
                 'message': {
                     'id': f'msg_{index}',
                     'role': 'assistant',
-                    'model': 'claude-opus-5',
+                    'model': 'claude-opus-5-5',
                     'usage': {
                         'cache_read_input_tokens': context,
                         'cache_creation_input_tokens': 0,
@@ -301,11 +325,11 @@ def test_repeated_stream_snapshots_do_not_inflate_the_series(tmp_path):
     path.write_text('\n'.join(json.dumps(r) for r in records))
     context, model, per_call = cb.read_transcript(str(path))
     assert context == 150_000
-    assert model == 'claude-opus-5'
+    assert model == 'claude-opus-5-5'
     assert per_call == 10_000
 
 
-def _record(index, value, model='claude-opus-5', nested=False, flag=False):
+def _record(index, value, model='claude-opus-5-5', nested=False, flag=False):
     """Build one transcript record billing `value`, or nothing if 0.
     """
     counts = {'cache_read_input_tokens': value,
@@ -344,12 +368,12 @@ def test_the_measured_rate_ignores_a_record_the_api_never_billed(tmp_path):
         path.write_text('\n'.join(json.dumps(r) for r in records))
         return cb.read_transcript(str(path))
 
-    assert read(clean) == (118_000, 'claude-opus-5', 2_000)
+    assert read(clean) == (118_000, 'claude-opus-5-5', 2_000)
     for position in range(len(clean) + 1):
         for flag in (False, True):
             spliced = list(clean)
             spliced.insert(position, _record('x', 0, '<synthetic>', flag=flag))
-            assert read(spliced) == (118_000, 'claude-opus-5', 2_000)
+            assert read(spliced) == (118_000, 'claude-opus-5-5', 2_000)
 
 
 def test_a_call_billed_one_level_down_still_counts(tmp_path):
@@ -405,7 +429,7 @@ def test_subagent_turns_are_never_announced(monkeypatch, capsys, tmp_path):
     path.write_text(json.dumps({
         'type': 'assistant',
         'message': {
-            'id': 'm1', 'role': 'assistant', 'model': 'claude-opus-5',
+            'id': 'm1', 'role': 'assistant', 'model': 'claude-opus-5-5',
             'usage': {'cache_read_input_tokens': 600_000,
                       'cache_creation_input_tokens': 0, 'input_tokens': 0},
             },
@@ -444,7 +468,7 @@ def test_a_band_is_announced_once_and_rearmed_by_a_compaction(monkeypatch,
             'type': 'assistant',
             'message': {
                 'id': f'm{context}', 'role': 'assistant',
-                'model': 'claude-opus-5',
+                'model': 'claude-opus-5-5',
                 'usage': {'cache_read_input_tokens': context,
                           'cache_creation_input_tokens': 0, 'input_tokens': 0},
                 },
@@ -495,7 +519,7 @@ def test_a_state_file_without_the_latch_cannot_re_announce_a_band(monkeypatch,
             'type': 'assistant',
             'message': {
                 'id': f'm{value}', 'role': 'assistant',
-                'model': 'claude-opus-5',
+                'model': 'claude-opus-5-5',
                 'usage': {'cache_read_input_tokens': value,
                           'cache_creation_input_tokens': 0,
                           'input_tokens': 0},
@@ -524,13 +548,13 @@ def test_the_hook_and_the_gauge_never_name_a_different_threshold(monkeypatch,
     cannot happen.
     Oracle: differential across two surfaces - the rendered line is
     amber or red on exactly the turns whose stored band is 0 or more,
-    on a burst that latches the point at 262,500 followed by a
-    slowdown that would re-derive it out to 282,469.
+    on a burst that latches the point at 264,205 followed by a
+    slowdown that would re-derive it further out.
     """
     monkeypatch.setattr(cb, 'STATE_DIR', str(tmp_path / 'state'))
     monkeypatch.setattr(sl, 'STATE_DIR', str(tmp_path / 'state'))
     path = tmp_path / 's.jsonl'
-    burst = [232_000 + 6_000 * step for step in range(6)]
+    burst = [240_000 + 6_000 * step for step in range(6)]
     series = burst + [burst[-1] + 100 * step for step in range(1, 11)]
 
     seen = set()
@@ -545,7 +569,7 @@ def test_the_hook_and_the_gauge_never_name_a_different_threshold(monkeypatch,
             band = json.load(handle)['band']
         line = re.sub(r'\x1b\[[0-9;]*m', '', sl.render({
             'session_id': 'A',
-            'model': {'id': 'claude-opus-5', 'display_name': 'Opus 5'},
+            'model': {'id': 'claude-opus-5-5', 'display_name': 'Opus 5'},
             'workspace': {'current_dir': '/x/proj'},
             'context_window': {'total_input_tokens': series[upto - 1]},
             }))
@@ -591,7 +615,7 @@ def test_no_threshold_rises_while_the_context_is_still_climbing(monkeypatch,
     assert [row['handoff'] for row in stored] == \
         sorted((row['handoff'] for row in stored), reverse=True)
     assert [row['band'] for row in stored] == sorted(row['band'] for row in stored)
-    assert stored[-1]['handoff'] == 262_500
+    assert stored[-1]['handoff'] == 264_205
 
 
 def test_the_handoff_point_falls_within_a_session_and_never_rises():
@@ -651,7 +675,7 @@ def test_the_gauge_never_hands_back_room_it_has_withdrawn(monkeypatch,
             'type': 'assistant',
             'message': {
                 'id': f'm{index}', 'role': 'assistant',
-                'model': 'claude-opus-5',
+                'model': 'claude-opus-5-5',
                 'usage': {'cache_read_input_tokens': value,
                           'cache_creation_input_tokens': 0,
                           'input_tokens': 0},
@@ -664,7 +688,7 @@ def test_the_gauge_never_hands_back_room_it_has_withdrawn(monkeypatch,
         capsys.readouterr()
         return re.sub(r'\x1b\[[0-9;]*m', '', sl.render({
             'session_id': 'L',
-            'model': {'id': 'claude-opus-5', 'display_name': 'Opus 5'},
+            'model': {'id': 'claude-opus-5-5', 'display_name': 'Opus 5'},
             'workspace': {'current_dir': '/x/proj'},
             'context_window': {'total_input_tokens': contexts[-1]},
             }))
@@ -684,7 +708,7 @@ def test_a_barely_growing_session_never_reads_as_zero_growth():
     Oracle: hand-computed - 100 tokens a call is 880 a turn, under the
     1K floor, so the message must carry "<1K a turn".
     """
-    _, message = cb.compose(300_000, 'opus', 100, 350_000, 290_000)
+    _, message = cb.compose(300_000, 'opus-5-5', 100, 350_000, 290_000)
     assert '<1K a turn' in message
     assert ' 0K a turn' not in message
 
@@ -696,15 +720,16 @@ def test_the_target_falls_within_a_session_and_never_rises():
     empty latch from the measured rate rather than the fallback - either
     lets the target rise mid-session, which is what walks the gauge
     backwards from over-budget to "handoff now".
-    Oracle: hand-computed - fable's fallback seed is 206,600 against a
-    cost parity of 175,000, so a quiet stretch pulls the latch down to
-    175,000, and a 6,000-per-call burst, which on its own justifies
-    123,000 + 44 * 6,000 = 387,000, must still read 175,000.
+    Oracle: hand-computed - fable's fallback seed is 206,600, and at
+    900 tokens a call the cycle floor is 123,000 + 4.4 * 900 = 162,600,
+    so a quiet stretch pulls the latch down there; a 6,000-per-call
+    burst, which on its own justifies 123,000 + 44 * 6,000 = 387,000,
+    must still read 162,600.
     """
     assert budget.target_tokens('fable', 6_000) == 387_000
     assert cb.latched_target('fable', 6_000, 0) == 206_600
-    assert cb.latched_target('fable', 900, 206_600) == 175_000
-    assert cb.latched_target('fable', 6_000, 175_000) == 175_000
+    assert cb.latched_target('fable', 900, 206_600) == 162_600
+    assert cb.latched_target('fable', 6_000, 162_600) == 162_600
     # A file written before the latch existed holds a target it would
     # never grant now, so the seed clamps that on the way in.
     assert cb.latched_target('fable', 6_000, 563_000) == 206_600
@@ -717,7 +742,7 @@ def test_a_growth_burst_never_widens_the_budget(monkeypatch, capsys,
     Mutation: deriving the target in compose or in render from the rate
     measured this turn - the shipped defect. A fable session that starts
     reading large files lifts its measured rate from 900 to 4,537 a
-    call, the cycle floor lifts the target from 175,000 to 322,628 with
+    call, the cycle floor lifts the target from 162,600 to 322,628 with
     it, and a context shown as over budget one turn reads "handoff now"
     with room to spare the next.
     Oracle: differential against the defect - replaying a quiet climb
@@ -767,10 +792,10 @@ def test_a_growth_burst_never_widens_the_budget(monkeypatch, capsys,
         lines.append(line)
     assert budget.target_tokens('fable', 4_537) == 322_628
     assert targets == sorted(targets, reverse=True)
-    assert targets[-1] == 175_000
+    assert targets[-1] == 162_600
     entered = next(index for index, line in enumerate(lines) if 'over' in line)
     assert all('over' in line for line in lines[entered:])
-    assert '1.2x over' in lines[8]
+    assert '1.3x over' in lines[8]
     with open(tmp_path / 'state' / 'B.json') as handle:
         assert json.load(handle)['band'] == 2
 
@@ -797,17 +822,17 @@ def test_an_expensive_model_gets_a_workable_compaction_cycle():
     compaction lands, by real turns.
 
     Mutation: deriving the target from cost alone. Fable's cost-parity
-    target is 175K while a compaction lands at 123K, so every fable
-    session would be seeded with a cycle of under four turns.
+    target is 70K while a compaction lands at 123K, so every fable
+    session would be seeded below the point it restarts at.
     Oracle: hand-computed - at the 1,900-per-call fallback the cycle
     floor is 123,000 + 5 * 1,900 * 8.8 = 206,600, which beats fable's
-    cost parity of 175,000, and both tiers must clear MIN_CYCLE_TURNS.
+    cost parity of 70,455, and every tier must clear MIN_CYCLE_TURNS.
     """
     assert budget.target_tokens('fable') == 206_600
     assert budget.tokens_for_cost(budget.COST_PER_TURN_TARGET, 'fable') \
-        == 175_000
+        == 70_455
     per_turn = budget.FALLBACK_GROWTH_PER_CALL * budget.CALLS_PER_TURN
-    for tier in budget.PRICE_PER_MTOK:
+    for tier in budget.CACHE_READ_PER_MTOK:
         seeded = cb.latched_target(tier, budget.FALLBACK_GROWTH_PER_CALL, 0)
         assert seeded == budget.target_tokens(tier)
         cycle = (seeded - budget.POST_COMPACTION_TOKENS) / per_turn
@@ -822,13 +847,14 @@ def test_a_fast_session_is_told_how_little_a_compaction_buys():
     that will get two. The latched target no longer moves with growth,
     so this sentence is the only place a fast session learns its cycle
     has collapsed.
-    Oracle: hand-computed - fable is held to 206,600, a compaction lands
-    at 123,000, and at 6,000 tokens a call a turn eats 52,800, so the
-    cycle is 83,600 / 52,800 = 1.6 turns.
+    Oracle: hand-computed - fable 5.1 is held to 281,818, a compaction
+    lands at 123,000, and at 10,000 tokens a call a turn eats 88,000,
+    so the cycle is 158,818 / 88,000 = 1.8 turns.
     """
-    target = budget.target_tokens('fable')
-    _, message = cb.compose(206_600, 'fable', 6_000, target,
-                            cb.latched_handoff(target, 6_000, 0))
+    target = budget.target_tokens('fable-5-1')
+    band, message = cb.compose(target, 'fable-5-1', 10_000, target,
+                               cb.latched_handoff(target, 10_000, 0))
+    assert band == 1
     assert 'about 2 more turns' in message
 
 
@@ -839,21 +865,23 @@ def test_the_warning_never_lands_below_where_a_compaction_restarts():
     reserve exceeds the gap between the target and where a compaction
     lands, putting the warning below the restart point - so it fires on
     the first turn of every cycle and the user learns to ignore it.
-    Oracle: differential across rates - target minus reserve must never
-    dip under POST_COMPACTION_TOKENS, and on fable held down to cost
-    parity the clamp is what holds it there rather than the ceiling.
+    Oracle: differential across rates - every target the code can adopt,
+    minus its reserve, must clear POST_COMPACTION_TOKENS, which holds
+    because no derived target falls below the cycle floor; and on a
+    floor-set target run against a faster rate the clamp is what holds
+    the warning at the restart point rather than the ceiling.
     """
-    for tier in budget.PRICE_PER_MTOK:
+    for tier in budget.CACHE_READ_PER_MTOK:
         for per_call in (1_200, 1_900, 2_500, 4_000, 8_000):
+            assert (budget.target_tokens(tier, per_call)
+                    >= budget.cycle_floor_tokens(per_call))
             for target in (budget.target_tokens(tier, per_call),
-                           cb.latched_target(tier, per_call, 0),
-                           budget.tokens_for_cost(
-                               budget.COST_PER_TURN_TARGET, tier)):
+                           cb.latched_target(tier, per_call, 0)):
                 handoff = target - budget.reserve_tokens(target, per_call)
                 assert handoff >= budget.POST_COMPACTION_TOKENS
-    parity = budget.tokens_for_cost(budget.COST_PER_TURN_TARGET, 'fable')
-    assert budget.reserve_tokens(parity, 8_000) == \
-        parity - budget.POST_COMPACTION_TOKENS
+    floored = budget.cycle_floor_tokens(1_200)
+    assert budget.reserve_tokens(floored, 8_000) == \
+        floored - budget.POST_COMPACTION_TOKENS
 
 
 def test_the_gauge_stays_readable_past_the_budget():
@@ -868,7 +896,7 @@ def test_the_gauge_stays_readable_past_the_budget():
     def line(context):
         return sl.render({
             'session_id': 'none',
-            'model': {'id': 'claude-opus-5', 'display_name': 'Opus 5'},
+            'model': {'id': 'claude-opus-5-5', 'display_name': 'Opus 5'},
             'workspace': {'current_dir': '/x/proj'},
             'context_window': {'total_input_tokens': context},
             })
@@ -876,6 +904,29 @@ def test_the_gauge_stays_readable_past_the_budget():
     assert line(452_000) != line(700_000)
     assert '1.3x over' in line(452_000)
     assert '2.0x over' in line(700_000)
+
+
+def test_the_gauge_marks_its_cost_as_an_estimate():
+    """Verify the gauge hedges the figure every Stop band already hedges.
+
+    Mutation: dropping the ~ from the cost field, leaving a bare
+    two-decimal figure that reads as the price of the next turn rather
+    than as an estimate of cached-context re-reading, which is all the
+    model covers.
+    Oracle: differential across the two surfaces - the rendered field
+    against the Stop band's own wording at the same context and tier.
+    """
+    visible = re.sub(r'\x1b\[[0-9;]*m', '', sl.render({
+        'session_id': 'none',
+        'model': {'id': 'claude-opus-5-5', 'display_name': 'Opus 5.5'},
+        'workspace': {'current_dir': '/x/proj'},
+        'context_window': {'total_input_tokens': 517_000},
+        }))
+    assert '~$0.91/t' in visible
+    target = budget.target_tokens('opus-5-5')
+    _, message = cb.compose(517_000, 'opus-5-5', 2_160, target,
+                            cb.latched_handoff(target, 2_160, 0))
+    assert 'about $0.91 a turn' in message
 
 
 def test_the_decision_numbers_survive_a_narrow_pane():
@@ -889,10 +940,10 @@ def test_the_decision_numbers_survive_a_narrow_pane():
     """
     visible = re.sub(r'\x1b\[[0-9;]*m', '', sl.render({
         'session_id': 'none',
-        'model': {'id': 'claude-opus-5', 'display_name': 'Opus 5'},
+        'model': {'id': 'claude-opus-5-5', 'display_name': 'Opus 5'},
         'workspace': {'current_dir': '/x/myproject'},
         'context_window': {'total_input_tokens': 248_000},
         }))
-    assert visible.startswith('248K/350K')
+    assert visible.startswith('248K/352K')
     assert 'handoff in' in visible.split('$')[0]
     assert len(visible) <= 64

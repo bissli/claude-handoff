@@ -10,21 +10,28 @@ matching the reader's theme.
 
 Notes
 -----
-- Dollar figures come from ``scripts/budget.py``: cost of one turn is
-  ``context * price * cache_multiplier * calls_per_turn``, with the
-  cache multiplier 0.1 and 8.8 assistant calls per user turn.
+- Cache-read prices and the calls-per-turn rate are imported from
+  ``scripts/budget.py``, so a price change reaches the charts at the
+  same moment it reaches the hooks.
+- ``BASE_INPUT_PER_MTOK`` is the undiscounted input price, which the
+  cache-discount chart needs and the runtime never does.
 - Series colors (blue for Opus, orange for Fable, gray for full-price
   context lines) were validated for color-blind separation against
   GitHub's light (#ffffff) and dark (#0d1117) page surfaces.
 """
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-CALLS_PER_TURN = 8.8
-CACHE_MULTIPLIER = 0.1
-PRICE_PER_MTOK = {
-    'opus': 5.0,
-    'fable': 10.0,
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'scripts'))
+
+import budget  # noqa: E402  (path must be set before this import resolves)
+
+# Undiscounted input price per million tokens, for the full-price
+# comparison the cache-discount chart draws.
+BASE_INPUT_PER_MTOK = {
+    'opus-5-5': 4.0,
+    'fable-5-1': 10.0,
     }
 
 FONT = 'system-ui, -apple-system, Segoe UI, sans-serif'
@@ -110,15 +117,14 @@ def dollars_per_turn(context_tokens: float, tier: str) -> float:
     context_tokens : float
         Billed context carried into the turn.
     tier : str
-        Key of ``PRICE_PER_MTOK``.
+        Key of ``budget.CACHE_READ_PER_MTOK``.
 
     Returns
     -------
     float
-        Dollars for one turn, ``context * 0.1 * price * 8.8``.
+        Dollars for one turn, at that tier's cache-read price.
     """
-    return (context_tokens / 1e6 * CACHE_MULTIPLIER * PRICE_PER_MTOK[tier]
-            * CALLS_PER_TURN)
+    return budget.cost_per_turn(context_tokens, tier)
 
 
 def fmt(value: float) -> str:
@@ -321,8 +327,8 @@ def chart_cost_per_turn(t: Theme) -> str:
     """The headline chart: dollars per turn against context, both models.
     """
     x0, x1, y0, y1 = 56.0, 620.0, 60.0, 316.0
-    px_per_k = (x1 - x0) / 500
-    px_per_dollar = (y1 - y0) / 4.5
+    px_per_k = (x1 - x0) / 1000
+    px_per_dollar = (y1 - y0) / 2.5
 
     def sx(tokens_k: float) -> float:
         return x0 + tokens_k * px_per_k
@@ -334,31 +340,32 @@ def chart_cost_per_turn(t: Theme) -> str:
         text_el(x0, 24, 'What one turn costs', t.primary, 13.5, weight='600'),
         text_el(x0, 42, 'at cache-read prices, about 9 API calls per turn',
                 t.muted, 11.5),
-        dot_el(586, 20, t.orange, t.surface),
-        text_el(596, 24, 'Fable 5', t.secondary, 11.5),
-        dot_el(654, 20, t.blue, t.surface),
-        text_el(664, 24, 'Opus 5', t.secondary, 11.5),
+        dot_el(560, 20, t.orange, t.surface),
+        text_el(570, 24, 'Fable 5.1', t.secondary, 11.5),
+        dot_el(640, 20, t.blue, t.surface),
+        text_el(650, 24, 'Opus 5.5', t.secondary, 11.5),
         ]
-    for dollars in (1, 2, 3, 4):
-        body.extend((line_el(x0, sy(dollars), x1, sy(dollars), t.grid), text_el(x0 - 8, sy(dollars) + 4, f'${dollars}', t.muted, anchor='end')))
+    for dollars in (0.5, 1.0, 1.5, 2.0):
+        body.extend((line_el(x0, sy(dollars), x1, sy(dollars), t.grid), text_el(x0 - 8, sy(dollars) + 4, f'${dollars:.2f}', t.muted, anchor='end')))
     body.append(line_el(x0, y1, x1, y1, t.axis))
-    for tokens_k in (0, 100, 200, 300, 400, 500):
-        label = '0' if tokens_k == 0 else f'{tokens_k}K'
+    for tokens_k in (0, 200, 400, 600, 800, 1000):
+        label = ('0' if tokens_k == 0
+                 else '1M' if tokens_k == 1000 else f'{tokens_k}K')
         body.append(text_el(sx(tokens_k), y1 + 18, label, t.muted,
                             anchor='middle'))
     body.append(text_el((x0 + x1) / 2, y1 + 38, 'context (tokens)', t.muted,
                         anchor='middle'))
 
-    for dollars, label in ((1.54, '$1.54 target'), (2.20, '$2.20 over budget')):
+    for dollars, label in ((0.62, '$0.62 target'), (0.88, '$0.88 over budget')):
         body.extend((line_el(x0, sy(dollars), x1, sy(dollars), t.muted, 1.2, dash='5 4'), text_el(x0 + 4, sy(dollars) - 6, label, t.muted, 10.5)))
 
-    body.extend((series_el([(sx(0), sy(0)), (sx(500), sy(4.4))], t.orange), series_el([(sx(0), sy(0)), (sx(500), sy(2.2))], t.blue)))
+    body.extend((series_el([(sx(0), sy(0)), (sx(1000), sy(2.2))], t.orange), series_el([(sx(0), sy(0)), (sx(1000), sy(1.76))], t.blue)))
 
     crossings = (
-        (175, 1.54, t.orange, '175K'),
-        (250, 2.20, t.orange, '250K'),
-        (350, 1.54, t.blue, '350K'),
-        (500, 2.20, t.blue, ''),
+        (282, 0.62, t.orange, '282K'),
+        (400, 0.88, t.orange, '400K'),
+        (352, 0.62, t.blue, '352K'),
+        (500, 0.88, t.blue, ''),
         )
     for tokens_k, dollars, color, label in crossings:
         body.append(dot_el(sx(tokens_k), sy(dollars), color, t.surface))
@@ -366,7 +373,7 @@ def chart_cost_per_turn(t: Theme) -> str:
             body.append(text_el(sx(tokens_k), sy(dollars) + 18, label, t.muted,
                                 10.5, anchor='middle'))
 
-    body.extend((text_el(x1 + 12, sy(4.4) + 4, 'Fable 5', t.secondary, 11.5), text_el(x1 + 62, sy(4.4) + 4, '$4.40', t.primary, 12, weight='600'), text_el(x1 + 12, sy(2.2) + 4, 'Opus 5', t.secondary, 11.5), text_el(x1 + 62, sy(2.2) + 4, '$2.20', t.primary, 12, weight='600')))
+    body.extend((text_el(x1 + 12, sy(2.2) + 4, 'Fable 5.1', t.secondary, 11.5), text_el(x1 + 70, sy(2.2) + 4, '$2.20', t.primary, 12, weight='600'), text_el(x1 + 12, sy(1.76) + 4, 'Opus 5.5', t.secondary, 11.5), text_el(x1 + 70, sy(1.76) + 4, '$1.76', t.primary, 12, weight='600')))
     return svg_doc(360, body)
 
 
@@ -376,8 +383,8 @@ def chart_cache_discount(t: Theme) -> str:
     y0, y1 = 72.0, 300.0
     px_per_dollar = (y1 - y0) / 45
     panels = (
-        ('Opus 5  ($5 / M input)', 56.0, 330.0, 'opus', t.blue),
-        ('Fable 5  ($10 / M input)', 450.0, 724.0, 'fable', t.orange),
+        ('Opus 5.5  ($4 / M input)', 56.0, 330.0, 'opus-5-5', t.blue),
+        ('Fable 5.1  ($10 / M input)', 450.0, 724.0, 'fable-5-1', t.orange),
         )
 
     def sy(dollars: float) -> float:
@@ -404,7 +411,8 @@ def chart_cache_discount(t: Theme) -> str:
             body.append(text_el(sx(tokens_k), y1 + 18, label, t.muted,
                                 anchor='middle'))
 
-        full = dollars_per_turn(500_000, tier) / CACHE_MULTIPLIER
+        full = (500_000 / 1e6 * BASE_INPUT_PER_MTOK[tier]
+                * budget.CALLS_PER_TURN)
         cached = dollars_per_turn(500_000, tier)
         body.extend((series_el([(sx(0), sy(0)), (sx(500), sy(full))], t.gray), series_el([(sx(0), sy(0)), (sx(500), sy(cached))], color), dot_el(sx(500), sy(full), t.gray, t.surface), dot_el(sx(500), sy(cached), color, t.surface), text_el(px1 + 10, sy(full) - 2, 'full price', t.secondary, 11), text_el(px1 + 10, sy(full) + 12, f'${full:.2f}', t.primary, 12, weight='600'), text_el(px1 + 10, sy(cached) - 2, 'cached', t.secondary, 11), text_el(px1 + 10, sy(cached) + 12, f'${cached:.2f}', t.primary, 12, weight='600')))
     body.extend(text_el(48, sy(dollars) + 4, f'${dollars}', t.muted,
@@ -451,7 +459,7 @@ def session_costs(tier: str, target_k: float | None) -> list[float]:
     Parameters
     ----------
     tier : str
-        Key of ``PRICE_PER_MTOK``.
+        Key of ``budget.CACHE_READ_PER_MTOK``.
     target_k : float or None
         Hand off when context reaches this many thousand tokens; None
         never hands off.
@@ -483,10 +491,11 @@ def chart_session_cost(t: Theme) -> str:
     """Small multiples: cumulative session cost, held vs run on.
     """
     y0, y1 = 72.0, 300.0
-    px_per_dollar = (y1 - y0) / 150
+    px_per_dollar = (y1 - y0) / 40
     panels = (
-        ('Opus 5  (hand off at 350K)', 56.0, 330.0, 'opus', 350.0, t.blue),
-        ('Fable 5  (hand off at 207K)', 450.0, 724.0, 'fable', 206.6,
+        ('Opus 5.5  (hand off at 352K)', 56.0, 330.0, 'opus-5-5', 352.3,
+         t.blue),
+        ('Fable 5.1  (hand off at 282K)', 450.0, 724.0, 'fable-5-1', 281.8,
          t.orange),
         )
 
@@ -508,7 +517,7 @@ def chart_session_cost(t: Theme) -> str:
             return panel_x0 + turn * scale
 
         body.append(text_el(px0, 62, title, t.primary, 12, weight='600'))
-        body.extend(line_el(px0, sy(dollars), px1, sy(dollars), t.grid) for dollars in (50, 100, 150))
+        body.extend(line_el(px0, sy(dollars), px1, sy(dollars), t.grid) for dollars in (10, 20, 30, 40))
         body.append(line_el(px0, y1, px1, y1, t.axis))
         body.extend(text_el(sx(turn), y1 + 18, str(turn), t.muted,
                             anchor='middle') for turn in (0, 10, 20, 30, 40))
@@ -521,7 +530,7 @@ def chart_session_cost(t: Theme) -> str:
             body.append(series_el(points, color_used))
         body.extend((dot_el(sx(40), sy(run_on[-1]), t.gray, t.surface), dot_el(sx(40), sy(held[-1]), color, t.surface), text_el(px1 + 10, sy(run_on[-1]) - 2, 'run on', t.secondary, 11), text_el(px1 + 10, sy(run_on[-1]) + 12, f'${run_on[-1]:.0f}', t.primary, 12, weight='600'), text_el(px1 + 10, sy(held[-1]) - 2, 'hand off', t.secondary, 11), text_el(px1 + 10, sy(held[-1]) + 12, f'${held[-1]:.0f}', t.primary, 12, weight='600')))
     body.extend(text_el(48, sy(dollars) + 4, f'${dollars}', t.muted,
-                        anchor='end') for dollars in (50, 100, 150))
+                        anchor='end') for dollars in (10, 20, 30, 40))
     body.append(text_el(400, y1 + 38, 'turns', t.muted, anchor='middle'))
     return svg_doc(340, body)
 

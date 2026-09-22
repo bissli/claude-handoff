@@ -39,16 +39,17 @@ src="docs/resend-light.svg">
 </picture>
 
 Prompt caching is what makes this affordable at all: a token re-read
-from the cache costs a tenth of a fresh one. The two models where this
-is worth money are Opus 5, Claude Code's default, and Fable 5, the top
-tier, which bills exactly double.
+from the cache costs a twentieth of a fresh one on Opus 5.5 and a
+fortieth on Fable 5.1. Those are the two models where this is worth
+money: Opus 5.5, Claude Code's default, and Fable 5.1, the top tier,
+which bills two and a half times as much for a fresh token.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/cache-discount-dark.svg">
   <img alt="Two panels comparing the cost of one turn as context grows to
-500K. On Opus 5 the turn costs $22.00 at full price and $2.20 through the
-cache. On Fable 5 it costs $44.00 at full price and $4.40 through the
-cache."
+500K. On Opus 5.5 the turn costs $17.60 at full price and $0.88 through
+the cache. On Fable 5.1 it costs $44.00 at full price and $1.10 through
+the cache."
 src="docs/cache-discount-light.svg">
 </picture>
 
@@ -60,17 +61,18 @@ and the climb is still there:
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/cost-per-turn-dark.svg">
   <img alt="Cost of one turn against context, at cache-read prices.
-Fable 5 crosses the $1.54 target at 175K tokens and $2.20 at 250K.
-Opus 5 crosses $1.54 at 350K and $2.20 at 500K."
+Fable 5.1 crosses the $0.62 target at 282K tokens and $0.88 at 400K.
+Opus 5.5 crosses $0.62 at 352K and $0.88 at 500K."
 src="docs/cost-per-turn-light.svg">
 </picture>
 
-So the plugin holds a dollar line, not a token line: **$1.54 a turn** as
-the target and **$2.20 a turn** as over budget. Each model's token
-thresholds fall out of its own price, which is why Fable's gauge fills
-about twice as fast as Opus's. (Fable's held target lands at $1.82, not
-$1.54: a compaction restarts too high for a $1.54 target to leave
-working room. [The budget knob](#the-budget-knob) has the arithmetic.)
+So the plugin holds a dollar line, not a token line: **$0.62 a turn** as
+the target and **$0.88 a turn** as over budget. Each model's token
+thresholds fall out of its own price, which is why Fable 5.1's gauge
+fills a quarter faster than Opus 5.5's. (A model priced at the older
+cache-read rate cannot reach $0.62 a turn above the point a compaction
+restarts at, so its target is the compaction cycle's floor instead.
+[The budget knob](#the-budget-knob) has the arithmetic.)
 
 Every figure below already includes the cache discount. The bill being
 discussed is the discounted one.
@@ -81,34 +83,34 @@ One turn costs `context x cache-read rate x 8.8 calls`. The tables show
 that cost at each context size, the multiple of that model's own target
 cost, and what the same turn would have cost without the cache.
 
-**Opus 5** - cache read $0.50 per million tokens, target $1.54 at 350K:
+**Opus 5.5** - cache read $0.20 per million tokens, target $0.62 at
+352K:
 
 | context           | one turn | vs target | without cache | cache saved |
 | ----------------- | --------: | ---------: | -------------: | -----------: |
-| 100K              | $0.44    | 0.3x      | $4.40         | $3.96       |
-| 200K              | $0.88    | 0.6x      | $8.80         | $7.92       |
-| **350K** - target | $1.54    | 1.0x      | $15.40        | $13.86      |
-| 400K              | $1.76    | 1.1x      | $17.60        | $15.84      |
-| **500K** - over   | $2.20    | 1.4x      | $22.00        | $19.80      |
-| 700K              | $3.08    | 2.0x      | $30.80        | $27.72      |
-| 1M                | $4.40    | 2.9x      | $44.00        | $39.60      |
+| 100K              | $0.18    | 0.3x      | $3.52         | $3.34       |
+| 200K              | $0.35    | 0.6x      | $7.04         | $6.69       |
+| **352K** - target | $0.62    | 1.0x      | $12.39        | $11.77      |
+| 400K              | $0.70    | 1.1x      | $14.08        | $13.38      |
+| **500K** - over   | $0.88    | 1.4x      | $17.60        | $16.72      |
+| 700K              | $1.23    | 2.0x      | $24.64        | $23.41      |
+| 1M                | $1.76    | 2.8x      | $35.20        | $33.44      |
 
-**Fable 5** - cache read $1.00 per million tokens, target $1.82 at
-206.6K:
+**Fable 5.1** - cache read $0.25 per million tokens, target $0.62 at
+282K:
 
-| context             | one turn | vs target | without cache | cache saved |
-| ------------------- | --------: | ---------: | -------------: | -----------: |
-| 100K                | $0.88    | 0.5x      | $8.80         | $7.92       |
-| **206.6K** - target | $1.82    | 1.0x      | $18.18        | $16.36      |
-| **250K** - over     | $2.20    | 1.2x      | $22.00        | $19.80      |
-| 400K                | $3.52    | 1.9x      | $35.20        | $31.68      |
-| 500K                | $4.40    | 2.4x      | $44.00        | $39.60      |
-| 700K                | $6.16    | 3.4x      | $61.60        | $55.44      |
-| 1M                  | $8.80    | 4.8x      | $88.00        | $79.20      |
+| context           | one turn | vs target | without cache | cache saved |
+| ----------------- | --------: | ---------: | -------------: | -----------: |
+| 100K              | $0.22    | 0.4x      | $8.80         | $8.58       |
+| **282K** - target | $0.62    | 1.0x      | $24.82        | $24.20      |
+| **400K** - over   | $0.88    | 1.4x      | $35.20        | $34.32      |
+| 500K              | $1.10    | 1.8x      | $44.00        | $42.90      |
+| 700K              | $1.54    | 2.5x      | $61.60        | $60.06      |
+| 1M                | $2.20    | 3.5x      | $88.00        | $85.80      |
 
-Read the Fable row you are sitting at: a session parked at 400K pays
-$3.52 for every further turn - 1.9x what it would pay at its target -
-and the cache is already saving it $31.68 a turn. Both columns grow
+Read the Fable 5.1 row you are sitting at: a session parked at 500K pays
+$1.10 for every further turn - 1.8x what it would pay at its target -
+and the cache is already saving it $42.90 a turn. Both columns grow
 together, because both are the same line at different prices.
 
 ## What a whole session costs
@@ -120,9 +122,9 @@ resets the line; running on rides it up.
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/session-cost-dark.svg">
   <img alt="Cumulative cost of a 40-turn session, growing 17K a turn.
-On Opus 5, running on reaches $70 while handing off at 350K holds it to
-$34. On Fable 5, running on reaches $141 while handing off at 207K holds
-it to $46."
+On Opus 5.5, running on reaches $28 while handing off at 352K holds it
+to $14. On Fable 5.1, running on reaches $35 while handing off at 282K
+holds it to $15."
 src="docs/session-cost-light.svg">
 </picture>
 
@@ -133,12 +135,12 @@ finished work, not only fewer dollars:
 
 | 40 turns on | hand off at target | run on to 732K | held vs run on |
 | ----------- | ------------------: | --------------: | --------------: |
-| Opus 5      | $34                | $70            | -52%           |
-| Fable 5     | $46                | $141           | -67%           |
+| Opus 5.5    | $14                | $28            | -52%           |
+| Fable 5.1   | $15                | $35            | -57%           |
 
 The cache and the handoff attack different halves of the bill. On the
-run-on Fable session the cache already turned a would-be $1,410 into
-$141; handing off is what turns the $141 into $46. Neither substitutes
+run-on Fable 5.1 session the cache already turned a would-be $1,410 into
+$35; handing off is what turns the $35 into $15. Neither substitutes
 for the other.
 
 ## The exit: /handoff
@@ -213,11 +215,12 @@ session chose.)
   setting moves every thread at once.
 - Run again a session later, it updates the same folder: the cursor
   rewritten, the plan ticked off, decisions and dead ends appended,
-  the previous cycle archived. The read-time payload stays flat - a
-  hundred cycles in, the file is the size it was at cycle three -
-  because what is no longer live is counted, not printed, and what is
-  read at resume is a spec's anchored span, its size beside it, never
-  a whole file.
+  the previous cycle archived. What is no longer live is counted, not
+  printed, and what is read at resume is a spec's anchored span, its
+  size beside it, never a whole file. The file grows with what stays
+  live, not with the cycle count: a thread that supersedes as it goes
+  holds its size, and one that accumulates distinct live items pays
+  about 58 tokens a cycle for them.
 - A thread ends with `/handoff done <task-name>`. The folder survives
   whole and every query verb still answers it, but `/handoff list`
   stops showing it and the next `hq begin` refuses it. `hq list --done`
@@ -275,15 +278,15 @@ current.
 At the end of a turn, once as each line is crossed - approaching the
 target, at it, over budget:
 
-> Context 291K of a 350K budget, growing 19K a turn. About 4 turns of
+> Context 293K of a 352K budget, growing 19K a turn. About 4 turns of
 > room left - a good point to run /handoff.
 
-> Context 362K, at the 350K budget. Run /handoff, then run it again in a
+> Context 362K, at the 352K budget. Run /handoff, then run it again in a
 > fresh session to read it back: that restarts near 69K plus the file,
 > against 123K for /compact. Compact instead only to carry the tail of
 > this conversation, which buys about 12 more turns.
 
-> Context 517K, about $2.27 a turn - 1.5x the $1.54 target. Every
+> Context 517K, about $0.91 a turn - 1.5x the $0.62 target. Every
 > further turn pays to re-read history you are not using. Run /handoff.
 
 The last two also raise a desktop notification.
@@ -291,23 +294,23 @@ The last two also raise a desktop notification.
 ## The budget knob
 
 One knob, `COST_PER_TURN_TARGET` in `scripts/budget.py`, in dollars per
-turn. Each model's token thresholds are derived from it; the
-parenthetical figures are where a quiet session settles:
+turn. Each model's token thresholds are derived from it:
 
-| model   | target                    | over budget | $/turn at target      |
-| ------- | ------------------------- | ----------- | --------------------- |
-| Opus 5  | 350,000                   | 500,000     | $1.54                 |
-| Fable 5 | 206,600 (down to 175,000) | 250,000     | $1.82 (down to $1.54) |
+| model     | target  | over budget | $/turn at target |
+| --------- | ------- | ----------- | ---------------- |
+| Opus 5.5  | 352,273 | 500,000     | $0.62            |
+| Fable 5.1 | 281,818 | 400,000     | $0.62            |
 
-Cost parity would put Fable's target at 175,000, but a compaction lands
-near 123,000, so a target there leaves under four turns of room. Its
-target is therefore the larger of what cost wants and what a five-turn
-compaction cycle needs: 206,600, which is $1.82 a turn. That gap is the
-real price of a Fable session you keep compacting, stated rather than
-hidden. A quiet session pulls the target down toward parity; it is
-latched per session and never rises.
+Cost parity puts both current models clear of the compaction cycle's
+floor, so each sits on its dollar line. A model billed at the older
+cache-read rate does not: an Opus 5 turn costs $0.62 at 140,909 tokens,
+below the 206,600 a five-turn compaction cycle needs, so its target is
+that floor and a turn there costs $0.91. The gap is the real price of
+staying on a model priced at the older rate, stated rather than hidden.
+A quiet session pulls the target down toward whichever of the two
+binds; it is latched per session and never rises.
 
-Over budget stays a dollar figure ($2.20) and is never scaled up with
+Over budget stays a dollar figure ($0.88) and is never scaled up with
 the target, so a heavy session cannot march the loudest warning out to
 $5 a turn. Sonnet and Haiku are deliberately absent: a long session on
 either costs little enough that interrupting it would cost more
@@ -342,39 +345,45 @@ handoff point and inside an open cycle.
 
 ## The math
 
-Anthropic list prices (August 2026), per million tokens:
+Anthropic list prices (September 2026), per million tokens:
 
-| model   | input  | cache read | cache write | output |
-| ------- | ------: | ----------: | -----------: | ------: |
-| Opus 5  | $5.00  | $0.50      | $6.25       | $25.00 |
-| Fable 5 | $10.00 | $1.00      | $12.50      | $50.00 |
+| model     | input  | cache read | cache write | output |
+| --------- | ------: | ----------: | -----------: | ------: |
+| Opus 5.5  | $4.00  | $0.20      | $5.00       | $20.00 |
+| Fable 5.1 | $10.00 | $0.25      | $12.50      | $50.00 |
+
+A cache read is a multiple of the input price, and the multiple is not
+the same everywhere: 0.05 on Opus 5.5 and 0.025 on Fable 5.1, against
+the 0.1 every earlier model charges. The plugin stores the product, so
+a model matched to its family rather than its own generation is priced
+at up to two and a half times what it bills.
 
 The plugin's cost model:
 
 ```
-one turn = context x cache-read rate x calls per turn
-         = context / 1M x (0.1 x input rate) x 8.8
+one turn = context x cache-read price x calls per turn
+         = context / 1M x cache-read $/M x 8.8
 ```
 
 Worked examples:
 
 ```
-Opus  at 350K:  0.35 x $0.50 x 8.8 = $1.54 a turn
-Fable at 400K:  0.40 x $1.00 x 8.8 = $3.52 a turn
+Opus 5.5  at 352K:  0.352 x $0.20 x 8.8 = $0.62 a turn
+Fable 5.1 at 400K:  0.400 x $0.25 x 8.8 = $0.88 a turn
 ```
 
 And inverted, to set the thresholds:
 
 ```
-target tokens = budget / (cache-read rate x 8.8 / 1M)
-Opus:  $1.54 / ($0.50 x 8.8 / 1M) = 350,000
-Fable: $2.20 / ($1.00 x 8.8 / 1M) = 250,000  (over-budget line)
+target tokens = budget / (cache-read $/M x 8.8 / 1M)
+Opus 5.5:  $0.62 / ($0.20 x 8.8 / 1M) = 352,273
+Fable 5.1: $0.88 / ($0.25 x 8.8 / 1M) = 400,000  (over-budget line)
 ```
 
 Two costs are deliberately left out. Writing a turn's new tokens into
 the cache (~17K at 1.25x input) and the output tokens themselves are
-both real, but neither grows with context - they add a roughly flat few
-tenths of a dollar to every turn regardless of size. Deep in a session,
+both real, but neither grows with context - they add a roughly flat
+fraction of a dollar to every turn regardless of size. Deep in a session,
 cache reads are nearly the whole bill, and they are the only part that
 climbs, so they are the part the thresholds track.
 
@@ -396,10 +405,10 @@ hook re-measures growth per session:
 | call           | one API request; each tool use is one, ~9 per turn                                                                |
 | context        | everything re-sent with every call: system prompt, tools, conversation                                            |
 | billed context | `cache_read + cache_creation + uncached_input` on the last call                                                   |
-| cache read     | a re-sent token served from the prompt cache, at 10% of input price                                               |
+| cache read     | a re-sent token served from the prompt cache, at 5% of input price on Opus 5.5, 2.5% on Fable 5.1, 10% elsewhere   |
 | cache write    | a new token added to the cache, at 125% of input price                                                            |
-| target         | context where a turn costs $1.54, lifted where the compaction cycle needs more ($1.82 on Fable); the gauge's 100% |
-| over budget    | context where a turn costs $2.20; never scaled up                                                                 |
+| target         | context where a turn costs $0.62, lifted where the compaction cycle needs more; the gauge's 100%                  |
+| over budget    | context where a turn costs $0.88; never scaled up                                                                 |
 | reserve        | room held below the target so the handoff itself still fits                                                       |
 | floor          | what a session is billed before any conversation: ~69K                                                            |
 | handoff        | write state to a file, start fresh; restarts at floor + file                                                      |

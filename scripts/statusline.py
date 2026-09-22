@@ -180,7 +180,7 @@ def render(payload: dict[str, Any]) -> str:
 
     cost = budget.cost_per_turn(context, tier)
     size = f'{context // 1000}K/{target // 1000}K'
-    tail = f'{DIM}${cost:.2f}/t  {tier} {where}{RESET}'
+    tail = f'{DIM}~${cost:.2f}/t {tier} {where}{RESET}'
 
     if context >= target:
         # No bar past the budget: it would read the same at 1.1x as at

@@ -8,25 +8,30 @@ compacted there. One knob therefore moves every model at once.
 
 Notes
 -----
-- Cost per turn is ``context * 0.1 * price_per_mtok * calls_per_turn``.
-  The 0.1 is the cache-read rate; a turn deep in a session is almost
-  entirely cache reads, so this is the whole bill to within a few
-  percent.
+- Cost per turn is ``context * cache_read_per_mtok * calls_per_turn``.
+  A turn deep in a session is almost entirely cache reads, so this is
+  the whole bill to within a few percent.
 - Only the expensive models are listed. A long Sonnet or Haiku session
   costs little enough that interrupting one to talk about money would
   spend more attention than it saves, so they are left alone.
 """
 
 # Dollars per user turn. Everything else follows from this.
-COST_PER_TURN_TARGET = 1.54
-COST_PER_TURN_LIMIT = 2.20
+COST_PER_TURN_TARGET = 0.62
+COST_PER_TURN_LIMIT = 0.88
 
-# Base input price per million tokens.
-PRICE_PER_MTOK = {
-    'fable': 10.0,
-    'opus': 5.0,
+# Notes:
+# - Keys match as substrings of the model id, most specific first, so
+#   a generation priced on its own is found before its family.
+# - The cache-read price is stored, not the base price and the
+#   multiplier against it, because that multiplier varies by model:
+#   0.05 on Opus 5.5 and 0.025 on Fable 5.1 against 0.1 elsewhere.
+CACHE_READ_PER_MTOK = {
+    'fable-5-1': 0.25,
+    'fable': 1.00,
+    'opus-5-5': 0.20,
+    'opus': 0.50,
     }
-CACHE_READ_MULTIPLIER = 0.1
 
 # Assistant calls per user turn, measured across 604 compaction cycles.
 CALLS_PER_TURN = 8.8
@@ -79,11 +84,11 @@ def model_tier(model: str) -> str | None:
     Returns
     -------
     str or None
-        One of the keys of ``PRICE_PER_MTOK``, or None for a model this
+        One of the keys of ``CACHE_READ_PER_MTOK``, or None for a model this
         plugin has nothing worth saying about.
     """
     lowered = model.lower()
-    for tier in PRICE_PER_MTOK:
+    for tier in CACHE_READ_PER_MTOK:
         if tier in lowered:
             return tier
     return None
@@ -104,7 +109,7 @@ def cost_per_turn(context: int, tier: str) -> float:
     float
         Cost of a single user turn, in dollars.
     """
-    return (context / 1e6 * CACHE_READ_MULTIPLIER * PRICE_PER_MTOK[tier]
+    return (context / 1e6 * CACHE_READ_PER_MTOK[tier]
             * CALLS_PER_TURN)
 
 
@@ -129,8 +134,7 @@ def tokens_for_cost(budget: float, tier: str) -> int:
       number often enough that truncating shifts a threshold down by one
       token, which is invisible in use and maddening in a test.
     """
-    per_token = (CACHE_READ_MULTIPLIER * PRICE_PER_MTOK[tier]
-                 * CALLS_PER_TURN / 1e6)
+    per_token = CACHE_READ_PER_MTOK[tier] * CALLS_PER_TURN / 1e6
     return round(budget / per_token)
 
 
