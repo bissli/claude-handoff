@@ -188,7 +188,9 @@ def test_gate_fires_on_a_heredoc_and_a_redirect_write(monkeypatch, capsys,
     """Verify an armed session with an unread gated path is reported.
 
     Mutation: dropping the read_before/status filter, or naming the row
-    without its span, so the message cannot be acted on.
+    without its span, so the message cannot be acted on; or reporting a
+    permission decision beside the advisory, which skips the user's
+    prompt on the write the gate is warning about.
     Oracle: hand-computed - SPEC.md's 'Scope' heading spans lines 3-7 of
     the fixture, and NOTES.md and OLD.md must not appear.
     """
@@ -201,8 +203,7 @@ def test_gate_fires_on_a_heredoc_and_a_redirect_write(monkeypatch, capsys,
     out = _run(monkeypatch, capsys, handoff_gate, payload)
     text = _context(out)
     assert json.loads(out)['hookSpecificOutput'] == {
-        'hookEventName': 'PreToolUse', 'permissionDecision': 'allow',
-        'additionalContext': text,
+        'hookEventName': 'PreToolUse', 'additionalContext': text,
         }
     assert text == (
         f'handoff gate: {_SLUG}: 1 gated path(s) not read this session'
@@ -628,9 +629,12 @@ def test_gate_deny_path_behind_env(monkeypatch, capsys, tmp_path):
     """Verify HQ_GATE_DENY=1 blocks the call with the same message.
 
     Mutation: emitting the deny form by default, which stops the tool
-    call for every user who never asked for a hard block.
-    Oracle: differential - the deny reason must equal the allow context
-    from the identical payload, and the default must be allow.
+    call for every user who never asked for a hard block; or reporting a
+    permission decision by default, which skips the user's prompt on the
+    very call the gate has doubts about.
+    Oracle: differential - the deny reason must equal the report's
+    context from the identical payload, and the default report must
+    carry no permission decision at all.
     """
     root, folder = _handoff_root(tmp_path)
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
@@ -642,13 +646,13 @@ def test_gate_deny_path_behind_env(monkeypatch, capsys, tmp_path):
                            {'file_path': 'src/app.py'})
         return _run(monkeypatch, capsys, handoff_gate, payload)
 
-    allowed = json.loads(run('d1'))['hookSpecificOutput']
+    reported = json.loads(run('d1'))['hookSpecificOutput']
     monkeypatch.setenv('HQ_GATE_DENY', '1')
     denied = json.loads(run('d2'))['hookSpecificOutput']
-    assert allowed['permissionDecision'] == 'allow'
+    assert 'permissionDecision' not in reported
     assert denied == {
         'hookEventName': 'PreToolUse', 'permissionDecision': 'deny',
-        'permissionDecisionReason': allowed['additionalContext'],
+        'permissionDecisionReason': reported['additionalContext'],
         }
 
 

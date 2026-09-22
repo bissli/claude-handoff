@@ -405,10 +405,14 @@ def _emit(message: str) -> int:
     Returns
     -------
     int
-        Always 0. The hook allows the call whatever it reports.
+        Always 0. A report decides nothing; only ``HQ_GATE_DENY`` does.
 
     Notes
     -----
+    - A report carries ``additionalContext`` and no permission
+      decision, so the call takes the approval path it would have
+      taken unhooked. ``allow`` would skip the user's prompt for the
+      whole tool call, on exactly the calls the gate has doubts about.
     - ``HQ_GATE_DENY=1`` turns the report into a refusal, and is the
       one operator switch that blocks the call.
     - The ``handoff gate:`` prefix belongs here, the one place that
@@ -424,7 +428,6 @@ def _emit(message: str) -> int:
                     'permissionDecisionReason': message}
     else:
         decision = {'hookEventName': 'PreToolUse',
-                    'permissionDecision': 'allow',
                     'additionalContext': message}
     json.dump({'hookSpecificOutput': decision}, sys.stdout)
     return 0
@@ -442,20 +445,26 @@ def gate(payload: dict[str, Any]) -> int:
     Returns
     -------
     int
-        Always 0. The hook allows the call either way; the message it
-        prints is the whole effect.
+        Always 0. The message is the whole effect, unless
+        ``HQ_GATE_DENY`` turns it into a refusal.
 
     Notes
     -----
     - Session state lives beside the context-budget state, keyed
       ``<session>.handoff.json`` under HQ_STATE_DIR, and holds the
       transcript offset already scanned so no call rescans from 0, and
-      ``reported``, the stored paths already named this session.
+      ``reported``, the resolved paths already named this session. A
+      resolved path keys one artifact of one thread of one project,
+      where a stored spelling such as ``SPEC.md`` keys several.
+    - Once-only reporting is the advisory's rule, not the refusal's:
+      under ``HQ_GATE_DENY`` a path stays out of ``reported``, so
+      every retry of an unread write is refused again.
     - The Stop hook writes the ``stop`` key of that same file, so the
       whole document is read and rewritten, never replaced.
     """
     if os.environ.get('HQ_GATE') == '0':
         return 0
+    deny = os.environ.get('HQ_GATE_DENY') == '1'
     name = hq.HANDOFF_DIRNAME
     cwd = str(payload.get('cwd') or '')
     tool = str(payload.get('tool_name') or '')
@@ -604,7 +613,7 @@ def gate(payload: dict[str, Any]) -> int:
             receipts = []
         opened = {_resolved(entry, cwd) for entry in reads}
         tokens = [set(_TOKEN_SPLIT.split(entry)) for entry in segments]
-        missing: list[tuple[str, str]] = []
+        missing: list[tuple[str, str, bool]] = []
         for row in rows.values():
             if row['status'] != 'live' or row['read_before'] not in hq._GATE_RB:
                 continue
@@ -614,7 +623,7 @@ def gate(payload: dict[str, Any]) -> int:
             else:
                 target = folder / stored
             absolute = os.path.normpath(str(target))
-            if stored in reported:
+            if absolute in reported and not deny:
                 continue
             if row['read_before'] == 'edit':
                 if absolute not in targets:
@@ -629,6 +638,7 @@ def gate(payload: dict[str, Any]) -> int:
             tail = f' {folder.name} {stored}'
             if any(line.endswith(tail) for line in receipts):
                 continue
+            unresolved: list[str] = []
             if row['where'] == '-':
                 span = 'whole file'
             else:
@@ -636,7 +646,8 @@ def gate(payload: dict[str, Any]) -> int:
                     text = target.read_text(encoding='utf-8', errors='replace')
                 except OSError:
                     text = ''
-                spans, _ = hq.resolve_where(text, hq._split_where(row['where']))
+                spans, unresolved = hq.resolve_where(
+                    text, hq._split_where(row['where']))
                 # The resolved list follows the anchor order, not the
                 # file's, so a joined list of every span reads out of
                 # order. The count carries the extent instead.
@@ -647,13 +658,19 @@ def gate(payload: dict[str, Any]) -> int:
                     span = f'lines {spans[0][0]}-{spans[0][1]}'
                 else:
                     span = f'lines {spans[0][0]}-{spans[0][1]} of {distinct} spans'
-            missing.append((stored, span))
-        reported.extend(path for path, _ in missing)
+            missing.append((stored, span, bool(unresolved)))
+            if not deny:
+                reported.append(absolute)
         if missing:
-            listed = ', '.join(f'{path} ({span})' for path, span in missing)
+            listed = ', '.join(
+                f'{path} ({span})' for path, span, _ in missing)
+            # A row holding an unresolved anchor earns no receipt from
+            # the anchored read, whatever its siblings print, so the
+            # whole file is the remedy that reaches its content.
+            recover = ' --whole' if missing[0][2] else ''
             message = (f'{folder.name}: {len(missing)} gated '
                        f'path(s) not read this session - {listed}; read each '
-                       f'or run: hq read {folder.name} {missing[0][0]}')
+                       f'or run: hq read {folder.name} {missing[0][0]}{recover}')
 
     state['gate'] = {
         'offset': offset,
