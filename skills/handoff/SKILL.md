@@ -109,10 +109,12 @@ Guess neither the verb nor the target. Where either is ambiguous,
 say so, list the candidates, and stop - touch nothing.
 
 An argument is always a folder under `.handoff/`, never the
-`HANDOFF.md` inside, and resolves the same way everywhere: exact name,
-else a unique prefix of the `.handoff/*/` names, else list the
-candidates and stop (write: create the folder). A target exists when
-its `HANDOFF.md` exists.
+`HANDOFF.md` inside. Read, check, done, when, diff, artifacts, and
+standing resolve it the same way: exact name, else a unique prefix of
+the `.handoff/*/` names, else list the candidates and stop. A write
+resolves on the exact name alone and creates the folder where none
+exists, so a longer neighbor never claims the slug typed. A target
+exists when its `HANDOFF.md` exists.
 
 ## write
 

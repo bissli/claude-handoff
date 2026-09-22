@@ -713,3 +713,21 @@ def test_a_handoff_that_is_a_directory_stops_begin_and_finish(
         rc, out, _ = _run(verb)
         assert rc == 1
         assert 'hq: HANDOFF.md is a directory' in out
+
+
+def test_begin_on_a_new_slug_creates_it_not_a_prefix_match(
+        tmp_path, monkeypatch):
+    """Begin on a slug with no exact folder creates that folder.
+
+    Mutation: the single-candidate prefix branch running before the
+    missing_ok branch in _find_folder, so begin 'auth' while 'authz'
+    exists opens authz instead of creating auth.
+    Oracle: after begin 'auth' with 'authz' already present, auth is a
+    directory and authz carries no lock written by this begin.
+    """
+    handoffs = _new_root(tmp_path, monkeypatch).parent
+    handoffs.mkdir(parents=True, exist_ok=True)
+    (handoffs / 'authz').mkdir()
+    rc, _, _ = _run(['begin', 'auth'])
+    assert rc == 0
+    assert (handoffs / 'auth').is_dir()

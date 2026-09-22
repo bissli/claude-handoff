@@ -2194,8 +2194,8 @@ def _find_folder(
     slug : str
         Exact folder name or a unique prefix under ``root/.handoff/``.
     missing_ok : bool, default False
-        When True, return ``.handoff/<slug>`` instead of exiting when no
-        folder matches; still exits on ambiguity. ``begin`` creates it.
+        When True, return ``.handoff/<slug>`` whenever no folder bears
+        that exact name, ahead of any prefix match. ``begin`` creates it.
 
     Returns
     -------
@@ -2207,6 +2207,10 @@ def _find_folder(
     - The slug is one path component: ``[A-Za-z0-9][A-Za-z0-9._-]*``. It
       is joined onto ``.handoff/`` unquoted, so ``..`` or an embedded
       separator would place a handoff folder outside ``.handoff/``.
+    - Prefix resolution serves the verbs that resume a thread, which can
+      only mean one already on disk. ``begin`` is the verb that creates,
+      so it takes the slug as typed and a longer neighbor never claims
+      it: ``begin auth`` beside ``authz`` opens ``auth``.
     - Nothing here writes: a read-only verb on a mistyped root leaves
       the disk as it found it, and ``begin`` creates the folder itself.
     """
@@ -2218,6 +2222,8 @@ def _find_folder(
     handoffs = root / HANDOFF_DIRNAME
     exact = handoffs / slug
     if exact.is_dir():
+        return exact
+    if missing_ok:
         return exact
     siblings = sorted(handoffs.iterdir()) if handoffs.is_dir() else []
     candidates = [
