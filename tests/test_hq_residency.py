@@ -405,3 +405,31 @@ def test_a_held_decision_body_names_a_command_that_returns_it(
     assert '<' not in ' '.join(argv)
     assert hq.main(argv[1:]) == 0
     assert capsys.readouterr().out.strip() == f'{resident} {body}'
+
+
+def test_supersede_refuses_a_replacement_that_is_not_live(
+        tmp_path, monkeypatch, capsys):
+    """Supersede must leave at least one live item in any non-empty kind.
+
+    Mutation: the liveness check for new_id absent from _verb_supersede,
+    so superseding c02 by c01 when c01 was itself superseded by c02 adds
+    both ids to the superseded set and empties the constraints block.
+    Oracle: after c01->c02 then c02->c01, hq standing still prints at
+    least one constraint; the two-step cycle is the discriminating case
+    because a single supersession always leaves c02 visible.
+    """
+    folder = _folder(tmp_path, monkeypatch)
+    assert hq.main(['begin', _SLUG]) == 0
+    assert hq.main([
+        'note', _SLUG, 'constraint', '--headline', 'Never retry',
+        'Retry reopens the charge window.']) == 0
+    assert hq.main([
+        'note', _SLUG, 'constraint', '--headline', 'Always confirm',
+        'Confirmation closes the charge window.']) == 0
+    assert hq.main(['supersede', _SLUG, 'c01', 'c02']) == 0
+    capsys.readouterr()
+    hq.main(['supersede', _SLUG, 'c02', 'c01'])
+    capsys.readouterr()
+    assert hq.main(['standing', _SLUG]) == 0
+    out = capsys.readouterr().out
+    assert any(ln.startswith('[c') for ln in out.splitlines())

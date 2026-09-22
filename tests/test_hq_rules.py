@@ -1230,3 +1230,89 @@ def test_standing_sorts_each_kind_by_cycle_descending_and_stably():
         '[c05] (c1) **Never log tokens** Not at debug.',
         '[c02] (c1) **Cache the nonce** The verifier keeps it.',
         ]
+
+
+# --- defect regression tests ------------------------------------------
+
+
+def test_drain_unfiled_preserves_words_before_an_inline_bold_span():
+    """Words appearing before a bold span in an Unfiled bullet must not be lost.
+
+    Mutation: re.search in place of re.match for the bold probe, so a bold
+    span found anywhere in the content is used as the headline, discarding
+    every word that precedes it.
+    Oracle: hand-computed - 'retry budget' precedes **must not** in the
+    constraint bullet; after drain the combined headline+body must still
+    contain 'retry'.
+    """
+    cursor = (
+        '## Task\nDo work.\n'
+        '## Unfiled\n'
+        '- constraint: The retry budget **must not** exceed three attempts per host.\n'
+        )
+    items, _, refusal = hq.drain_unfiled(cursor)
+    assert refusal is None
+    assert len(items) == 1
+    kind, headline, body = items[0]
+    assert kind == 'constraint'
+    full_text = headline + ' ' + body
+    assert 'retry' in full_text, (
+        f'word before bold span lost; got headline={headline!r} body={body!r}')
+
+
+def test_resolve_where_ignores_a_hash_line_inside_a_fenced_code_block():
+    """A # line inside a ``` fence is not a section heading.
+
+    Mutation: fence state not tracked, so every line starting with # is
+    treated as a heading; the in-fence comment terminates section 1 early
+    and resolves as section 2.
+    Oracle: hand-computed - the only real heading is '# 1. Section' at
+    line 1; s1 must span through line 7 (end of file) and s2 must be
+    unresolved because no real section 2 exists outside the fence.
+    """
+    text = (
+        '# 1. Section\n'
+        'A contract sentence.\n'
+        '```sh\n'
+        '# 2. run it like this\n'
+        'some command\n'
+        '```\n'
+        'more text\n'
+        )
+    spans_s1, _ = hq.resolve_where(text, ['s1'])
+    _, unresolved_s2 = hq.resolve_where(text, ['s2'])
+    assert spans_s1 == [(1, 7)], (
+        f's1 span truncated by in-fence heading; got {spans_s1}')
+    assert 's2' in unresolved_s2, (
+        f's2 resolved to in-fence comment; unresolved={unresolved_s2}')
+
+
+def test_resolve_where_returns_non_overlapping_spans_for_a_parent_and_child_anchor():
+    """Spans for a parent section and its nested subsection must not overlap.
+
+    Mutation: each anchor resolved independently with no containment check,
+    so a parent+child pair yields spans sharing lines and the caller
+    double-counts every line in the child.
+    Oracle: hand-computed - '## 2. Design' at line 3 spans (3, 8) and
+    '### Notes' at line 6 spans (6, 8), so the spans cover nine lines
+    between them where the file holds six. Merging the pair and
+    trimming the parent both satisfy the count; neither is required.
+    """
+    text = (
+        '# Doc\n'
+        '\n'
+        '## 2. Design\n'
+        'contract text\n'
+        '\n'
+        '### Notes\n'
+        'note 1\n'
+        'note 2\n'
+        )
+    spans, unresolved = hq.resolve_where(text, ['s2', 'Notes'])
+    assert unresolved == []
+    counted = sum(end - beg + 1 for beg, end in spans)
+    distinct = len({
+        line for beg, end in spans for line in range(beg, end + 1)})
+    assert counted == distinct, (
+        f'spans {spans} cover {counted} lines over {distinct} distinct'
+        ' - the shared lines print and count twice')

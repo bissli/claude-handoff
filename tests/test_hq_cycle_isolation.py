@@ -161,3 +161,37 @@ def test_an_unwritable_path_leaves_finish_unchanged(
     for name, data in before.items():
         if name.startswith('cycles/c') and name.endswith('.md'):
             assert (folder / name).read_bytes() == data
+
+
+def test_begin_keeps_the_history_a_lost_handoff_leaves_behind(
+        tmp_path, monkeypatch):
+    """A folder still holding cycles is not new, whatever it has lost.
+
+    Mutation: begin's create branch keyed on HANDOFF.md and ledger.tsv
+    alone, so a folder that still carries standing.md, the manifest,
+    and its archives is rebuilt as empty and both append-only files are
+    truncated.
+    Oracle: the bytes of standing.md and the manifest rows read before
+    the loss, compared with what survives the begin.
+    """
+    folder = _new_root(tmp_path, monkeypatch)
+    assert _run([
+        'note', _SLUG, 'decision', '--headline', 'Keep the bound',
+        'Five tries only.'])[0] == 0
+    assert _run(['finish', _SLUG, '--log', 'seed cycle'])[0] == 0
+    cycles = folder / 'cycles'
+    standing_before = (folder / 'standing.md').read_bytes()
+    manifest_before = hq._read_tsv(cycles / 'manifest.tsv', hq.MANIFEST_FIELDS)
+    archives_before = sorted(path.name for path in cycles.glob('c*.md'))
+    assert standing_before
+    assert manifest_before
+    assert archives_before
+    (folder / 'HANDOFF.md').unlink()
+    (folder / 'ledger.tsv').unlink()
+
+    _run(['begin', _SLUG])
+
+    assert (folder / 'standing.md').read_bytes() == standing_before
+    manifest_after = hq._read_tsv(cycles / 'manifest.tsv', hq.MANIFEST_FIELDS)
+    assert manifest_after == manifest_before
+    assert sorted(path.name for path in cycles.glob('c*.md')) == archives_before
