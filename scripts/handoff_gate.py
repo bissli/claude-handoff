@@ -287,8 +287,12 @@ def read_segments(command: str, printed: bool = False) -> list[str]:
       the same standard ``hq read`` holds itself to when it withholds a
       receipt.
     """
+    # `&>` sends both streams to the file, and the segment split cuts
+    # on its `&`, which would leave the read verb in a segment with no
+    # redirect in it. Spelling it `1>` keeps the two together.
+    text = _strip_heredocs(command).replace('&>', '1>')
     kept: list[str] = []
-    for segment in _SEGMENT_SPLIT.split(_strip_heredocs(command)):
+    for segment in _SEGMENT_SPLIT.split(text):
         if not _READ_SEGMENT.match(segment):
             continue
         if printed and _STDOUT_REDIRECT.search(_QUOTED.sub(' ', segment)):

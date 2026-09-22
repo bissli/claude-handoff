@@ -1270,9 +1270,12 @@ def test_gate_denies_read_credit_for_a_redirected_cat(monkeypatch, capsys,
 
     Mutation: stripping only the redirect target from the segment tokens but
     still counting the segment as a read, so cat f > /tmp/copy.md silences
-    the gate even though the content never reached the model.
-    Oracle: a spy on stdout - ls correctly still reports (control) and the
-    redirected cat also still reports.
+    the gate even though the content never reached the model. Also splitting
+    the segments on the `&` of `&>`, which leaves the read verb in a segment
+    carrying no redirect at all.
+    Oracle: a spy on stdout - ls correctly still reports (control), and the
+    cat redirected by `>` and by `&>` both still report; a cat whose stderr
+    alone is redirected keeps its credit and reports nothing.
     """
     root, folder = _handoff_root(tmp_path)
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
@@ -1287,6 +1290,8 @@ def test_gate_denies_read_credit_for_a_redirected_cat(monkeypatch, capsys,
 
     assert 'SPEC.md' in run('RR1', [_bash(f'ls -l {spec}')])
     assert 'SPEC.md' in run('RR2', [_bash(f'cat {spec} > /tmp/copy.md')])
+    assert 'SPEC.md' in run('RR3', [_bash(f'cat {spec} &> /tmp/copy.md')])
+    assert 'SPEC.md' not in run('RR4', [_bash(f'cat {spec} 2>/dev/null')])
 
 
 def test_gate_ignores_hq_open_inside_a_heredoc_body(monkeypatch, capsys,
