@@ -322,3 +322,54 @@ def test_artifacts_tsv_keeps_the_live_default_and_emits_no_count_line(
         ['artifacts', _SLUG, '--tsv', '--status', 'archived'], capsys)
     assert rc_status == 0
     assert [ln.split('\t')[2] for ln in out_status.splitlines()[1:]] == ['done.md']
+
+
+def test_artifacts_all_prints_every_ledger_row_including_history(
+    tmp_path, monkeypatch, capsys
+):
+    """--all reproduces ledger.tsv whole: a re-stamped path keeps both rows.
+
+    Mutation: --all reading the latest_rows fold instead of the raw rows,
+    which drops a re-stamped path's earlier row; or keeping the live-only
+    default, which drops the archived row.
+    Oracle: ledger.tsv's own bytes, read in the test and compared line for
+    line against the output.
+    """
+    folder = _new_folder(tmp_path, monkeypatch)
+    (folder / 'a.md').write_text('a\n')
+    (folder / 'b.md').write_text('b\n')
+    _write_row(folder, 'a.md', cycle='1', label='alpha')
+    _write_row(folder, 'a.md', cycle='2', label='alpha again')
+    _write_row(folder, 'b.md', status='archived', reason='consumed')
+
+    rc, out = _run(['artifacts', _SLUG, '--all'], capsys)
+    assert rc == 0
+    ledger_text = (folder / 'ledger.tsv').read_text(encoding='utf-8')
+    assert out.splitlines() == ledger_text.splitlines()
+    assert [ln.split('\t')[2] for ln in out.splitlines()[1:]] == [
+        'a.md', 'a.md', 'b.md']
+
+    _, out_tsv = _run(['artifacts', _SLUG, '--tsv'], capsys)
+    assert [ln.split('\t')[2] for ln in out_tsv.splitlines()[1:]] == ['a.md']
+
+
+def test_artifacts_all_keeps_the_status_the_ledger_stored(
+    tmp_path, monkeypatch, capsys
+):
+    """A vanished file reads live under --all and missing under --tsv.
+
+    Mutation: --all reconciling against the disk, so the ledger's own
+    record of what a cycle stamped is overwritten by today's disk state.
+    Oracle: the status column of the one path under the two flags.
+    """
+    folder = _new_folder(tmp_path, monkeypatch)
+    _write_row(folder, 'gone.md', label='never arrived')
+
+    _, out_all = _run(['artifacts', _SLUG, '--all'], capsys)
+    status_col = hq.LEDGER_FIELDS.index('status')
+    stored = [ln.split('\t')[status_col] for ln in out_all.splitlines()[1:]]
+    assert stored == ['live']
+
+    _, out_tsv = _run(
+        ['artifacts', _SLUG, '--tsv', '--status', 'missing'], capsys)
+    assert [ln.split('\t')[2] for ln in out_tsv.splitlines()[1:]] == ['gone.md']

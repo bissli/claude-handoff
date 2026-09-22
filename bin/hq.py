@@ -68,7 +68,7 @@ _SKIP_NAMES = {
 # - A name matches as one path component, so the cycles entry covers
 #   the directory and every file in it.
 STORE_VERBS = {
-    'ledger.tsv': 'hq artifacts {slug}, or hq when {slug} <path>',
+    'ledger.tsv': 'hq artifacts {slug} --all, or hq when {slug} <path>',
     'standing.md': 'hq standing {slug}',
     'cycles': 'hq diff {slug} <c1> <c2>',
     }
@@ -174,7 +174,8 @@ s<n> for the heading numbered <n>.
   record the receipt the gate credits.
 - hq artifacts accepts --in-cycle N or --in-cycle cN to select on
   the path's current cycle field, and --tsv to print all thirteen
-  ledger columns tab-separated under the ledger header line.""",
+  ledger columns tab-separated under the ledger header line.
+  --all prints every row in those columns, history included.""",
     'kinds': """\
 hq help kinds - how stamp infers kind and read_before
 
@@ -794,11 +795,30 @@ def resolve_where(
       is title text.
     - The literal match is equality on the normalized text, never
       containment, so ``Retry`` does not land on ``## Retry budget``.
+    - A ``#`` line inside a ``` or ~~~ fence is code, so it neither
+      ends a span nor resolves an anchor.
+    - The spans returned never overlap: where one resolved anchor's
+      heading nests inside another's span, the parent ends before the
+      child begins, so a caller printing or sizing them reads each line
+      once. One span is returned per resolved anchor either way.
     - An unresolved anchor prints ``?`` in its span slot during rendering.
     """
     file_lines = text.splitlines()
     heading_info: list[tuple[int, int, str, set[str]]] = []
+    fence = ''
     for i, line in enumerate(file_lines):
+        # A closing fence repeats the opening character at its own
+        # length or longer, so a ``` line inside a ~~~ block is content.
+        fence_m = re.match(r'\s{0,3}(`{3,}|~{3,})', line)
+        if fence_m:
+            marker = fence_m.group(1)
+            if not fence:
+                fence = marker
+            elif marker[0] == fence[0] and len(marker) >= len(fence):
+                fence = ''
+            continue
+        if fence:
+            continue
         if line.startswith('#'):
             level = len(line) - len(line.lstrip('#'))
             # The dotted branch leads so `24.4` is one token and never
@@ -858,7 +878,15 @@ def resolve_where(
                 end_line = heading_info[k][0] - 1
                 break
         spans.append((start_line, end_line))
-    return spans, unresolved
+    # A selected child heading nests inside its parent's span, so the
+    # parent ends where the child begins and every line resolves once.
+    # Only a strictly later start trims, which leaves two anchors
+    # landing on one heading alone.
+    trimmed = [
+        (beg, min([b for b, _ in spans if beg < b <= end], default=end + 1) - 1)
+        for beg, end in spans
+        ]
+    return trimmed, unresolved
 
 
 def block_sha(heading_and_body: str) -> str:
@@ -1386,9 +1414,12 @@ def drain_unfiled(
     -----
     - Accepted prefixes: ``- decision: ``, ``- constraint: ``,
       ``- dead-end: ``.
-    - The headline is the bold span if present, else the first sentence
-      as ``split_headline`` reads it: never ending inside an open
-      quotation, and past a one- or two-word label such as ``Cycle 26.``.
+    - The headline is the bold span when the content opens with one,
+      else the first sentence as ``split_headline`` reads it: never
+      ending inside an open quotation, and past a one- or two-word
+      label such as ``Cycle 26.``. A bold span further along the line
+      is body text, as it is to the adopt-side reader, so no word
+      before it is dropped from an append-only store.
     - An indented line continues the bullet above it, joined by one space,
       as ``adopt`` joins a wrapped standing bullet.
     - Any other bullet, and any unindented line that is no bullet, is the
@@ -1435,7 +1466,7 @@ def drain_unfiled(
                 (f'untyped Unfiled bullet: {stripped!r}'
                  ' - prefix it decision:, constraint:, or dead-end:,'
                  ' move it into a cursor section, or rehome it to a sibling'))
-        bold = re.search(r'\*\*(.+?)\*\*', content)
+        bold = re.match(r'\*\*(.+?)\*\*', content)
         if bold:
             headline = bold.group(1)
             body = content[bold.end():].strip()
@@ -4203,6 +4234,13 @@ def _verb_begin(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
     int
         0 once the lock is held; 1 when a young foreign lock blocks it,
         or the thread is marked done.
+
+    Notes
+    -----
+    - A folder missing both HANDOFF.md and ledger.tsv is seeded file by
+      file, never wholesale: it can still hold standing.md, the
+      manifest, and its archives, and it then prints ``rebuilt`` in
+      place of ``created`` so the two cases read apart.
     """
     refusal = _done_refusal(folder, 'begin')
     if refusal:
@@ -4216,17 +4254,35 @@ def _verb_begin(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
     if not folder.exists() or (no_handoff and no_ledger):
         folder.mkdir(parents=True, exist_ok=True)
         (folder / 'cycles').mkdir(exist_ok=True)
-        (folder / 'HANDOFF.md').write_text(
-            f'# Handoff: {folder.name}\n\n'
-            f'Written: {anch["now"][:10]} | Cycle: 1\n\n'
-            '## Task\n\n## Now\n\n## Plan\n\n## State\n\n'
-            '## Environment\n\n## Open questions\n\n## Log\n',
-            encoding='utf-8')
-        (folder / 'ledger.tsv').write_text(_LEDGER_HEADER + '\n', encoding='utf-8')
-        (folder / 'standing.md').write_text('', encoding='utf-8')
-        (folder / 'cycles' / 'manifest.tsv').write_text(
-            _MANIFEST_HEADER + '\n', encoding='utf-8')
-        print(f'hq begin: created {folder}')
+        # Notes:
+        # - Seed only what is absent. The branch fires on a lost
+        #   HANDOFF.md and ledger.tsv alone, and standing.md is
+        #   append-only, so an unconditional write destroys it.
+        # - The manifest indexes cycles/, so truncating it renumbers
+        #   the next archive over one already on disk.
+        kept: list[str] = []
+        for name, seed in (
+            ('HANDOFF.md',
+             f'# Handoff: {folder.name}\n\n'
+             f'Written: {anch["now"][:10]} | Cycle: 1\n\n'
+             '## Task\n\n## Now\n\n## Plan\n\n## State\n\n'
+             '## Environment\n\n## Open questions\n\n## Log\n'),
+            ('ledger.tsv', _LEDGER_HEADER + '\n'),
+            ('standing.md', ''),
+            ('cycles/manifest.tsv', _MANIFEST_HEADER + '\n'),
+        ):
+            path = folder / name
+            if path.exists():
+                kept.append(name)
+                continue
+            path.write_text(seed, encoding='utf-8')
+        if kept:
+            print(
+                f'hq begin: rebuilt {folder} around {", ".join(kept)}'
+                ' - the folder kept a store the lost file does not index;'
+                f' run hq standing {folder.name} to read what survived')
+        else:
+            print(f'hq begin: created {folder}')
     elif (folder / 'HANDOFF.md').exists() and not (folder / 'ledger.tsv').exists():
         refusal = _lock_refusal(
             folder, anch, getattr(argv, 'force', False), 'begin')
@@ -4893,11 +4949,14 @@ def _verb_supersede(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) 
     Returns
     -------
     int
-        0 on success; 1 when either id is absent or the prefixes differ.
+        0 on success; 1 when either id is absent, the prefixes differ,
+        or the replacement was itself superseded.
 
     Notes
     -----
     - Appends one line to standing.md; writes nothing on refusal.
+    - A kind never empties: the replacement must be live, so every
+      supersession leaves at least one item in the block.
     - Prints the superseded item as standing.md holds it: the item
       leaves the block entirely, so a ruling still live inside its
       body would otherwise go unseen.
@@ -4916,7 +4975,7 @@ def _verb_supersede(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) 
         return 1
     standing_path = folder / 'standing.md'
     text = standing_path.read_text(encoding='utf-8') if standing_path.exists() else ''
-    items, _ = _parse_standing(text)
+    items, superseded_ids = _parse_standing(text)
     all_ids = {item['id'] for item in items}
     if old_id not in all_ids:
         print(
@@ -4927,6 +4986,15 @@ def _verb_supersede(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) 
         print(
             f'hq supersede: {new_id!r} not found in standing.md'
             f'; run hq standing {folder.name} to list the ids')
+        return 1
+    # render_standing drops every id named as a source, so a
+    # replacement already superseded leaves the kind with no live item:
+    # c01 -> c02 followed by c02 -> c01 empties the block.
+    if new_id in superseded_ids:
+        print(
+            f'hq supersede: {new_id!r} was itself superseded'
+            f'; run hq standing {folder.name} to list the live ids'
+            ' - hq note the replacement, then supersede onto its id')
         return 1
     line = f'- (c{anch["cycle"]}) {old_id} -> {new_id}'
     _append_lines(standing_path, [line])
@@ -6025,15 +6093,17 @@ def _verb_artifacts(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) 
         Anchors dict from ``anchors()``; unused but required by dispatch.
     argv : argparse.Namespace
         Parsed artifacts arguments: ``--kind``, ``--status``,
-        ``--read-before``, ``--in-cycle``, ``--successor``, ``--tsv``.
+        ``--read-before``, ``--in-cycle``, ``--successor``, ``--tsv``,
+        ``--all``.
 
     Returns
     -------
     int
-        0 always; one line per entry, or one per selected row where any
-        filter is given, or the ledger header and one tab-separated row
-        each with ``--tsv``. A bare run closes with one count line per
-        status it left out, naming the ``--status`` that prints them.
+        0, or 2 where ``--in-cycle`` is not a cycle number; one line per
+        entry, or one per selected row where any filter is given, or the
+        ledger header and one tab-separated row each with ``--tsv`` or
+        ``--all``. A bare run closes with one count line per status it
+        left out, naming the ``--status`` that prints them.
 
     Notes
     -----
@@ -6047,12 +6117,16 @@ def _verb_artifacts(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) 
       path stamped by an absolute spelling that never arrived is
       counted rather than printed, and the count line is the only trace
       it leaves here.
+    - ``--all`` exists so that every ledger row has a verb behind it:
+      without one an agent reaches for ``cat``, which the skill forbids.
+    - ``--all`` reports the ledger as stored - every row in file order,
+      no fold to one row per path, no live default, no walk entry, no
+      reconcile against the disk, and no prose line where a filter
+      matches nothing - so it alone reaches a superseded earlier row,
+      and a vanished file keeps the status it was stamped with.
     - No row matching is exit 0, not a refusal: the query answered.
     """
     rows = _read_tsv(folder / 'ledger.tsv', LEDGER_FIELDS)
-    live = latest_rows(rows)
-    walk = _walk_folder(folder)
-    live = _reconcile_missing(folder, live)
     in_cycle_raw = getattr(argv, 'in_cycle', None)
     in_cycle = None
     if in_cycle_raw is not None:
@@ -6068,17 +6142,28 @@ def _verb_artifacts(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) 
         for name in ('kind', 'status', 'read_before', 'in_cycle', 'successor'))
     explicit_status = getattr(argv, 'status', None)
     successor_filter = getattr(argv, 'successor', None)
+    dump_all = getattr(argv, 'all', False)
     # When --successor is given without --status, drop the implicit live
     # default: the row a successor stamps points at will be superseded, not
     # live, so the live default would always answer the empty set.
     selectors = {
-        'status': explicit_status or (None if successor_filter else 'live'),
+        'status': explicit_status or (
+            None if successor_filter or dump_all else 'live'),
         'kind': getattr(argv, 'kind', None),
         'read_before': getattr(argv, 'read_before', None),
         'cycle': in_cycle,
         'successor': successor_filter,
         }
     wanted = {field: value for field, value in selectors.items() if value}
+    if dump_all:
+        print(_LEDGER_HEADER)
+        for row in rows:
+            if all(row[field] == value for field, value in wanted.items()):
+                print(_tsv_line([row[f] for f in LEDGER_FIELDS]))
+        return 0
+    live = latest_rows(rows)
+    walk = _walk_folder(folder)
+    live = _reconcile_missing(folder, live)
     tsv = getattr(argv, 'tsv', False)
     # A walk entry with no row carries no column to select on, so a
     # filtered or tsv run reports rows alone.
@@ -6747,7 +6832,15 @@ def _build_parser() -> argparse.ArgumentParser:
         'vanished file reads status missing and a walk entry of kind skip\n'
         'has its row omitted from the output. It keeps the live-only default\n'
         'and prints no count line, so pair it with --status to read a row\n'
-        'that is not live.'
+        'that is not live.\n'
+        '--all reports every ledger row instead - history and non-live\n'
+        'included, in file order, as the ledger stores them: no fold to one\n'
+        'row per path, no live default, no walk entry, no reconcile against\n'
+        'the disk, no count line, and no prose line where a filter matches\n'
+        'nothing, so an empty run is the header alone. It prints the --tsv\n'
+        'columns whether or not --tsv is given, and the other flags still\n'
+        "select, each on the row printed rather than on the path's current\n"
+        'row.'
     )
     art = sub.add_parser(
         'artifacts',
@@ -6767,6 +6860,7 @@ def _build_parser() -> argparse.ArgumentParser:
     art.add_argument('--in-cycle', dest='in_cycle')
     art.add_argument('--successor')
     art.add_argument('--tsv', action='store_true')
+    art.add_argument('--all', action='store_true')
 
     _standing_epilog = (
         'Every unsuperseded item in full; --all adds the superseded ones.\n'

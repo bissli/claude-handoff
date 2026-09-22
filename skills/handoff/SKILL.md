@@ -518,7 +518,11 @@ unchanged; none writes.
 - `hq diff <slug> <c1> <c2> [<section>]`: the cursor change between
   two cycles; no output means identical.
 - `hq artifacts <slug>`: every live row plus unstamped files, then
-  the non-live counts.
+  the non-live counts. `--all`: the whole ledger instead - every row
+  as stored, history and non-live rows in file order under the
+  `--tsv` header, no unstamped files, no `missing` rewrite, no
+  counts; a filter selects on the row it prints, not the path's
+  current row.
 - `hq standing <slug> [<id> ...]`: every unsuperseded item in full, or
   the named items.
 
