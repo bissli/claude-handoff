@@ -333,7 +333,10 @@ Run these steps in order:
    lock file unreadable; use --force to take over` (exit 1) mean
    another session is inside a cycle less than two hours old: stop and
    say so; `begin --force` only when the user confirms that session is
-   dead. An older lock is taken over without `--force`.
+   dead. `note`, `stamp`, and `supersede` print the same two refusals
+   under their own names, ending `run hq begin <slug> --force to take
+   over`: stop the same way, and run that only on the same
+   confirmation. An older lock is taken over without `--force`.
 2. One `hq note` per item settled this session, or one `--batch`; one
    `hq supersede <slug> <old-id> <new-id>` when a ruling reverses an
    earlier one.
