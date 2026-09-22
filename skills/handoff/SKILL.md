@@ -102,8 +102,7 @@ Ask it of the content, never of how late the session is.
 | `/handoff done <slug> --undo`      | reopen it: `hq done --undo`            |
 
 `write` and `read` as the first word override the inference, an
-optional slug after each; `--no-check` anywhere, from the user alone,
-skips the reviewer pass. A first argument matching a verb above is
+optional slug after each. A first argument matching a verb above is
 that verb, not a slug.
 
 Guess neither the verb nor the target. Where either is ambiguous,
@@ -264,17 +263,11 @@ notes/idp-quirks.md --read-before edit --label "staging IdP quirks"
 ROWS
 ```
 
-- A relative path resolves against the folder, root, then pin; a `~` or
-  absolute path is stored whole and gated the same way. One file is one
-  row however it is spelled.
-- `--kind`, `--read-before`, `--status`, `--where`, and `--label` each
-  default to the previous row's value; omit them on a re-stamp.
-- `--where` names a heading: its text without its number (`3. Retry`
-  or `Retry`), or `s<n>` for the heading numbered `<n>`; several join
-  with `;`. `stamp` accepts a wrong anchor, which shows only as
-  `SPEC.md:?` in the read block - check the heading first.
-- `--successor P` marks the row superseded, `--archive --reason`
-  archived, `--defer` deferred until the next work list.
+Path resolution, the values a re-stamp carries forward, and the
+status moves `--successor`, `--archive --reason`, and `--defer` make
+are in `hq stamp --help`; every `--where` form is in `hq help
+anchors`. `stamp` accepts a wrong anchor, which shows only as
+`SPEC.md:?` in the read block - check the heading first.
 
 `note` takes a kind - `decision`, `constraint`, `dead-end` - a one-line
 `--headline`, and the body as the last argument. `supersede` takes two
@@ -376,9 +369,11 @@ hq finish auth-token-refresh \
 With the file on disk, spawn the skeptic below before `finish`. It
 returns one numbered item per finding, `<n>. <finding>`; re-check
 each in the write session and stop - never loop. A question it raises
-for the user goes under `## Open questions`; do not stop for it.
+for the user goes under `## Open questions`; do not stop for it. Only
+`--no-check` from the user, anywhere in the call, skips this pass;
+the agent never grants itself the skip.
 
-- Skeptic (always; Agent tool, at the executing tier the host's agent
+- Skeptic (Agent tool, at the executing tier the host's agent
   rules name - a host with none takes type `general-purpose`, model
   `sonnet` - and at the judging tier, or model `opus` there, only
   where the Now step's correctness turns on a span the skeptic must
@@ -476,20 +471,18 @@ carry `.handoff/<slug>/`. In `Log`, `+1` counts dirty paths.
 Resolve like read, then read steps 2 and 3; open questions do not stop
 a check. Then run the write path: `begin`; steps 2 to 4 only for
 findings - what `open` printed and what the skeptic returns - as notes,
-stamps, and cursor edits; the skeptic; `finish --log "check: <n>
-findings applied"`, counting both kinds. A check with nothing to apply
-still runs `finish`, which releases the lock and advances the cycle. A
-target with no conforming header runs the adoption pass and stops.
+stamps, and cursor edits; the Reviewer pass, skipped only by the
+user's `--no-check`; `finish --log "check: <n> findings applied"`,
+counting both kinds. A check with nothing to apply still runs
+`finish`, which releases the lock and advances the cycle. A target
+with no conforming header runs the adoption pass and stops.
 
 ## list
 
-`hq list [n]` prints one line per folder under `.handoff/` holding a
-`HANDOFF.md` and not marked done, newest first, and writes nothing:
-`<slug>  <Written date>  c<N>  <done>/<total>  <Task line>`, then a
-`<N> marked done` line naming `--done`; `hq list --done` lists the
-marked folders instead, with no count line. Show the user the lines
-unchanged. `<done>/<total>` counts `- [x]` over the checkbox items
-under `## Plan`, `-` when there are none.
+`hq list [n]` prints the open threads, newest first, `n` capping the
+lines; `hq list --done` lists the threads marked done instead. It
+writes nothing. Show the user the lines unchanged; `hq list --help`
+names the columns.
 
 ## done
 
@@ -502,31 +495,29 @@ under `## Plan`, `-` when there are none.
 3. Show the user the output unchanged.
 
 `done` ends the thread; `finish` ends one cycle and leaves it running.
-It writes `.hq.done` in the folder - `slug=`, `time=`, `cycle=` (the
-last finished), `reason=` - and deletes nothing: `list` hides it,
-`begin` and `adopt` refuse it and name the undo, every other read verb
-still answers. `--undo` removes the marker; `--force` marks a folder
-whose cycle is still open, which otherwise refuses and names
-`hq finish`. A repeat keeps the first marker and prints its date; a
-new reason takes `--undo`, then a fresh `hq done`. A directory named
-`.hq.done` refuses `--undo`: remove it by hand; no verb clears it.
+It writes the `.hq.done` marker in the folder and deletes nothing:
+`list` hides it, `begin` and `adopt` refuse it and name the undo,
+every other read verb still answers. `--force` marks a folder whose
+cycle is still open, which otherwise refuses and names `hq finish`.
+The marker's fields, `--undo`, and a repeated `done` are in
+`hq done --help`. A directory named `.hq.done` refuses `--undo`:
+remove it by hand; no verb clears it.
 
 ## when, diff, artifacts, standing
 
 Each runs the `hq` verb of the same name and shows the user its output
-unchanged; none writes. `hq when <slug> <path>`: every ledger row for
-the path, oldest first, the path resolving as at `stamp`.
-`hq diff <slug> <c1> <c2>`: a line per cursor section, `## Now  +3 -1`
-or `unchanged`; a section name after the cycles expands it, `--full`
-all; no output means identical.
-`hq artifacts <slug>`: every live row plus unstamped files, then the
-non-live counts, each ending in the `--status` that expands it.
-`hq standing <slug>`: every unsuperseded item in full; `--all` adds
-the superseded ones; `--grep <regex>` keeps items whose headline or
-body matches it, case-insensitively, `--kind
-constraint|decision|dead-end` one kind, `--in-cycle N` those recorded
-in cycle N, and the three compose; `<id> [<id> ...]` prints the named
-items, filters aside, a superseded one with the current id.
+unchanged; none writes.
+
+- `hq when <slug> <path>`: every ledger row for the path, the path
+  resolving as at `stamp`.
+- `hq diff <slug> <c1> <c2> [<section>]`: the cursor change between
+  two cycles; no output means identical.
+- `hq artifacts <slug>`: every live row plus unstamped files, then
+  the non-live counts.
+- `hq standing <slug> [<id> ...]`: every unsuperseded item in full, or
+  the named items.
+
+Output formats and the filter flags are in each verb's `--help`.
 
 ## The hooks
 
