@@ -797,24 +797,34 @@ def resolve_where(
       containment, so ``Retry`` does not land on ``## Retry budget``.
     - A ``#`` line inside a ``` or ~~~ fence is code, so it neither
       ends a span nor resolves an anchor.
-    - The spans returned never overlap: where one resolved anchor's
-      heading nests inside another's span, the parent ends before the
-      child begins, so a caller printing or sizing them reads each line
-      once. One span is returned per resolved anchor either way.
+    - No returned span holds another's start, so a caller printing
+      or sizing them reads each nested line once.
+    - Between them the spans still cover every line the matched
+      headings' own sections reach: an enclosing span ends where the
+      nested one begins, and the innermost carries the tail.
+    - Two anchors naming one heading return that span twice. The
+      guarantee is on nesting, never on duplication.
     - An unresolved anchor prints ``?`` in its span slot during rendering.
     """
     file_lines = text.splitlines()
     heading_info: list[tuple[int, int, str, set[str]]] = []
     fence = ''
     for i, line in enumerate(file_lines):
-        # A closing fence repeats the opening character at its own
-        # length or longer, so a ``` line inside a ~~~ block is content.
-        fence_m = re.match(r'\s{0,3}(`{3,}|~{3,})', line)
+        # Notes:
+        # - A closing fence carries nothing after the marker, so a
+        #   ```python line inside a block opens nothing and closes
+        #   nothing; reading it as a close inverts the parity for the
+        #   rest of the file.
+        # - It also repeats the opening character at its own length
+        #   or longer, so a ``` line inside a ~~~ block is content.
+        # - The indent is spaces, never a tab: four columns of either
+        #   make the line code rather than a fence.
+        fence_m = re.match(r' {0,3}(`{3,}|~{3,})(.*)$', line)
         if fence_m:
-            marker = fence_m.group(1)
+            marker, tail = fence_m.group(1), fence_m.group(2).strip()
             if not fence:
                 fence = marker
-            elif marker[0] == fence[0] and len(marker) >= len(fence):
+            elif not tail and marker[0] == fence[0] and len(marker) >= len(fence):
                 fence = ''
             continue
         if fence:
@@ -880,14 +890,19 @@ def resolve_where(
         spans.append((start_line, end_line))
     # Notes:
     # - A selected child heading nests inside its parent's span, so
-    #   the parent ends where the child begins and every line
-    #   resolves once.
+    #   the shared lines would print and count twice. The enclosing
+    #   span gives them up and ends where the child begins.
+    # - A parent's tail past its last selected child has no child to
+    #   hold it, so the innermost span reaches the widest enclosing
+    #   end: what the untrimmed spans covered is still covered.
     # - Only a strictly later start trims, so two anchors landing on
     #   one heading leave each other alone.
-    trimmed = [
-        (beg, min([b for b, _ in spans if beg < b <= end], default=end + 1) - 1)
-        for beg, end in spans
-        ]
+    starts = [beg for beg, _ in spans]
+    trimmed: list[tuple[int, int]] = []
+    for beg, end in spans:
+        cover = max(far for near, far in spans if near <= beg <= far)
+        inner = [b for b in starts if beg < b <= cover]
+        trimmed.append((beg, min(inner) - 1 if inner else cover))
     return trimmed, unresolved
 
 
@@ -1419,9 +1434,9 @@ def drain_unfiled(
     - The headline is the bold span when the content opens with one,
       else the first sentence as ``split_headline`` reads it: never
       ending inside an open quotation, and past a one- or two-word
-      label such as ``Cycle 26.``. A bold span further along the line
-      is body text, as it is to the adopt-side reader, so no word
-      before it is dropped from an append-only store.
+      label such as ``Cycle 26.``.
+    - A bold span further along the line is body text, as it is to
+      the adopt-side reader, so no word ahead of it is dropped.
     - An indented line continues the bullet above it, joined by one space,
       as ``adopt`` joins a wrapped standing bullet.
     - Any other bullet, and any unindented line that is no bullet, is the
@@ -1460,7 +1475,7 @@ def drain_unfiled(
         for prefix in ('decision', 'constraint', 'dead-end'):
             if content.lower().startswith(f'{prefix}: '):
                 kind = prefix
-                content = content[len(prefix) + 2:]
+                content = content[len(prefix) + 2:].lstrip()
                 break
         if kind is None:
             return (
@@ -4012,8 +4027,7 @@ def _take_lock(
     folder: pathlib.Path,
     anch: dict,
     argv: argparse.Namespace,
-    seeded_handoff: bool,
-) -> int:
+    seeded_handoff: bool) -> int:
     """Acquire .hq.lock, refusing a young or unreadable foreign lock.
 
     Parameters
@@ -4025,8 +4039,8 @@ def _take_lock(
     argv : argparse.Namespace
         Parsed flags; ``--force`` takes over any lock.
     seeded_handoff : bool
-        True where this run wrote HANDOFF.md itself, which suppresses
-        the rescue copy.
+        True where this run seeded HANDOFF.md itself, which skips the
+        rescue copy.
 
     Returns
     -------
@@ -4043,10 +4057,6 @@ def _take_lock(
       the takeover recorded.
     - A lock taken over but not writable is replaced whole, so a lock
       whose permissions were lost cannot hold the folder forever.
-    - The rescue copy saves a hand edit, so a HANDOFF.md this run
-      seeded is never rescued: its stub carries nothing to fold back,
-      and the name keys on the last finished cycle, whose genuine
-      rescue it would overwrite.
     """
     lock_path = folder / '.hq.lock'
     session = anch['session']
@@ -4094,9 +4104,14 @@ def _take_lock(
             lock_path.unlink()
             lock_path.write_text(content, encoding='utf-8')
 
-    # A hand edit since the last finish or adopt: HANDOFF.md no longer
-    # hashes to what that write left in it. live_sha reads the rewrite
-    # an adopt row records, not the archive its handoff_sha names.
+    # Notes:
+    # - A hand edit since the last finish or adopt: HANDOFF.md no
+    #   longer hashes to what that write left in it.
+    # - live_sha reads the rewrite an adopt row records, not the
+    #   archive its handoff_sha names.
+    # - A file this run seeded is no hand edit: its stub carries
+    #   nothing to fold back, and the name keys on the last finished
+    #   cycle, whose genuine rescue it would overwrite.
     manifest_rows = _read_tsv(folder / 'cycles' / 'manifest.tsv', MANIFEST_FIELDS)
     handoff = folder / 'HANDOFF.md'
     if manifest_rows and handoff.exists() and not seeded_handoff:
@@ -4251,10 +4266,11 @@ def _verb_begin(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
 
     Notes
     -----
-    - A folder missing both HANDOFF.md and ledger.tsv is seeded file by
-      file, never wholesale: it can still hold standing.md, the
-      manifest, and its archives, and it then prints ``rebuilt`` in
-      place of ``created`` so the two cases read apart.
+    - A folder missing both HANDOFF.md and ledger.tsv can still hold
+      standing.md, the manifest, and its archives. Those survive, and
+      the line printed reads ``rebuilt`` rather than ``created``.
+    - A refusal writes nothing: the lock is read before the folder is
+      seeded, so a refused run leaves no stub behind.
     """
     refusal = _done_refusal(folder, 'begin')
     if refusal:
@@ -4263,19 +4279,37 @@ def _verb_begin(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
     if (folder / 'HANDOFF.md').is_dir():
         print('hq: HANDOFF.md is a directory - move the directory aside and re-run')
         return 1
+    # A refused run leaves the folder as it found it, so the lock is
+    # read before the first write rather than at _take_lock below.
+    refusal = _lock_refusal(folder, anch, getattr(argv, 'force', False), 'begin')
+    if refusal:
+        print(refusal)
+        return 1
     no_handoff = not (folder / 'HANDOFF.md').exists()
     no_ledger = not (folder / 'ledger.tsv').exists()
-    seeded_handoff = not folder.exists() or (no_handoff and no_ledger)
+    seeded_handoff = no_handoff and no_ledger
     if seeded_handoff:
         folder.mkdir(parents=True, exist_ok=True)
         (folder / 'cycles').mkdir(exist_ok=True)
         # Notes:
-        # - Seed only what is absent. The branch fires on a lost
-        #   HANDOFF.md and ledger.tsv alone, and standing.md is
-        #   append-only, so an unconditional write destroys it.
+        # - The branch fires on a lost HANDOFF.md and ledger.tsv
+        #   alone, and standing.md is append-only, so seeding it
+        #   unconditionally destroys a store nothing rebuilds.
         # - The manifest indexes cycles/, so truncating it renumbers
         #   the next archive over one already on disk.
-        kept: list[str] = []
+        # - An empty file is no survivor, and an archive outlives the
+        #   manifest that indexed it, so content decides which line
+        #   this prints.
+        standing_path = folder / 'standing.md'
+        manifest_rows = _read_tsv(
+            folder / 'cycles' / 'manifest.tsv', MANIFEST_FIELDS)
+        survived: list[str] = []
+        if standing_path.is_file() and standing_path.stat().st_size > 0:
+            survived.append('standing.md')
+        if manifest_rows:
+            survived.append('the cycle manifest')
+        if any((folder / 'cycles').glob('c*.md')):
+            survived.append('archived cycles')
         for name, seed in (
             ('HANDOFF.md',
              (f'# Handoff: {folder.name}\n\n'
@@ -4287,23 +4321,16 @@ def _verb_begin(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
             ('cycles/manifest.tsv', _MANIFEST_HEADER + '\n'),
             ):
             path = folder / name
-            if path.exists():
-                kept.append(name)
-                continue
-            path.write_text(seed, encoding='utf-8')
-        if kept:
+            if not path.exists():
+                path.write_text(seed, encoding='utf-8')
+        if survived:
             print(
-                f'hq begin: rebuilt {folder} around {", ".join(kept)}'
-                ' - the folder kept a store the lost file does not index;'
+                f'hq begin: rebuilt {folder} around {", ".join(survived)}'
+                ' - the folder kept a store the lost files do not index;'
                 f' run hq standing {folder.name} to read what survived')
         else:
             print(f'hq begin: created {folder}')
     elif (folder / 'HANDOFF.md').exists() and not (folder / 'ledger.tsv').exists():
-        refusal = _lock_refusal(
-            folder, anch, getattr(argv, 'force', False), 'begin')
-        if refusal:
-            print(refusal)
-            return 1
         rc = _verb_adopt(folder, anch, argv)
         if rc != 0:
             return rc
