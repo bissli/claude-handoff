@@ -37,6 +37,11 @@ def _root(tmp_path, monkeypatch):
     return root
 
 
+def _strip_read(out: str) -> str:
+    """Remove the appended read topic from open output before comparing."""
+    return out.replace(hq.HELP_TOPICS['read'] + '\n', '')
+
+
 def _pin(root, slug=_SLUG):
     """Return the thread's pin text, or None when no pin exists."""
     pin = root / '.handoff' / slug / 'work-dir'
@@ -516,8 +521,8 @@ def test_a_work_dir_under_a_former_handoff_name_is_not_a_stale_path(
     capsys.readouterr()
     assert hq.main(['open', _SLUG]) == 0
     assert f'stale folder path in HANDOFF.md: working/{_SLUG}/ x1' in (
-        capsys.readouterr().out)
+        _strip_read(capsys.readouterr().out))
     (root / 'working' / _SLUG).mkdir(parents=True)
     assert hq.main(['work-dir', _SLUG, f'working/{_SLUG}']) == 0
     assert hq.main(['open', _SLUG]) == 0
-    assert 'stale folder path' not in capsys.readouterr().out
+    assert 'stale folder path' not in _strip_read(capsys.readouterr().out)

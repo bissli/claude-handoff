@@ -268,10 +268,51 @@ read_before is a tier - when the file is loaded, and what belongs there:
   keep the path as stamped, which stamp takes either way; the
   spelling a block prints is a spelling stamp takes too, and it
   keys the row the stored spelling keys.
-- Standing block: constraints print in full, decisions and dead ends
-  as headlines, no cap; hq standing <slug> <id> prints an item in
-  full. Ids are d decision, c constraint, x dead end; (cN) is the
-  cycle that recorded the item.""",
+- Standing block: a constraint prints its headline and the first
+  sentence of its body, a decision or dead end its headline, no cap;
+  +Nc counts the characters held back, and hq standing <slug> <id>
+  prints an item in full. Ids are d decision, c constraint, x dead
+  end; (cN) is the cycle that recorded the item.
+- Log line: <branch>@<sha> +N - N counts the paths git reported
+  dirty when that cycle finished.""",
+    'read': """\
+hq help read - the steps that follow hq open, in order
+
+The reading steps hq open prints after its findings; each binds.
+
+- Every finding open prints is read-only and none stops the read: a
+  WARNING: (an edited recorded line), an unfinished cycle, or LEDGER
+  BEHIND is reported and read past; git drift names the git log to
+  run; a moved sha, an unresolved anchor, or a moved span says what
+  to read instead; a stale folder path waits for the next write.
+- Read HANDOFF.md.
+- Then run hq read <slug> <path> on every ## Read first line that
+  shows a span: it prints the span and records the read; a line
+  printed instead names its move.
+- A whole-file row, an older cycle's, is read when the Now step
+  names its file or the gate names it at a write, never before.
+- A section the row does not anchor is read when the work needs it:
+  --section <anchor> in --where form, or --whole for the file whole.
+- Then read every todo file the Plan points at.
+- A conforming target with no ledger.tsv has no blocks yet: follow
+  its ## Key files 'Read now:' pointers by hand.
+- A target with no conforming header names its own reading order -
+  follow it.
+- Read nothing else.
+- Drift check: the header says dirty - run git status --porcelain
+  and note what is still uncommitted. No sha in the header (written
+  outside a repo) or no conforming header - skip the git steps. A
+  pointed todo moved or disagrees with the file: the todo wins on
+  what is open or done, the handoff on approach and decisions. Note
+  drift in one line and proceed.
+- Do not re-plan and do not reopen a Standing item. Open questions
+  present: recap in six lines at most - the task, what is settled,
+  what each question decides, each restated for a reader outside the
+  thread - then put them to the user and stop. Otherwise state the
+  task and the Now step in two sentences, then execute Now; the Plan
+  follows.
+- A later bare /handoff targets this handoff: write target rule 2 in
+  the skill.""",
     'rules': """\
 hq help rules - what the script refuses and why
 
@@ -336,6 +377,119 @@ points at where the folder was.
 - Edit the path alone, never a quoted sentence, and never HANDOFF.md
   outside a cycle: a rewrite outside one trips block sha mismatch at
   open, and begin archives the file as c<NN>.hand.md.""",
+    'write': """\
+hq help write - the cursor, ledger, Unfiled, and todo rules of a cycle
+
+The writing rules hq begin prints after its work list; each binds
+this cycle.
+
+Write for a reader with no memory of this session and full access to
+the repo: short technical documentation in complete sentences, no
+transcript narration. Task and Now are required; omit any other
+cursor section that would be empty. A requirement the user stated,
+an approval given, a quirk found is lost unless written here. In
+doubt, write it down.
+
+Cursor rules:
+
+- Point, never paste: a rehomed sibling is stamped with hq stamp;
+  its pointer line is generated, never typed.
+- Skip what the repo records: git history, CLAUDE.md, README content.
+- Too big for the file but worth keeping: a sibling notes/<topic>.md,
+  stamped --read-before edit when the cursor points at it, so its
+  label, to 120 characters, stays in the Artifacts block instead of
+  a count.
+- Name where a credential lives, never its value.
+- Absolute dates. ASCII only.
+- Now is the single next action; Plan, the approved plan, is what
+  follows it; neither is re-opened.
+- Now alone is spent each cycle. Every other line stays (a done Plan
+  item ticked '- [x]') or moves whole to a note body or a stamped
+  sibling - what a resuming reader does not need first moves, never
+  cut; finish refuses a dropped line.
+- Anything still awaiting the user - a question, an unapproved plan -
+  goes under Open questions; read stops there.
+- An item recorded with note or under ## Unfiled is not repeated in
+  State: the Standing block carries it.
+- No line ceiling binds the cursor: a block holds text back over a
+  store; the cursor has none, so a reworded line drops facts.
+
+Ledger tiers - read_before is a tier, and stamp seeds it from the
+kind: a spec seeds always, a draft edit, all else never. Of several
+SPEC* stem-mates only the newest is gated.
+
+  tier     read                     when
+  always   the contract             every resume
+  edit     before a change to it    the gate, at a write to it
+  mention  on demand                hq read
+  never    on the record            hq artifacts, hq when
+
+- always requires an anchor: a stamp that would leave a live always
+  row with no --where is refused and the file's headings print under
+  the refusal; a spec needed whole is anchored at its title heading.
+  A whole file is never eager: a note or a source file the cursor
+  points at is edit or mention.
+- stamp accepts a wrong anchor, which shows only as SPEC.md:? in the
+  read block - check the heading first; every --where form is in
+  hq help anchors.
+- Path resolution, the values a re-stamp carries forward, and the
+  status moves --successor, --archive --reason, and --defer make are
+  in hq stamp --help.
+
+Rules the script enforces (hq help rules has each in full):
+
+- R1 A spec row keeps always and a draft row edit or always -
+  inferred, stored, or by --kind; both keep live and their kind,
+  unless --successor names a live file on disk other than itself, or
+  --archive --reason is given. A path that has ever been spec or
+  draft stays gated: its way back to live is that tier.
+- R2 A refused stamp still appends a receipt row, reason set to
+  'refused: <why>'; it clears nothing.
+- R3 A live row graded always or edit whose file sha moved blocks
+  finish; a re-stamp alone clears it.
+- W1, W2 An edited recorded line in ledger.tsv or standing.md is a
+  hard fail in finish; when a known tool caused it (a formatter, a
+  merge), pass --acknowledge "<reason>" to finish.
+
+Standing items:
+
+- note takes a kind - decision, constraint, dead-end - a one-line
+  --headline, and the body as the last argument.
+- supersede takes two ids of one kind, old then new, and echoes the
+  item it drops from the block; a ruling inside that text which
+  still holds takes one more hq note under a new id.
+
+Unfiled - items settled this session with no note call go under
+## Unfiled, above the first <!-- hq: marker, as typed bullets, one
+per item:
+
+  - decision: **<headline>** <body>
+  - constraint: **<headline>** <body>
+  - dead-end: **<headline>** <body, wrapped onto indented lines
+    when long>
+
+- A bullet with no bold span takes its first sentence as the
+  headline (a one- or two-word sentence, 'Cycle 26.', is a label and
+  the headline runs on).
+- finish drains the section into standing.md; an untyped bullet is a
+  hard fail that writes nothing.
+- Omit the section when every item went through note.
+
+A plan that lives in a todo file - work often has a ledger of its
+own, todo/foobar.md, tracked in the repo. One home per fact, or the
+copies drift: the todo file owns what is open and done; the handoff
+owns how this thread works it - state, decisions, the Now step.
+
+- Plan points at the live item (todo/foobar.md item 3) and keeps
+  only thread-only steps of its own. Never copy the item's text
+  across.
+- Sync the todo first - mark what this session closed, append what
+  it found, in the todo file's own format - then write the handoff
+  against the result. A dirty todo shows in the header.
+- On first pointing at an item, add one back-pointer line under it,
+  'entry: .handoff/<slug>/HANDOFF.md', and nothing else from here.
+- An untracked todo file cannot anchor to a sha: mark the pointer
+  '(untracked)', and at read its current content is the truth.""",
     }
 _STOPWORDS = {
     'the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'then',
@@ -4057,6 +4211,10 @@ def _take_lock(
       the takeover recorded.
     - A lock taken over but not writable is replaced whole, so a lock
       whose permissions were lost cannot hold the folder forever.
+    - A taken lock prints the work list, then ``hq help write``: the
+      writing rules reach the agent when it writes, a subagent that
+      never loaded the skill included, and the skill need not carry
+      them for the whole session.
     """
     lock_path = folder / '.hq.lock'
     session = anch['session']
@@ -4125,6 +4283,7 @@ def _take_lock(
                 ' - fold anything wanted back into the cursor')
 
     _print_worklist(folder, anch)
+    print(HELP_TOPICS['write'])
     return 0
 
 
@@ -5552,7 +5711,10 @@ def _verb_open(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     """Run open: print status, drift, W1/W2, sha-moved rows, and stale paths.
 
     A label the rendered block and the ledger disagree on is one of the
-    drift classes reported.
+    drift classes reported. On the default path, where HANDOFF.md is a
+    file, ``hq help read`` follows the findings, so the reading steps
+    reach the agent when it reads rather than riding in the skill for
+    the whole session; ``--not-carried`` prints its listing alone.
 
     Parameters
     ----------
@@ -5811,6 +5973,7 @@ def _verb_open(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
                 f' {dirname}/{folder.name}/ x{counts[dirname]}'
                 ' - correct it at the next write, inside a cycle, never in'
                 ' HANDOFF.md outside one; hq help stale-path has the steps')
+    print(HELP_TOPICS['read'])
     return 0
 
 

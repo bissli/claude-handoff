@@ -53,6 +53,11 @@ def _run(argv):
     return rc, out.getvalue(), err.getvalue()
 
 
+def _strip_read(out):
+    """Remove the appended read topic from open output before comparing."""
+    return out.replace(hq.HELP_TOPICS['read'] + '\n', '')
+
+
 def _lock(folder, session, time_str, cycle=1):
     (folder / '.hq.lock').write_text(
         f'slug={folder.name}\nsession={session}\nhost=other-host\n'
@@ -574,14 +579,15 @@ def test_open_reports_each_drift_class_by_its_documented_line(tmp_path, monkeypa
     _spec(folder)
     assert _run(['stamp', _SLUG, 'SPEC.md', '--where', 'Spec'])[0] == 0
     rc, out, _ = _run(['open', _SLUG])
+    out = _strip_read(out)
     assert rc == 0
     assert out.strip() == (
         f'unfinished cycle 1 held by {_SESSION} on test-host'
         ' - the file may be behind its stamps; report it')
     assert _run(['finish', _SLUG, '--log', 'one'])[0] == 0
-    assert _run(['open', _SLUG])[1] == ''
+    assert _strip_read(_run(['open', _SLUG])[1]) == ''
     _spec(folder, '# Spec\n\n## 1. Scope\n\nchanged\n')
-    assert _run(['open', _SLUG])[1].strip() == (
+    assert _strip_read(_run(['open', _SLUG])[1]).strip() == (
         'sha moved since stamp: SPEC.md'
         ' - read the file, not the span alone')
     _spec(folder)
@@ -612,10 +618,10 @@ def test_open_reports_git_drift_against_the_header_sha(tmp_path, monkeypatch):
     assert _run(['finish', _SLUG, '--log', 'one'])[0] == 0
     header = (folder / 'HANDOFF.md').read_text().splitlines()[2]
     old_sha = re.search(r'@ ([0-9a-f]{7})', header).group(1)
-    assert _run(['open', _SLUG])[1] == ''
+    assert _strip_read(_run(['open', _SLUG])[1]) == ''
     (root / 'a.txt').write_text('b\n')
     subprocess.run(git + ['commit', '-qam', 'two'], check=True)
-    out = _run(['open', _SLUG])[1]
+    out = _strip_read(_run(['open', _SLUG])[1])
     assert re.fullmatch(
         rf'git drift: header \S+@{old_sha} -> now \S+@[0-9a-f]{{7}}'
         rf' - run git log --oneline {old_sha}\.\.'
@@ -1225,6 +1231,7 @@ def test_open_names_a_folder_path_under_another_directory(tmp_path, monkeypatch)
     _run(['note', _SLUG, 'constraint', '--headline', 'Keep the grammar',
           f'It lives in src/{_SLUG}/ and its tests in tests/{_SLUG}/.'])
     rc, out, _ = _run(['open', _SLUG])
+    out = _strip_read(out)
     assert rc == 0
     _stale_tail = (
         ' - correct it at the next write, inside a cycle, never in'
@@ -1255,7 +1262,7 @@ def test_open_stops_counting_a_stale_path_once_its_item_is_superseded(
           f'Under working/{_SLUG}/ledger.tsv.'])
 
     def stale(out):
-        return [ln for ln in out.splitlines() if 'stale folder path' in ln]
+        return [ln for ln in _strip_read(out).splitlines() if 'stale folder path' in ln]
 
     _stale_tail = (
         ' - correct it at the next write, inside a cycle, never in'

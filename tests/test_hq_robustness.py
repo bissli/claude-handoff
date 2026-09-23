@@ -44,6 +44,11 @@ def _begin(slug: str, folder: pathlib.Path) -> None:
     assert folder.is_dir()
 
 
+def _strip_read(out: str) -> str:
+    """Remove the appended read topic from open output before comparing."""
+    return out.replace(hq.HELP_TOPICS['read'] + '\n', '')
+
+
 # --- The OSError guard in main ---
 
 
@@ -353,9 +358,12 @@ def test_unreadable_gated_artifact_is_not_a_moved_sha(
     spec.write_text('# Spec\n\nBody.\n', encoding='utf-8')
     assert hq.main(['stamp', _SLUG, 'SPEC-x.md', '--where', 'Spec']) == 0
     spec.chmod(0o000)
+    # Drain begin/stamp output so opened captures only what open prints.
+    capsys.readouterr()
     try:
         hq.main(['open', _SLUG])
         opened, _ = capsys.readouterr()
+        opened = _strip_read(opened)
         hq.main(['finish', _SLUG, '--log', 'x'])
         finished, _ = capsys.readouterr()
     finally:

@@ -39,6 +39,11 @@ def _new_root(
     return root / '.handoff' / slug
 
 
+def _strip_read(out: str) -> str:
+    """Remove the appended read topic from open output before comparing."""
+    return out.replace(hq.HELP_TOPICS['read'] + '\n', '')
+
+
 def _handoff(folder: 'pathlib.Path', cycle: int = 1) -> None:
     """Write a minimal conforming HANDOFF.md to folder."""
     text = (
@@ -408,7 +413,7 @@ def test_open_git_drift_uses_lowercase_pattern(tmp_path, monkeypatch, capsys):
 
     hq.main(['open', _SLUG])
 
-    assert 'git drift' in capsys.readouterr().out
+    assert 'git drift' in _strip_read(capsys.readouterr().out)
 
 
 def test_open_git_drift_branch_and_sha_assigned_correctly(
@@ -445,7 +450,7 @@ def test_open_git_drift_branch_and_sha_assigned_correctly(
 
     hq.main(['open', _SLUG])
 
-    out = capsys.readouterr().out
+    out = _strip_read(capsys.readouterr().out)
     assert 'git drift' in out
     assert 'mybranch@deadbeef0000' in out
 
@@ -486,7 +491,7 @@ def test_open_git_drift_and_vs_or_in_condition(tmp_path, monkeypatch, capsys):
 
     hq.main(['open', _SLUG])
 
-    assert 'git drift' in capsys.readouterr().out
+    assert 'git drift' in _strip_read(capsys.readouterr().out)
 
 
 def test_open_git_drift_not_fired_when_cur_branch_is_dash(
@@ -515,7 +520,7 @@ def test_open_git_drift_not_fired_when_cur_branch_is_dash(
     # HQ_GIT=0 -> anch['branch'] = '-' -> drift check skipped.
     hq.main(['open', _SLUG])
 
-    assert 'git drift' not in capsys.readouterr().out
+    assert 'git drift' not in _strip_read(capsys.readouterr().out)
 
 
 def test_open_block_sha_pattern_matches_lowercase_hex(
@@ -1360,7 +1365,7 @@ def test_open_git_drift_not_fired_when_branch_and_sha_match(
     # No modification to HANDOFF.md: h_branch == cur_branch and h_sha == cur_sha.
     hq.main(['open', _SLUG])
 
-    assert 'git drift' not in capsys.readouterr().out
+    assert 'git drift' not in _strip_read(capsys.readouterr().out)
 
 
 def test_open_git_drift_suppressed_when_cur_branch_is_dash(
@@ -1385,7 +1390,7 @@ def test_open_git_drift_suppressed_when_cur_branch_is_dash(
 
     hq.main(['open', _SLUG])
 
-    assert 'git drift' not in capsys.readouterr().out
+    assert 'git drift' not in _strip_read(capsys.readouterr().out)
 
 
 def test_open_filter_or_skips_read_before_edit_rows(
@@ -1408,7 +1413,7 @@ def test_open_filter_or_skips_read_before_edit_rows(
 
     hq.main(['open', _SLUG])
 
-    out = capsys.readouterr().out
+    out = _strip_read(capsys.readouterr().out)
     assert 'unresolved anchor' not in out, (
         f'read_before=edit rows must not trigger anchor check; got: {out!r}'
     )

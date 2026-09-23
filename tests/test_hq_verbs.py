@@ -109,6 +109,11 @@ def _set_cursor(handoff_path: 'os.PathLike[str]', content: str) -> None:
     p.write_text(text[:idx + 1] + content)
 
 
+def _strip_read(out: str) -> str:
+    """Remove the appended read topic from open output before comparing."""
+    return out.replace(hq.HELP_TOPICS['read'] + '\n', '')
+
+
 def _new_root(
     tmp_path: 'os.PathLike[str]',
     monkeypatch: Any,
@@ -1360,7 +1365,7 @@ def test_where_anchor_escapes_a_semicolon_inside_a_heading(
     assert 'notes-findings.md:3-4' in (folder / 'HANDOFF.md').read_text()
     capsys.readouterr()
     assert hq.main(['open', _SLUG]) == 0
-    assert 'unresolved anchor' not in capsys.readouterr().out
+    assert 'unresolved anchor' not in _strip_read(capsys.readouterr().out)
     assert hq.main(['read', _SLUG, 'notes-findings.md']) == 0
     assert capsys.readouterr().out.splitlines() == [
         '## F7. Cache hit ratio holds (n>=2; n=1 excluded)', 'body']

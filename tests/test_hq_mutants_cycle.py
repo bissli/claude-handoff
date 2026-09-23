@@ -48,6 +48,12 @@ def _run(argv):
     return rc, out.getvalue(), err.getvalue()
 
 
+def _strip_write(out):
+    """Remove the write topic begin appends, so a check reads begin's own lines.
+    """
+    return out.replace(hq.HELP_TOPICS['write'] + '\n', '')
+
+
 def _lock(folder, session, time_str, cycle=1):
     (folder / '.hq.lock').write_text(
         f'slug={folder.name}\nsession={session}\nhost=other-host\n'
@@ -939,6 +945,7 @@ def test_print_worklist_witness_uses_manifest_last(tmp_path, monkeypatch):
     ledger.write_text(content.replace('path', 'pXth', 1))
     # begin again: must detect W1 break.
     rc2, out2, _ = _run(['begin', _SLUG, '--force'])
+    out2 = _strip_write(out2)
     assert 'W1' in out2, (
         f'tampered ledger must trigger W1 from begin: {out2!r}')
 
@@ -1095,7 +1102,7 @@ def test_verb_begin_adopt_message_handoff_md(tmp_path, monkeypatch):
     )
     rc, out, _ = _run(['begin', _SLUG])
     assert rc == 0
-    assert 'HANDOFF.md' in out, (
+    assert 'HANDOFF.md' in _strip_write(out), (
         f'adopt message must say "HANDOFF.md" (case-exact), got: {out!r}')
 
 

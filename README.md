@@ -245,7 +245,7 @@ session chose.)
   the first off, and `HQ_GATE_DENY=1` makes it deny the write instead
   of reporting.
 - Every line `hq` prints that calls for a move names it, and
-  `hq help <topic>` (anchors, kinds, rules, stale-path) and
+  `hq help <topic>` (anchors, kinds, read, rules, stale-path, write) and
   `hq <verb> --help` carry the reference detail the skill file points
   at, so the skill stays short enough to survive a compaction whole.
 - `/handoff when`, `diff`, `artifacts`, and `standing` query the
@@ -399,20 +399,20 @@ hook re-measures growth per session:
 
 ## Glossary
 
-| term           | meaning                                                                                                           |
-| -------------- | ----------------------------------------------------------------------------------------------------------------- |
-| turn           | one prompt from you plus everything Claude does before waiting again                                              |
-| call           | one API request; each tool use is one, ~9 per turn                                                                |
-| context        | everything re-sent with every call: system prompt, tools, conversation                                            |
-| billed context | `cache_read + cache_creation + uncached_input` on the last call                                                   |
-| cache read     | a re-sent token served from the prompt cache, at 5% of input price on Opus 5.5, 2.5% on Fable 5.1, 10% elsewhere   |
-| cache write    | a new token added to the cache, at 125% of input price                                                            |
-| target         | context where a turn costs $0.62, lifted where the compaction cycle needs more; the gauge's 100%                  |
-| over budget    | context where a turn costs $0.88; never scaled up                                                                 |
-| reserve        | room held below the target so the handoff itself still fits                                                       |
-| floor          | what a session is billed before any conversation: ~69K                                                            |
-| handoff        | write state to a file, start fresh; restarts at floor + file                                                      |
-| compaction     | `/compact`; summarizes in place and restarts near 123K                                                            |
+| term           | meaning                                                                                                          |
+| -------------- | ---------------------------------------------------------------------------------------------------------------- |
+| turn           | one prompt from you plus everything Claude does before waiting again                                             |
+| call           | one API request; each tool use is one, ~9 per turn                                                               |
+| context        | everything re-sent with every call: system prompt, tools, conversation                                           |
+| billed context | `cache_read + cache_creation + uncached_input` on the last call                                                  |
+| cache read     | a re-sent token served from the prompt cache, at 5% of input price on Opus 5.5, 2.5% on Fable 5.1, 10% elsewhere |
+| cache write    | a new token added to the cache, at 125% of input price                                                           |
+| target         | context where a turn costs $0.62, lifted where the compaction cycle needs more; the gauge's 100%                 |
+| over budget    | context where a turn costs $0.88; never scaled up                                                                |
+| reserve        | room held below the target so the handoff itself still fits                                                      |
+| floor          | what a session is billed before any conversation: ~69K                                                           |
+| handoff        | write state to a file, start fresh; restarts at floor + file                                                     |
+| compaction     | `/compact`; summarizes in place and restarts near 123K                                                           |
 
 ## How it decides
 

@@ -2,13 +2,8 @@
 name: handoff
 description: >-
   Write or read a session handoff under .handoff/ - the exit the
-  context-budget warnings point at. The verb is inferred, never typed.
-  Bare /handoff writes or updates this session's
-  .handoff/<slug>/HANDOFF.md. In a fresh session it reads one back
-  instead. list shows what exists, check reviews one in place, and
-  when, diff, artifacts, standing query the ledger. Replaces /compact,
-  and replaces re-planning: the file carries the approved plan across
-  sessions.
+  context-budget warnings point at. Use near the budget or to resume a
+  prior session; replaces /compact.
 allowed-tools: Bash(hq *)
 ---
 
@@ -148,15 +143,9 @@ branch, sha), go under Environment.
 
 ### The file
 
-Write for a reader with no memory of this session and full access to
-the repo: short technical documentation in complete sentences, no
-transcript narration. Task and Now are required; omit any other cursor
-section that would be empty. A requirement the user stated, an
-approval given, a quirk found is lost unless written here. In doubt,
-write it down.
-
 The hand-written half of a real file, three cycles in
-(`reference/example-handoff.md` is the whole file):
+(`reference/example-handoff.md` is the whole file); the rules it is
+written by print at `begin`:
 
 ```markdown
 # Handoff: auth-token-refresh
@@ -189,68 +178,10 @@ Wire refresh_token() into poll() at scripts/auth.py:88, in the 401 branch.
 <!-- hq:read 53c21ca4645f -->
 ```
 
-Rules:
-
-- Point, never paste: a rehomed sibling is stamped with `hq stamp`;
-  its pointer line is generated, never typed.
-- Skip what the repo records: git history, CLAUDE.md, README content.
-- Too big for the file but worth keeping: a sibling `notes/<topic>.md`,
-  stamped `--read-before edit` when the cursor points at it, so its
-  label, to 120 characters, stays in the Artifacts block instead of a
-  count.
-- Name where a credential lives, never its value.
-- Absolute dates. ASCII only.
-- Now is the single next action; Plan, the approved plan, is what
-  follows it; neither is re-opened.
-- Now alone is spent each cycle. Every other line stays (a done Plan
-  item ticked `- [x]`) or moves whole to a `note` body or a stamped
-  sibling - what a resuming reader does not need first moves, never
-  cut; `finish` refuses a dropped line.
-- Anything still awaiting the user - a question, an unapproved plan -
-  goes under `Open questions`; read stops there.
-- An item recorded with `note` or under `## Unfiled` is not repeated
-  in State: the Standing block carries it.
-- No line ceiling binds the cursor: a block holds text back over a
-  store; the cursor has none, so a reworded line drops facts.
-
 ### The artifact ledger
 
 `stamp` and `note` take `--batch` too: one row per stdin line, the
-same arguments minus the slug.
-
-`read_before` is a tier, and `stamp` seeds it from the kind: a spec
-seeds `always`, a draft `edit`, all else `never`. Of several `SPEC*`
-stem-mates only the newest is gated.
-
-| tier | read | when |
-| --- | --- | --- |
-| `always` | the contract | every resume |
-| `edit` | before a change to it | the gate, at a write to it |
-| `mention` | on demand | `hq read` |
-| `never` | on the record | `hq artifacts`, `hq when` |
-
-`always` requires an anchor: a stamp that would leave a live `always`
-row with no `--where` is refused and the file's headings print under
-the refusal; a spec needed whole is anchored at its title heading. A
-whole file is never eager: a note or a source file the cursor points
-at is `edit` or `mention`.
-
-Rules the script enforces:
-
-- R1 A spec row keeps `always` and a draft row `edit` or `always` -
-  inferred, stored, or by `--kind`; both keep `live` and their kind,
-  unless `--successor` names a live file on disk other than itself, or
-  `--archive --reason` is given. A path that has ever been spec or
-  draft stays gated: its way back to `live` is that tier.
-- R2 A refused stamp still appends a receipt row, `reason` set to
-  `refused: <why>`; it clears nothing.
-- R3 A live row graded always or edit whose file sha moved blocks
-  `finish`; a re-stamp alone clears it.
-- W1, W2 An edited recorded line in `ledger.tsv` or `standing.md` is a
-  hard fail in `finish`; when a known tool caused it (a formatter, a
-  merge), pass `--acknowledge "<reason>"` to `finish`.
-
-Stamp forms:
+same arguments minus the slug. Stamp forms:
 
 ```
 hq stamp <slug> specs/SPEC.md \
@@ -265,17 +196,7 @@ notes/idp-quirks.md --read-before edit --label "staging IdP quirks"
 ROWS
 ```
 
-Path resolution, the values a re-stamp carries forward, and the
-status moves `--successor`, `--archive --reason`, and `--defer` make
-are in `hq stamp --help`; every `--where` form is in `hq help
-anchors`. `stamp` accepts a wrong anchor, which shows only as
-`SPEC.md:?` in the read block - check the heading first.
-
-`note` takes a kind - `decision`, `constraint`, `dead-end` - a one-line
-`--headline`, and the body as the last argument. `supersede` takes two
-ids of one kind, old then new, and echoes the item it drops from the
-block; a ruling inside that text which still holds takes one more
-`hq note` under a new id.
+Note and supersede forms:
 
 ```
 hq note <slug> decision \
@@ -287,48 +208,15 @@ ROWS
 hq supersede <slug> d17 d23
 ```
 
-### Unfiled
-
-Items settled this session with no `note` call go under `## Unfiled`,
-above the first `<!-- hq:` marker, as typed bullets, one per item:
-
-```
-- decision: **<headline>** <body>
-- constraint: **<headline>** <body>
-- dead-end: **<headline>** <body, wrapped onto indented lines
-  when long>
-```
-
-A bullet with no bold span takes its first sentence as the headline
-(a one- or two-word sentence, `Cycle 26.`, is a label and the headline
-runs on). `finish` drains the section into `standing.md`; an untyped
-bullet is a hard fail that writes nothing. Omit the section when every
-item went through `note`.
-
-### A plan that lives in a todo file
-
-Work often has a ledger of its own - `todo/foobar.md`, tracked in the
-repo. One home per fact, or the copies drift: the todo file owns what
-is open and done; the handoff owns how this thread works it - state,
-decisions, the Now step.
-
-- Plan points at the live item (`todo/foobar.md item 3`) and keeps
-  only thread-only steps of its own. Never copy the item's text across.
-- write syncs the todo first - mark what this session closed, append
-  what it found, in the todo file's own format - then writes the
-  handoff against the result. A dirty todo shows in the header.
-- On first pointing at an item, add one back-pointer line under it,
-  `entry: .handoff/<slug>/HANDOFF.md`, and nothing else from here.
-- An untracked todo file cannot anchor to a sha: mark the pointer
-  `(untracked)`, and at read its current content is the truth.
-
 ### Write path
 
 Run these steps in order:
 
-1. `hq begin <slug>` takes the lock and prints the work list, then
-   `cycle N begun by <session> on <host>`.
-   Make each move in steps 2 and 3. `hq begin: lock held by <session>
+1. `hq begin <slug>` takes the lock and prints the work list, ending
+   in `cycle N begun by <session> on <host>`, then the writing rules
+   (`hq help write`: cursor, ledger tiers, Unfiled, a todo file the
+   Plan points at). Make each move in steps 2 and 3; the printed
+   rules bind this cycle. `hq begin: lock held by <session>
    on <host> since <time>; use --force to take over` and `hq begin:
    lock file unreadable; use --force to take over` (exit 1) mean
    another session is inside a cycle less than two hours old: stop and
@@ -347,8 +235,9 @@ Run these steps in order:
    which blocks `finish` until the row is re-pointed, superseded, or
    archived.
 4. Rewrite the cursor from `## Task` down, above the first `<!-- hq:`
-   marker, carrying forward every line this session did not settle;
-   leave the header line and everything below the marker alone.
+   marker, by the printed rules, carrying forward every line this
+   session did not settle; leave the header line and everything below
+   the marker alone.
 5. Run the Reviewer pass (below); each surviving finding becomes a
    `note`, a `stamp`, or a cursor edit in this cycle - return to step 2
    for it.
@@ -397,16 +286,10 @@ the agent never grants itself the skip.
 
 ### Report
 
-Whatever else the turn contains, its final message names the absolute
-path, the size `finish` printed, and the resume line - with
-`--no-check` too:
-
-```
-Wrote /home/me/code/poller/.handoff/auth-token-refresh/HANDOFF.md
-  (~528 tokens, cycle 3).
-Resume: kill this session, start a fresh one, run
-  /handoff auth-token-refresh
-```
+Whatever else the turn contains, its final message relays verbatim
+the path-and-size line `finish` printed and its `resume:` line, and
+tells the user to kill this session and start a fresh one before
+running that resume line - with `--no-check` too.
 
 ## read
 
@@ -414,73 +297,30 @@ Resume: kill this session, start a fresh one, run
    one line, read that slug; several, list them and ask which; none,
    say so. The last two stop there - never pick the newest, and never
    fall through to write.
-2. Run `hq open <slug>`. It is read-only and prints only what is
-   wrong; none stops the read: a
-   `WARNING:` (an edited recorded line), an unfinished cycle, or
-   `LEDGER BEHIND` is reported and read past; `git drift` names the
-   `git log` to run; a moved sha, an unresolved anchor, or a moved span
-   says what to read instead; a `stale folder path` waits for the next
-   write.
-3. Read `HANDOFF.md`. Then run `hq read <slug> <path>` on every
-   `## Read first` line that shows a span: it prints the span and
-   records the read; a line printed instead names its move. A
-   whole-file row, an older cycle's, is read when the Now step names
-   its file or the gate names it at a write, never before. A section
-   the row does not anchor is read when the work needs it:
-   `--section <anchor>` in `--where` form, or `--whole` for the file
-   whole. Then read every todo file the Plan points at. A conforming
-   target with no `ledger.tsv` has no blocks yet: follow its `## Key
-   files` `Read now:` pointers by hand. A target with no conforming
-   header names its own reading order - follow it. Read nothing else.
-4. Drift check: the header says dirty - run `git status --porcelain`
-   and note what is still uncommitted. No sha in the header (written
-   outside a repo) or no conforming header - skip the git steps. A
-   pointed todo moved or disagrees with the file: the todo wins on
-   what is open or done, the handoff on approach and decisions. Note
-   drift in one line and proceed.
-5. Do not re-plan and do not reopen a Standing item. Open questions
-   present: recap in six lines at most - the task, what is settled,
-   what each question decides, each restated for a reader outside
-   the thread - then put them to the user and stop. Otherwise state
-   the task and the Now step in two sentences, then execute Now; the
-   Plan follows.
-6. A later bare `/handoff` targets this handoff - write rule 2.
+2. Run `hq open <slug>`. It is read-only and prints what is wrong,
+   then the remaining steps (`hq help read`); each binds.
 
-In the generated blocks, `Read first` has one line per live `always`
-row, with its label and the size of what `hq read` prints:
-`.handoff/<slug>/specs/SPEC.md:11-13  (320 tok)` is where its anchor
-resolves, `(N lines, T tok)` a whole file an older cycle left,
-`:?` an anchor matching no heading - read it `--whole`, re-stamp
-with a `--where` that resolves, re-run `hq open`. `Artifacts` prints
-one line per live row graded always, edit, or mention - `path  kind
-tier  cN  label`, no label on an `always` row, `Read first` carries
-it - and `path spec? unstamped` for a file with no row; live
-`never` rows collapse to a count, and rows no longer live to
-`superseded`, `archived`, or `missing` counts - a file gone from the
-disk reads `missing` however the ledger stored it. `Standing` ids are
-`d` decision, `c` constraint, `x` dead end; each kind prints its
-newest cycle first, one cycle's items in recorded order. A constraint
-prints its headline and the first sentence of its body, a decision or
-dead end its headline. A line holding text back ends in the command
-that prints the rest, runnable as printed:
-`- hq artifacts <slug>` on the `never` count and
-`- hq artifacts <slug> --status <status>` on each non-live count;
-`+Nc - hq when <slug> <path>` on an `edit` or `mention` label past
-120 characters; `- hq standing <slug> --all` on the superseded count
-and `+Nc - hq standing <slug> <id>` on a held body. Every path
-resolves from the base the first line names; the folder's own files
-carry `.handoff/<slug>/`. In `Log`, `+1` counts dirty paths.
+In the generated blocks, a line ending in `- hq artifacts <slug>
+...`, `- hq when <slug> <path>`, or `- hq standing <slug> ...` is a
+command to run, as printed, when the held text is wanted; `path spec?
+unstamped` is a file that needs a stamp. The Standing block already
+holds the items: `hq standing` is for a held body or `--all`, never a
+re-read.
 
 ## check
 
-Resolve like read, then read steps 2 and 3; open questions do not stop
-a check. Then run the write path: `begin`; steps 2 to 4 only for
-findings - what `open` printed and what the skeptic returns - as notes,
-stamps, and cursor edits; the Reviewer pass, skipped only by the
-user's `--no-check`; `finish --log "check: <n> findings applied"`,
-counting both kinds. A check with nothing to apply still runs
-`finish`, which releases the lock and advances the cycle. A target
-with no conforming header runs the adoption pass and stops.
+Resolve like read, then run `hq open <slug>` and the printed reading
+steps only as far as the Read-first reads: read `HANDOFF.md` and each
+spanned Read-first line, then stop - a check neither drift-checks nor
+executes Now, and open questions do not stop it. Then run the write
+path: `begin`;
+steps 2 to 4 only for findings - what `open` printed and what the
+skeptic returns - as notes, stamps, and cursor edits; the Reviewer
+pass, skipped only by the user's `--no-check`; `finish --log "check:
+<n> findings applied"`, counting both kinds. A check with nothing to
+apply still runs `finish`, which releases the lock and advances the
+cycle. A target with no conforming header runs the adoption pass and
+stops.
 
 ## list
 
@@ -491,22 +331,13 @@ names the columns.
 
 ## done
 
-1. Resolve `<slug>` per the shared rule. With none given, list the
-   candidates and stop - never pick the newest. Ending the wrong
-   thread is not a mistake a later cycle corrects.
-2. Run `hq done <slug>`, with `--reason "<line>"` when the session
-   knows why the thread is finished; whitespace collapses to single
-   spaces.
-3. Show the user the output unchanged.
-
-`done` ends the thread; `finish` ends one cycle and leaves it running.
-It writes the `.hq.done` marker in the folder and deletes nothing:
-`list` hides it, `begin` and `adopt` refuse it and name the undo,
-every other read verb still answers. `--force` marks a folder whose
-cycle is still open, which otherwise refuses and names `hq finish`.
-The marker's fields, `--undo`, and a repeated `done` are in
-`hq done --help`. A directory named `.hq.done` refuses `--undo`:
-remove it by hand; no verb clears it.
+Resolve `<slug>` per the shared rule; with none given, list the
+candidates and stop - never pick the newest: ending the wrong thread
+is not a mistake a later cycle corrects. Run `hq done <slug>`, with
+`--reason "<line>"` when the session knows why. `done` ends the
+thread; `finish` ends one cycle. Show the output unchanged. The
+marker, `--undo`, `--force`, and a repeated `done` are in
+`hq done --help`.
 
 ## when, diff, artifacts, standing
 
@@ -551,7 +382,9 @@ after `reference/adoption.md`, continue at write path step 1, where
 ## Where the rest lives
 
 `reference/adoption.md` and `reference/example-handoff.md` sit beside
-this file. `hq help anchors`: every `--where` form. `hq help kinds`:
-kinds, tiers, ledger fields, flag values. `hq help rules`: R1 to W2
-in full. `hq help stale-path`: fixing a folder path under a former
-directory. `hq <verb> --help`: each verb's columns.
+this file. `hq help write`: the writing rules `begin` prints. `hq help
+read`: the reading steps `open` prints. `hq help anchors`: every
+`--where` form. `hq help kinds`: kinds, tiers, ledger fields, flag
+values. `hq help rules`: R1 to W2 in full. `hq help stale-path`:
+fixing a folder path under a former directory. `hq <verb> --help`:
+each verb's columns.

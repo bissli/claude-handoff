@@ -68,10 +68,6 @@ _TERMINAL_PRINTS = {
 # first 5,000 tokens, about four characters a token. The whole write
 # cycle has to sit inside that.
 _REATTACH_BUDGET_CHARS = 20_000
-# The room the read path and the query verbs take past the budget. The
-# re-attach budget above is the platform's; this one is the file's own
-# discipline, and every character of it is re-read on every load.
-_SKILL_CEILING_CHARS = 26_000
 # A printed line that carries its own move: ' - ' or '; ' and then the
 # move, at least six characters of it.
 _TAIL = re.compile(r'(?: - |; )\S.{5,}')
@@ -520,20 +516,17 @@ def test_the_skill_example_cursor_matches_the_reference_example():
 
 
 def test_the_write_cycle_fits_the_reattach_budget():
-    """The whole write path, reviewer pass, and report sit inside the
-    first 5,000 tokens of the skill, and the file stays under its ceiling.
+    """The skill fits whole inside the re-attach cut.
 
-    Mutation: a section regrown, or the read path moved ahead of the
-    write path, so that `### Report` falls past the re-attach cut and a
-    compacted session finishes a cycle without the reviewer pass or the
-    resume line.
-    Oracle: the character offset of the end of `### Report` against the
-    budget constant, and the file length against the ceiling.
+    Mutation: a section regrown past the budget, so a compacted session
+    loses whatever falls beyond the cut; or the reviewer pass, the lock
+    stop, or the report dropped from the skill.
+    Oracle: the file length against the budget constant, and each
+    required literal present in the file.
     """
     text = SKILL.read_text()
-    report_at = text.index('\n### Report\n')
-    report_end = text.index('\n## ', report_at + 1)
-    assert report_end <= _REATTACH_BUDGET_CHARS, report_end
-    for literal in ('hq finish', 'Guess neither', 'never opens', 'Skeptic ('):
-        assert text.index(literal) < _REATTACH_BUDGET_CHARS, literal
-    assert len(text) <= _SKILL_CEILING_CHARS, len(text)
+    for literal in (
+            'hq finish', 'Guess neither', 'never opens', 'Skeptic (',
+            '\n### Report\n'):
+        assert literal in text, literal
+    assert len(text) <= _REATTACH_BUDGET_CHARS, len(text)

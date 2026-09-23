@@ -51,6 +51,11 @@ def _run(argv):
     return rc, out.getvalue()
 
 
+def _strip_read(out: str) -> str:
+    """Remove the appended read topic from open output before comparing."""
+    return out.replace(hq.HELP_TOPICS['read'] + '\n', '')
+
+
 def _rows(folder):
     lines = (folder / 'ledger.tsv').read_text().splitlines()[1:]
     return [dict(zip(hq.LEDGER_FIELDS, ln.split('\t'))) for ln in lines if ln.strip()]
@@ -282,6 +287,7 @@ def test_random_verb_sequences_hold_the_ledger_invariants(tmp_path, monkeypatch)
                     assert archive.read_bytes() == (folder / 'HANDOFF.md').read_bytes(), where
                     assert not (folder / '.hq.lock').exists(), where
                     _, opened = _run(['open', _SLUG])
+                    opened = _strip_read(opened)
                     for bad in ('WARNING', 'LEDGER BEHIND', 'block sha mismatch'):
                         assert bad not in opened, (where, opened)
                     hq.main(['begin', _SLUG])
