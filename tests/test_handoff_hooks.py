@@ -418,6 +418,38 @@ def test_a_read_of_a_narrowed_span_still_clears_the_gate(
     assert run('n2') == ''
 
 
+def test_a_receipt_in_the_folder_clears_the_gate(
+        monkeypatch, capsys, tmp_path):
+    """A receipt hq read left in the handoff folder counts as a read.
+
+    Mutation: the gate reading receipts from the state dir alone, so a
+    read made under a read-only state dir is reported at every write.
+    Oracle: a spy on stdout - the row reports with no receipt, a folder
+    receipt for the session silences it, and one for another session
+    does not.
+    """
+    root, folder = _handoff_root(tmp_path)
+    state = tmp_path / 'state'
+    state.mkdir()
+    monkeypatch.setenv('HQ_STATE_DIR', str(state))
+    tr = _transcript(tmp_path / 't.jsonl',
+                     [_bash(f'python3 bin/hq.py open {_SLUG}')])
+    hq._append_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS,
+                   _row('SPEC.md', cycle='2', where='Risks'),
+                   _LEDGER_HEADER)
+
+    def run(session):
+        payload = _payload(root, tr, session, 'Edit',
+                           {'file_path': 'src/app.py'})
+        return _run(monkeypatch, capsys, handoff_gate, payload)
+
+    assert 'SPEC.md' in run('f1')
+    (folder / '.hq.reads-f2').write_text(f'{_NOW} {_SLUG} SPEC.md\n',
+                                         encoding='utf-8')
+    assert run('f2') == ''
+    assert 'SPEC.md' in run('f3')
+
+
 def test_gate_arms_only_on_hq_open(monkeypatch, capsys, tmp_path):
     """Verify nothing is gated until an hq.py open names a slug.
 

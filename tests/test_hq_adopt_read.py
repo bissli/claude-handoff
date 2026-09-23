@@ -472,14 +472,15 @@ def test_undecodable_bytes_do_not_stop_a_read_or_a_ledger(
 
 def test_a_receipt_that_cannot_be_written_is_reported_after_the_spans(
         tmp_path, monkeypatch, capsys):
-    """A session id with a slash is sanitized; a state dir that is a file
-    is reported, not raised.
+    """A session id with a slash is sanitized; a receipt neither the state
+    dir nor the folder takes is reported, not raised.
 
     Mutation: the session id used raw in the receipt name, so
     HQ_SESSION='a/b' raises FileNotFoundError; or the receipt write left
     unguarded, so a state dir that is a file raises FileExistsError.
-    Oracle: the sanitized receipt file exists; the second run prints the
-    span first, then the documented line, and exits 1.
+    Oracle: the sanitized receipt file exists; with the state dir a file
+    and the folder receipt a directory, the second run prints the span
+    first, then the documented line, and exits 1.
     """
     folder = _root(tmp_path, monkeypatch)
     hq.main(['begin', _SLUG])
@@ -491,11 +492,42 @@ def test_a_receipt_that_cannot_be_written_is_reported_after_the_spans(
     blocked = pathlib.Path(tmp_path) / 'blocked-state'
     blocked.write_text('x\n')
     monkeypatch.setenv('HQ_STATE_DIR', str(blocked))
+    (folder / '.hq.reads-a_b').mkdir()
     capsys.readouterr()
     assert hq.main(['read', _SLUG, 'SPEC.md']) == 1
     lines = capsys.readouterr().out.splitlines()
     assert lines[0] == '## Design'
     assert lines[-1].startswith('hq read: receipt not written: ')
+
+
+def test_a_read_only_state_dir_moves_the_receipt_into_the_folder(
+        tmp_path, monkeypatch, capsys):
+    """A state dir the receipt cannot reach sends it to the handoff folder.
+
+    Mutation: the folder fallback dropped, so the read exits 1 and no
+    folder receipt exists; or the fallback written even when the state
+    dir took the receipt.
+    Oracle: a writable state dir holds the line and the folder holds
+    none; a state dir that is a file leaves the same line in
+    .hq.reads-<session>, and the read exits 0 with no failure line.
+    """
+    folder = _root(tmp_path, monkeypatch)
+    hq.main(['begin', _SLUG])
+    (folder / 'SPEC.md').write_text('# Spec\n\n## Design\n\nContent.\n')
+    hq.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Design'])
+    monkeypatch.setenv('HQ_SESSION', 's1')
+    assert hq.main(['read', _SLUG, 'SPEC.md']) == 0
+    assert (pathlib.Path(tmp_path) / 'hq-reads-s1.txt').read_text().endswith(
+        f' {_SLUG} SPEC.md\n')
+    assert not (folder / '.hq.reads-s1').exists()
+    blocked = pathlib.Path(tmp_path) / 'blocked-state'
+    blocked.write_text('x\n')
+    monkeypatch.setenv('HQ_STATE_DIR', str(blocked))
+    capsys.readouterr()
+    assert hq.main(['read', _SLUG, 'SPEC.md']) == 0
+    assert 'receipt not written' not in capsys.readouterr().out
+    assert (folder / '.hq.reads-s1').read_text().endswith(
+        f' {_SLUG} SPEC.md\n')
 
 
 # --- item 9: a byte-order mark ----------------------------------------

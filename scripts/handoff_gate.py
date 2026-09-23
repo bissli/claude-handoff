@@ -678,11 +678,17 @@ def gate(payload: dict[str, Any]) -> int:
     if folder is not None:
         rows = hq.latest_rows(
             hq._read_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS))
-        try:
-            receipts = (state_dir / f'hq-reads-{session}.txt').read_text(
-                encoding='utf-8').splitlines()
-        except OSError:
-            receipts = []
+        # hq read falls back to the folder when a sandboxed shell leaves
+        # the state directory read-only, so a receipt lives in either.
+        receipts: list[str] = []
+        for receipt_path in (
+                state_dir / f'hq-reads-{session}.txt',
+                folder / f'.hq.reads-{session}'):
+            try:
+                receipts += receipt_path.read_text(
+                    encoding='utf-8').splitlines()
+            except OSError:
+                continue
         opened = {_resolved(entry, cwd) for entry in reads}
         tokens = [set(_TOKEN_SPLIT.split(entry)) for entry in segments]
         missing: list[tuple[str, str, bool]] = []

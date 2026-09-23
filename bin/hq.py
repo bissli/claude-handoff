@@ -6034,14 +6034,19 @@ def _verb_read(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     -------
     int
         0 on success; 1 when the path is not in the ledger, not on disk,
-        or the receipt directory cannot be written; 2 when ``--whole``
-        and ``--section`` are passed together.
+        or neither the state directory nor the handoff folder takes the
+        receipt; 2 when ``--whole`` and ``--section`` are passed
+        together.
 
     Notes
     -----
-    - The spans print before the receipt is written, so a state directory
-      the receipt cannot reach costs the caller the exit code, never
-      the content it asked for.
+    - The spans print before the receipt is written, so a receipt with
+      nowhere to go costs the caller the exit code, never the content
+      it asked for.
+    - The receipt goes to ``hq-reads-<session>.txt`` in the state
+      directory, else to ``.hq.reads-<session>`` in the handoff folder,
+      and the gate reads both. A sandboxed shell can leave the state
+      directory read-only while the repo stays writable.
     - The gate matches a receipt on the path and never on the span,
       and the receipt is written only where the read covered the row's
       required content: ``--whole`` covers any row, a ``--section``
@@ -6128,17 +6133,21 @@ def _verb_read(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
         return 0
     state_path = pathlib.Path(os.environ.get('HQ_STATE_DIR', str(_DEFAULT_STATE)))
     session_name = re.sub(r'[/\\]', '_', str(anch['session']))
-    try:
-        state_path.mkdir(parents=True, exist_ok=True)
-        receipt_path = state_path / f'hq-reads-{session_name}.txt'
-        with receipt_path.open('a', encoding='utf-8') as fh:
-            fh.write(f'{anch["now"]} {folder.name} {stored_path}\n')
-    except OSError as exc:
-        print(
-            f'hq read: receipt not written: {exc}'
-            ' - the gate will not credit this read')
-        return 1
-    return 0
+    failures = []
+    for receipt_path in (
+            state_path / f'hq-reads-{session_name}.txt',
+            folder / f'.hq.reads-{session_name}'):
+        try:
+            receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            with receipt_path.open('a', encoding='utf-8') as fh:
+                fh.write(f'{anch["now"]} {folder.name} {stored_path}\n')
+            return 0
+        except OSError as exc:
+            failures.append(str(exc))
+    print(
+        f'hq read: receipt not written: {"; ".join(failures)}'
+        ' - the gate will not credit this read')
+    return 1
 
 
 def _verb_when(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int:
