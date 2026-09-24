@@ -630,14 +630,14 @@ def test_open_reports_git_drift_against_the_header_sha(tmp_path, monkeypatch):
 
 
 def test_read_sends_a_store_to_its_verb_not_to_the_file(tmp_path, monkeypatch):
-    """Read refuses the three dictated stores by naming the verb instead.
+    """Read refuses the two dictated stores by naming the verb instead.
 
     Mutation: falling through to the not-in-ledger refusal, which reads
     'read it whole by hand' and so tells the agent to do the one thing
-    the PreToolUse gate reports it for; or matching the basename only,
-    which misses cycles/<file>.
+    the PreToolUse gate reports it for; or cycles/ left in the map, so
+    an archived cycle the agent may read by range is refused as a store.
     Oracle: the hand-written verb per store from hq.STORE_VERBS, and
-    exit 1 on each.
+    exit 1 on each; the not-in-ledger line for cycles/c01.md.
     """
     folder = _root(tmp_path, monkeypatch)
     _run(['begin', _SLUG])
@@ -646,14 +646,14 @@ def test_read_sends_a_store_to_its_verb_not_to_the_file(tmp_path, monkeypatch):
             ('ledger.tsv',
              f'hq artifacts {_SLUG}, or hq when {_SLUG} <path>'),
             ('standing.md', f'hq standing {_SLUG}'),
-            ('cycles', f'hq diff {_SLUG} <c1> <c2>'),
-            ('cycles/c01.md', f'hq diff {_SLUG} <c1> <c2>'),
             ]:
-        store = path.split('/')[0]
         rc, out, _ = _run(['read', _SLUG, path])
         assert (rc, out.strip()) == (
-            1, (f'hq read: {store} is dictated, not opened'
+            1, (f'hq read: {path} is dictated, not opened'
                 f' - run this instead: {verb}'))
+    rc, out, _ = _run(['read', _SLUG, 'cycles/c01.md'])
+    assert (rc, out.strip()) == (
+        1, 'hq read: cycles/c01.md not in ledger - read it whole by hand')
 
 
 def test_read_and_diff_refusals_print_their_documented_lines(tmp_path, monkeypatch):

@@ -11,12 +11,11 @@ This hook watches each write after an ``hq open`` and, when a gated
 path the write needs has not been read this session, hands the model
 one line naming the path and the lines to read.
 
-It carries a second, smaller guard. The skill dictates ``ledger.tsv``,
-``standing.md``, and ``cycles/`` through a verb and never opens them,
-and nothing enforced that either: a run was seen reading the ledger
-and the lock in one command, unprompted, in a session written for
-other work. A call that names one of those three gets back the verb
-that replaces it.
+It carries a second, smaller guard. The skill dictates ``ledger.tsv``
+and ``standing.md`` through a verb and never opens them, and nothing
+enforced that either: a run was seen reading the ledger and the lock
+in one command, unprompted, in a session written for other work. A
+call that names either gets back the verb that replaces it.
 
 Notes
 -----
@@ -420,11 +419,10 @@ def store_reads(tool: str, fields: dict[str, Any], cwd: str) -> list[tuple[str, 
     Notes
     -----
     - The test is the path's own shape - the handoff directory, a slug,
-      then ``ledger.tsv``, ``standing.md``, or ``cycles`` - so this
-      guard needs no armed folder, no ledger, and no transcript. That
-      is what lets it fire on a read that precedes the ``hq open``
-      arming anything, which is where the read it exists to catch was
-      seen.
+      then ``ledger.tsv`` or ``standing.md`` - so this guard needs no
+      armed folder, no ledger, and no transcript. That is what lets it
+      fire on a read that precedes the ``hq open`` arming anything,
+      which is where the read it exists to catch was seen.
     - A read is the Read tool's own target or a token of a shell
       segment whose command word is a read verb, the same evidence the
       write gate credits. So ``hq when`` and ``hq standing`` report
@@ -433,9 +431,6 @@ def store_reads(tool: str, fields: dict[str, Any], cwd: str) -> list[tuple[str, 
     - The shape alone decides, so no filesystem call is made. A
       ``~user`` token costs a name-service lookup through
       ``expanduser``; nothing else leaves the process.
-    - The store component has to be named by the call. Inherited from
-      cwd alone, every read run from inside a ``cycles/`` directory
-      would report one.
     """
     name = hq.HANDOFF_DIRNAME
     if tool == 'Read':
@@ -462,7 +457,7 @@ def store_reads(tool: str, fields: dict[str, Any], cwd: str) -> list[tuple[str, 
         parts = _resolved(target, cwd).split(os.sep)
         for index, part in enumerate(parts[:-2]):
             store = parts[index + 2]
-            if part == name and store in hq.STORE_VERBS and store in target:
+            if part == name and store in hq.STORE_VERBS:
                 found.append((parts[index + 1], store))
     return list(dict.fromkeys(found))
 

@@ -1073,14 +1073,14 @@ def test_store_guard_names_the_three_stores_not_the_folder(monkeypatch, capsys,
 
 def test_store_guard_pairs_each_store_with_its_own_verb(monkeypatch, capsys,
                                                         tmp_path):
-    """Verify cycles matches at any depth and each store names its verb.
+    """Verify each store names its own verb and a cycles/ read passes.
 
-    Mutation: one verb for all three stores, which sends a reader of
-    standing.md to hq artifacts; or applying the exact-depth rule to
-    cycles too, which misses cycles/c01.md - the only shape a cycle is
-    ever read by.
+    Mutation: one verb for both stores, which sends a reader of
+    standing.md to hq artifacts; or cycles/ left in the guard, which
+    reports the range read of an archived cycle the store rule allows.
     Oracle: the hand-written verb per store, checked against the
-    documented mapping rather than against the code.
+    documented mapping rather than against the code, and no context
+    for a cycles/ file or the manifest.
     """
     root, folder = _handoff_root(tmp_path)
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
@@ -1089,38 +1089,12 @@ def test_store_guard_pairs_each_store_with_its_own_verb(monkeypatch, capsys,
     def verb(session, target):
         payload = _payload(root, tr, session, 'Bash',
                            {'command': f'cat .handoff/{_SLUG}/{target}'})
-        return _context(_run(monkeypatch, capsys, handoff_gate, payload))
-
-    assert f'hq artifacts {_SLUG}' in verb('G50', 'ledger.tsv')
-    assert f'hq standing {_SLUG}' in verb('G51', 'standing.md')
-    assert f'hq diff {_SLUG} <c1> <c2>' in verb('G52', 'cycles/c01.md')
-    assert f'hq diff {_SLUG} <c1> <c2>' in verb('G53', 'cycles')
-    assert f'hq diff {_SLUG} <c1> <c2>' in verb('G54', 'cycles/manifest.tsv')
-
-
-def test_store_guard_needs_the_store_named_by_the_call(monkeypatch, capsys,
-                                                       tmp_path):
-    """Verify a store component inherited from cwd alone does not report.
-
-    Mutation: accepting a store component that came from cwd rather
-    than from the call, so every plain read run from inside a cycles
-    directory reports a cycles read - the command word included.
-    Oracle: an unrelated file read from inside cycles/ is silent,
-    against a cycle file named by the call from the folder above,
-    which reports.
-    """
-    root, folder = _handoff_root(tmp_path)
-    monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
-    cycles = folder / 'cycles'
-    cycles.mkdir()
-    tr = _transcript(tmp_path / 't.jsonl', [])
-
-    def run(where, session, command):
-        payload = _payload(where, tr, session, 'Bash', {'command': command})
         return _run(monkeypatch, capsys, handoff_gate, payload)
 
-    assert run(cycles, 'GB0', 'cat notes.txt') == ''
-    assert 'hq diff' in _context(run(folder, 'GB1', 'cat cycles/c01.md'))
+    assert f'hq artifacts {_SLUG}' in _context(verb('G50', 'ledger.tsv'))
+    assert f'hq standing {_SLUG}' in _context(verb('G51', 'standing.md'))
+    assert verb('G52', 'cycles/c01.md') == ''
+    assert verb('G54', 'cycles/manifest.tsv') == ''
 
 
 def test_store_guard_needs_no_ledger_and_no_arming(monkeypatch, capsys,

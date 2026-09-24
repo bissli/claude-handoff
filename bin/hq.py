@@ -65,12 +65,11 @@ _SKIP_NAMES = {
 #   of opening, each against the verb that replaces a direct read.
 #   `read` refuses them by this map and the PreToolUse gate reports
 #   them by it, so both halves name the same route.
-# - A name matches as one path component, so the cycles entry covers
-#   the directory and every file in it.
+# - cycles/ is absent: no verb prints an archived cycle whole, so the
+#   agent reads cycles/cNN.md by range and never edits it.
 STORE_VERBS = {
     'ledger.tsv': 'hq artifacts {slug}, or hq when {slug} <path>',
     'standing.md': 'hq standing {slug}',
-    'cycles': 'hq diff {slug} <c1> <c2>',
     }
 HANDOFF_DIRNAME = '.handoff'
 # The per-session cache the hooks key by session id. The status line
@@ -5994,9 +5993,9 @@ def _verb_read(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     rows = _read_tsv(folder / 'ledger.tsv', LEDGER_FIELDS)
     stored_path = _ledger_key(folder, path, {r['path'] for r in rows})
     if stored_path is None:
-        # A store has no row to find - the artifact walk skips all
-        # three - so the bare refusal sent the reader to open the file
-        # the gate reports them for opening. Name the verb instead.
+        # A store has no row to find - the artifact walk skips both -
+        # so the bare refusal sent the reader to open the file the
+        # gate reports them for opening. Name the verb instead.
         store = next((part for part in pathlib.PurePath(path).parts
                       if part in STORE_VERBS), None)
         if store:
