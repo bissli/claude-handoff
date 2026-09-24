@@ -2255,9 +2255,7 @@ def test_diff_shows_cursor_changes_between_cycles(tmp_path, monkeypatch,
     monkeypatch.setenv('HQ_CYCLE', '2')
     hq.main(['begin', _SLUG])
     _set_cursor(folder / 'HANDOFF.md', '## Task\n\nLine B\n')
-    hq.main([
-        'finish', _SLUG, '--log', 'cycle two',
-        '--accept-not-carried', 'Line A settled'])
+    hq.main(['finish', _SLUG, '--log', 'cycle two'])
     capsys.readouterr()
 
     assert hq.main(['diff', _SLUG, '1', '2']) == 0

@@ -216,5 +216,5 @@ def test_a_line_moved_into_a_file_stamped_this_cycle_is_carried(
     _set_cursor(earlier, _WITHOUT_PARA)
     capsys.readouterr()
     rc = hq.main(['finish', 'cons-earlier', '--log', 'two'])
-    assert rc == 1
+    assert rc == 0
     assert f'  not carried: {_MOVED_PARA.strip()}' in capsys.readouterr().out

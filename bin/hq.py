@@ -348,13 +348,11 @@ W1, W2  finish and open check that ledger.tsv and standing.md are
 
 not carried  finish compares the last finished cycle's cursor against
     the new one, standing.md, the live labels and the stamped
-    siblings, and refuses on a line none of them carries. The Now step
-    is exempt, since the cycle completing it writes the next one. Carry
-    the line forward, rehome it to a sibling and stamp that sibling
-    this cycle, or pass --accept-not-carried "<reason>", which files
-    the cycle and records the count and the reason in the manifest.
-    hq open <slug> --not-carried lists every such line and writes
-    nothing.""",
+    siblings, and lists each line none of them carries as an
+    advisory. It never refuses, and the manifest records the count.
+    The Now step is exempt, since the cycle completing it writes the
+    next one. hq open <slug> --not-carried lists every such line
+    before finish and writes nothing.""",
     'stale-path': """\
 hq help stale-path - a folder path under a former directory
 
@@ -399,7 +397,7 @@ Cursor rules:
 - Now alone is spent each cycle. Every other line stays (a done Plan
   item ticked '- [x]') or moves whole to a note body or a stamped
   sibling - what a resuming reader does not need first moves, never
-  cut; finish refuses a dropped line.
+  cut; finish lists a line dropped anyway.
 - Anything still awaiting the user - a question, an unapproved plan -
   goes under Open questions; read stops there.
 - An item recorded with note or under ## Unfiled is not repeated in
@@ -5231,8 +5229,6 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
         return 1
     walk, rows, live, sha_map, manifest, lb, sb = _folder_state(folder)
     ack = ' '.join((getattr(argv, 'acknowledge', None) or '').split())
-    accept_nc = ' '.join((getattr(argv, 'accept_not_carried', None) or '').split())
-    accepted_nc = ''
     breaks = witness(manifest[-1] if manifest else None, lb, sb)
     if breaks and not ack:
         for b in breaks:
@@ -5432,52 +5428,26 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
             return 1
         new_note_lines.append(line)
         standing_text_new += line + '\n'
-    # --- Refusal: cursor lines not carried ---
+    # --- Advisory: cursor lines not carried ---
     # Notes:
     # - The cursor is rewritten every cycle, so the previous archive is
     #   the one record of what it held; a line that neither the new
     #   cursor, standing.md, a live label, nor a rehomed sibling
-    #   carries blocks the write until it is carried or accepted.
-    # - The block sits one step above the first disk mutation, so a
-    #   refusal leaves the folder as it was and keeps the lock, and the
-    #   same session re-runs once the cursor is fixed.
+    #   carries is listed and counted in the manifest, never refused.
+    # - Every line prints: once this cycle files, hq open --not-carried
+    #   compares against it and lists none of them.
     # - A cursor heading carries no fact, so a section omitted as empty
     #   is not reported by its heading.
-    nc_given = getattr(argv, 'accept_not_carried', None) is not None
-    if nc_given and not accept_nc:
-        print(
-            'hq finish: --accept-not-carried was given with no reason'
-            ' - re-run naming what settles the drop')
-        return 1
     prev_cycle, dropped_lines = not_carried(
         folder, rows, live, manifest, cursor_clean, standing_text_new,
         int(anch['cycle']))
-    if dropped_lines and not accept_nc:
-        print(
-            f'hq finish: {len(dropped_lines)} cursor lines from'
-            f' c{prev_cycle:02d} not carried'
-            ' - carry each forward, rehome it to a sibling and stamp'
-            ' that sibling this cycle, or re-run with'
-            ' --accept-not-carried "<reason>"')
-        for dropped in dropped_lines[:5]:
-            print(f'  not carried: {dropped.strip()}')
-        if len(dropped_lines) > 5:
-            print(
-                f'  ... and {len(dropped_lines) - 5} more'
-                f'; hq open {folder.name} --not-carried prints every one')
-        return 1
     if dropped_lines:
-        accepted_nc = (
-            f'accepted {len(dropped_lines)} not carried from'
-            f' c{prev_cycle:02d}; {accept_nc}')
         print(
-            f'accepted: {len(dropped_lines)} cursor lines from'
-            f' c{prev_cycle:02d} not carried; {accept_nc}'
-            ' - recorded in the manifest')
-    elif nc_given:
-        print(
-            'advisory: --accept-not-carried given, no cursor line was'
-            ' dropped - nothing to accept')
+            f'advisory: {len(dropped_lines)} cursor lines from'
+            f' c{prev_cycle:02d} not carried - cycles/c{prev_cycle:02d}.md'
+            ' keeps each; carry back any a later session needs')
+        for dropped in dropped_lines:
+            print(f'  not carried: {dropped.strip()}')
     log_text = ' '.join((getattr(argv, 'log', '') or '').split())
     branch, sha7, dirty = anch['branch'], anch['sha'], anch['dirty']
     if branch != '-':
@@ -5519,8 +5489,9 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
     note_parts: list[str] = []
     if breaks and ack:
         note_parts.append(f'acknowledged {"; ".join(breaks)}; {ack}')
-    if accepted_nc:
-        note_parts.append(accepted_nc)
+    if dropped_lines:
+        note_parts.append(
+            f'{len(dropped_lines)} not carried from c{prev_cycle:02d}')
     note_val = ' | '.join(note_parts) or '-'
     manifest_row: dict = {
         'cycle': str(anch['cycle']),
@@ -5691,7 +5662,7 @@ def _verb_open(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
             if standing_path.exists() else '')
         # finish compares against standing.md with this cycle's Unfiled
         # items already filed, so the lister files them too; otherwise
-        # it reports a line the refusal passes.
+        # it reports a line finish passes.
         for kind_str, headline, body in unfiled_items:
             line = _note_line(
                 standing_now, kind_str, headline, body, int(anch['cycle']))
@@ -6759,9 +6730,9 @@ def _build_parser() -> argparse.ArgumentParser:
         '"<reason>" turns a W1 or W2 witness break into an acknowledged line\n'
         'and records the break and the reason in the manifest.\n'
         'The cursor lines from the last finished cycle that nothing now\n'
-        'carries block the write; --accept-not-carried "<reason>" files\n'
-        'the cycle anyway and records the count and the reason in the\n'
-        'manifest. hq open <slug> --not-carried lists every such line.\n'
+        'carries print as an advisory, and the manifest records their\n'
+        'count; they never block the write. hq open <slug> --not-carried\n'
+        'lists every such line before finish.\n'
         'After the size line the print carries +N tok since cNN, this\n'
         "cycle's payload against the last one the manifest recorded: a\n"
         'level cut shows here being erased, cycle by cycle, while a\n'
@@ -6774,7 +6745,6 @@ def _build_parser() -> argparse.ArgumentParser:
     fin.add_argument('slug')
     fin.add_argument('--log', required=True)
     fin.add_argument('--acknowledge')
-    fin.add_argument('--accept-not-carried')
 
     _done_epilog = (
         'The finish line of the whole thread, not of one cycle: finish ends\n'

@@ -802,11 +802,10 @@ def test_the_artifacts_block_prints_every_full_row_with_no_cap(
     assert not any(' - hq artifacts ' in ln for ln in block.splitlines())
 
 
-_REFUSAL = (
-    'hq finish: {n} cursor lines from c{c:02d} not carried'
-    ' - carry each forward, rehome it to a sibling and stamp'
-    ' that sibling this cycle, or re-run with'
-    ' --accept-not-carried "<reason>"')
+_ADVISORY = (
+    'advisory: {n} cursor lines from c{c:02d} not carried'
+    ' - cycles/c{c:02d}.md keeps each; carry back any a later session'
+    ' needs')
 
 
 def _digests(folder):
@@ -855,17 +854,16 @@ def test_finish_reports_no_dropped_line_before_any_archive_exists(
     assert 'not carried' not in out
 
 
-def test_finish_refuses_before_the_archive_when_a_cursor_line_is_dropped(
+def test_a_dropped_cursor_line_is_listed_counted_and_never_refused(
         tmp_path, monkeypatch):
-    """The refusal precedes every disk write, so the folder is untouched.
+    """Finish files the cycle, names the dropped line, and records the count.
 
-    Mutation: the refusal left as an advisory that prints and falls
-    through to the write; or the return 1 placed after the cycles/
-    mkdir or the archive write, so the message changes but the order
-    does not.
-    Oracle: the absence of cycles/c02.md and four unchanged file
-    digests, against a hand-built pair of cursors whose one State line
-    has no home in the second.
+    Mutation: the refusal kept, so the cycle stays unfiled; the count
+    left out of the manifest note, so the record hides the drop; or the
+    line list skipped, so the writer never sees what went.
+    Oracle: a hand-built pair of cursors whose one State line has no
+    home in the second, against exit 0, cycles/c02.md on disk, and the
+    manifest note read back.
     """
     folder = _root(tmp_path, monkeypatch)
     _run(['begin', _SLUG])
@@ -880,24 +878,24 @@ def test_finish_refuses_before_the_archive_when_a_cursor_line_is_dropped(
         folder,
         '## Task\nRefresh the poller token.\n\n'
         '## Now\nRun the integration test against staging.\n')
-    before = _digests(folder)
     rc, out, _ = _run(['finish', _SLUG, '--log', 'two'])
-    assert rc == 1
+    assert rc == 0
     lines = out.splitlines()
-    assert _REFUSAL.format(n=1, c=1) in lines
+    assert _ADVISORY.format(n=1, c=1) in lines
     assert (
         '  not carried: - Verified: refresh round-trips against staging.'
         in lines)
-    assert not (folder / 'cycles' / 'c02.md').exists()
-    assert _digests(folder) == before
+    assert (folder / 'cycles' / 'c02.md').is_file()
+    rows = hq._read_tsv(folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS)
+    assert rows[-1]['note'] == '1 not carried from c01'
 
 
 def test_a_spent_now_step_is_not_a_dropped_line(tmp_path, monkeypatch):
-    """Replacing the Now step alone finishes; cutting a State line refuses.
+    """Replacing the Now step alone is silent; cutting a State line is listed.
 
     Mutation: the Now exemption dropped, so every healthy cycle
-    refuses; or the exemption widened past the Now section, so a
-    dropped State line passes.
+    reports its old Now step; or the exemption widened past the Now
+    section, so a dropped State line passes unlisted.
     Oracle: the pair of cursors straddling the real boundary - Now
     alone replaced, versus Now replaced and a State line cut.
     """
@@ -922,7 +920,7 @@ def test_a_spent_now_step_is_not_a_dropped_line(tmp_path, monkeypatch):
     _run(['begin', _SLUG])
     _cursor(folder, body.format(now='Cap the backoff.', tail=''))
     rc, out, _ = _run(['finish', _SLUG, '--log', 'three'])
-    assert rc == 1
+    assert rc == 0
     assert (
         '  not carried: - Unverified: retry backoff never exercised.'
         in out.splitlines())
@@ -930,7 +928,7 @@ def test_a_spent_now_step_is_not_a_dropped_line(tmp_path, monkeypatch):
 
 def test_an_item_annotated_after_its_final_mark_is_carried(
         tmp_path, monkeypatch):
-    """Ticking and annotating a Plan item carries it; deleting it refuses.
+    """Ticking and annotating a Plan item carries it; deleting it is listed.
 
     Mutation: the trailing-mark trim dropped, so the annotation moves
     the period and a carried item reports as lost - the firing observed
@@ -959,22 +957,23 @@ def test_an_item_annotated_after_its_final_mark_is_carried(
     _cursor(folder, body.format(
         now='Cap the cache.', plan='- [ ] Size the cache from the page count.\n'))
     rc, out, _ = _run(['finish', _SLUG, '--log', 'three'])
-    assert rc == 1
+    assert rc == 0
     assert any(
         'Wire the key into render_page()' in ln
         for ln in out.splitlines() if ln.startswith('  not carried:'))
 
 
-def test_stamping_the_previous_archive_does_not_clear_the_refusal(
+def test_stamping_the_previous_archive_does_not_clear_the_advisory(
         tmp_path, monkeypatch):
     """The cycles/ archive is no witness, so stamping it suppresses nothing.
 
     Mutation: the cycles/ exclusion dropped from the stamped-this-cycle
     witness set, which turns one hq stamp of the archive into a silent,
-    unrecorded bypass of --accept-not-carried; or the exclusion written
-    as a prefix test that an absolute ledger path slips past.
-    Oracle: the identical refused cycle run twice, once with the
-    previous archive stamped live this cycle.
+    unrecorded drop that the manifest counts as zero; or the exclusion
+    written as a prefix test that an absolute ledger path slips past.
+    Oracle: a cycle whose one dropped line has no home, with the
+    previous archive stamped live this cycle, against the listed line
+    and the manifest count.
     """
     folder = _root(tmp_path, monkeypatch)
     _run(['begin', _SLUG])
@@ -986,12 +985,12 @@ def test_stamping_the_previous_archive_does_not_clear_the_refusal(
     assert _run(['finish', _SLUG, '--log', 'one'])[0] == 0
     _run(['begin', _SLUG])
     _cursor(folder, '## Task\nRefresh the poller token.\n\n## Now\nCap it.\n')
-    assert _run(['finish', _SLUG, '--log', 'two'])[0] == 1
     assert _run(['stamp', _SLUG, 'cycles/c01.md', '--label', 'the archive'])[0] == 0
     rc, out, _ = _run(['finish', _SLUG, '--log', 'two'])
-    assert rc == 1
-    assert _REFUSAL.format(n=1, c=1) in out.splitlines()
-    assert not (folder / 'cycles' / 'c02.md').exists()
+    assert rc == 0
+    assert _ADVISORY.format(n=1, c=1) in out.splitlines()
+    rows = hq._read_tsv(folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS)
+    assert rows[-1]['note'] == '1 not carried from c01'
 
 
 def test_a_now_step_quoting_a_plan_item_does_not_exempt_that_item(
@@ -1021,52 +1020,21 @@ def test_a_now_step_quoting_a_plan_item_does_not_exempt_that_item(
         '## Now\nBenchmark next.\n\n'
         '## Plan\n- [ ] Benchmark a thousand-page site.\n')
     rc, out, _ = _run(['finish', _SLUG, '--log', 'two'])
-    assert rc == 1
+    assert rc == 0
     assert any(
         'Wire the key into render_page().' in ln
         for ln in out.splitlines() if ln.startswith('  not carried:'))
 
 
-def test_accept_not_carried_with_no_reason_refuses_on_its_own_line(
+def test_finish_and_the_lister_each_print_every_dropped_line(
         tmp_path, monkeypatch):
-    """An empty reason refuses and says so, rather than reprinting the list.
+    """The lister before finish and finish itself both name all nine lines.
 
-    Mutation: the empty reason normalized to a falsy string and left to
-    fall into the not-carried branch, so an agent passing '' loops on an
-    unchanged message with no word that the flag was seen.
-    Oracle: the flag given as '' and as three spaces, against one
-    distinct line and exit 1 each.
-    """
-    folder = _root(tmp_path, monkeypatch)
-    _run(['begin', _SLUG])
-    _cursor(
-        folder,
-        '## Task\nRefresh the poller token.\n\n'
-        '## Now\nWire refresh_token().\n\n'
-        '## State\n- Verified: refresh round-trips against staging.\n')
-    assert _run(['finish', _SLUG, '--log', 'one'])[0] == 0
-    _run(['begin', _SLUG])
-    _cursor(folder, '## Task\nRefresh the poller token.\n\n## Now\nCap it.\n')
-    empty_line = (
-        'hq finish: --accept-not-carried was given with no reason'
-        ' - re-run naming what settles the drop')
-    for reason in ('', '   '):
-        rc, out, _ = _run([
-            'finish', _SLUG, '--log', 'two', '--accept-not-carried', reason])
-        assert rc == 1
-        assert empty_line in out.splitlines()
-        assert 'not carried - carry each forward' not in out
-
-
-def test_the_capped_refusal_names_the_command_that_prints_the_rest(
-        tmp_path, monkeypatch):
-    """Five lines print, the count names the rest, and the lister has them all.
-
-    Mutation: the cap removed, so a long list floods the refusal; the
-    cap applied with no count line, so the agent cannot tell how many
-    remain; or the listing flag made to block or to write.
-    Oracle: nine hand-built State lines against the printed five plus
-    the named four, and the lister's own nine.
+    Mutation: a cap on the advisory's list, so the lines past it go
+    unnamed once the cycle files and the lister can no longer see them;
+    or the listing flag made to write.
+    Oracle: nine hand-built State lines against nine listed lines from
+    each, and four unchanged file digests across the lister run.
     """
     folder = _root(tmp_path, monkeypatch)
     _run(['begin', _SLUG])
@@ -1078,14 +1046,6 @@ def test_the_capped_refusal_names_the_command_that_prints_the_rest(
     assert _run(['finish', _SLUG, '--log', 'one'])[0] == 0
     _run(['begin', _SLUG])
     _cursor(folder, '## Task\nProbe the cache.\n\n## Now\nRun probe 9.\n')
-    rc, out, _ = _run(['finish', _SLUG, '--log', 'two'])
-    assert rc == 1
-    lines = out.splitlines()
-    assert _REFUSAL.format(n=9, c=1) in lines
-    assert sum(ln.startswith('  not carried:') for ln in lines) == 5
-    assert (
-        f'  ... and 4 more; hq open {_SLUG} --not-carried prints every one'
-        in lines)
     before = _digests(folder)
     rc, out, _ = _run(['open', _SLUG, '--not-carried'])
     assert rc == 0
@@ -1093,17 +1053,21 @@ def test_the_capped_refusal_names_the_command_that_prints_the_rest(
     assert sum(ln.startswith('  not carried:') for ln in lines) == 9
     assert lines[0].startswith('not carried from c01: 9')
     assert _digests(folder) == before
+    rc, out, _ = _run(['finish', _SLUG, '--log', 'two'])
+    assert rc == 0
+    lines = out.splitlines()
+    assert _ADVISORY.format(n=9, c=1) in lines
+    assert sum(ln.startswith('  not carried:') for ln in lines) == 9
 
 
 def test_the_lister_and_the_refusal_agree_on_a_drained_unfiled_item(
         tmp_path, monkeypatch):
-    """The lister files this cycle's Unfiled items, as the refusal does.
+    """The lister files this cycle's Unfiled items, as finish does.
 
     Mutation: the open branch passing standing.md without the drained
-    items, so the command the refusal names as authoritative reports a
-    line the refusal itself passes.
+    items, so the lister reports a line that finish itself passes.
     Oracle: one State line rehomed as a typed Unfiled decision, against
-    a zero from the lister and an exit 0 from finish on the same tree.
+    a zero from the lister and no advisory from finish on the same tree.
     """
     folder = _root(tmp_path, monkeypatch)
     _run(['begin', _SLUG])
@@ -1122,7 +1086,9 @@ def test_the_lister_and_the_refusal_agree_on_a_drained_unfiled_item(
     rc, out, _ = _run(['open', _SLUG, '--not-carried'])
     assert rc == 0
     assert out.splitlines()[0].startswith('not carried from c01: 0')
-    assert _run(['finish', _SLUG, '--log', 'two'])[0] == 0
+    rc, out, _ = _run(['finish', _SLUG, '--log', 'two'])
+    assert rc == 0
+    assert 'not carried' not in out
 
 
 def test_the_lister_says_when_the_comparand_is_gone(tmp_path, monkeypatch):

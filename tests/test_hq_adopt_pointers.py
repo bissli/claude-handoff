@@ -778,9 +778,7 @@ def test_missing_draft_pointer_stays_missing_never_and_finish_passes(
     assert 'Key files pointer not on disk: smooth.py' in out
     monkeypatch.setenv('HQ_CYCLE', '4')
     assert hq.main(['begin', _SLUG]) == 0
-    assert hq.main([
-        'finish', _SLUG, '--log', 'kit',
-        '--accept-not-carried', 'multi-path pointer bullet']) == 0
+    assert hq.main(['finish', _SLUG, '--log', 'kit']) == 0
     assert 'missing live gated' not in capsys.readouterr().out
 
 
