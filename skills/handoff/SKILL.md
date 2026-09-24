@@ -343,8 +343,7 @@ candidates and stop - never pick the newest: ending the wrong thread
 is not a mistake a later cycle corrects. Run `hq done <slug>`, with
 `--reason "<line>"` when the session knows why. `done` ends the
 thread; `finish` ends one cycle. Show the output unchanged. The
-marker, `--undo`, `--force`, and a repeated `done` are in
-`hq done --help`.
+marker, `--undo`, and a repeated `done` are in `hq done --help`.
 
 ## when, diff, artifacts, standing
 
@@ -356,11 +355,7 @@ unchanged; none writes.
 - `hq diff <slug> <c1> <c2> [<section>]`: the cursor change between
   two cycles; no output means identical.
 - `hq artifacts <slug>`: every live row plus unstamped files, then
-  the non-live counts. `--all`: the whole ledger instead - every row
-  as stored, history and non-live rows in file order under the
-  `--tsv` header, no unstamped files, no `missing` rewrite, no
-  counts; a filter selects on the row it prints, not the path's
-  current row.
+  the non-live counts.
 - `hq standing <slug> [<id> ...]`: every unsuperseded item in full, or
   the named items.
 

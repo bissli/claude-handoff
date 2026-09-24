@@ -79,40 +79,6 @@ def _write_row(folder: pathlib.Path, path: str, **kwargs: str) -> None:
     hq._append_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS, row, hq._LEDGER_HEADER)
 
 
-def test_each_column_flag_selects_on_its_own_ledger_field(
-    tmp_path, monkeypatch, capsys
-):
-    """Each filter flag selects on its own column, not a neighboring one.
-
-    Mutation: --kind wired to read_before, or --successor wired to where,
-    so a fixture where the fields agree hides the mismatch.
-    Oracle: hand-listed expected paths per flag, built from a fixture where
-    kind, read_before, and successor deliberately disagree per row.
-    """
-    folder = _new_folder(tmp_path, monkeypatch)
-    (folder / 'a.md').write_text('a\n')
-    (folder / 'b.md').write_text('b\n')
-    (folder / 'c.md').write_text('c\n')
-    _write_row(folder, 'a.md', kind='spec', read_before='always')
-    _write_row(folder, 'b.md', kind='draft', read_before='edit')
-    _write_row(folder, 'c.md', kind='other', read_before='never', successor='a.md')
-
-    _, out_kind = _run(['artifacts', _SLUG, '--kind', 'spec'], capsys)
-    assert 'a.md' in out_kind
-    assert 'b.md' not in out_kind
-    assert 'c.md' not in out_kind
-
-    _, out_rb = _run(['artifacts', _SLUG, '--read-before', 'edit'], capsys)
-    assert 'b.md' in out_rb
-    assert 'a.md' not in out_rb
-    assert 'c.md' not in out_rb
-
-    _, out_succ = _run(['artifacts', _SLUG, '--successor', 'a.md'], capsys)
-    assert 'c.md' in out_succ
-    assert 'a.md' not in out_succ
-    assert 'b.md' not in out_succ
-
-
 def test_status_replaces_the_implicit_live_filter(tmp_path, monkeypatch, capsys):
     """--status archived reaches archived rows; the bare run reaches live ones only.
 
@@ -135,36 +101,6 @@ def test_status_replaces_the_implicit_live_filter(tmp_path, monkeypatch, capsys)
     assert 'live.md' not in out_arch
 
 
-def test_in_cycle_selects_the_current_rows_cycle_not_every_row(
-    tmp_path, monkeypatch, capsys
-):
-    """--in-cycle matches the path's latest row only, not a stale earlier one.
-
-    Mutation: filtering the raw rows list instead of the latest_rows fold,
-    which shows spec.md for --in-cycle 1 via the stale cycle-1 row.
-    Oracle: hq.latest_rows over the test's own row list, computed
-    independently, confirms spec.md's current cycle is 2.
-    """
-    folder = _new_folder(tmp_path, monkeypatch)
-    (folder / 'spec.md').write_text('spec\n')
-    _write_row(folder, 'spec.md', cycle='1', kind='spec')
-    _write_row(folder, 'spec.md', cycle='2', kind='spec')
-
-    # Oracle: latest_rows independently confirms the current cycle is 2.
-    raw = hq._read_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS)
-    assert hq.latest_rows(raw)['spec.md']['cycle'] == '2'
-
-    _, out_c1 = _run(['artifacts', _SLUG, '--in-cycle', '1'], capsys)
-    assert 'spec.md' not in out_c1
-
-    _, out_c2 = _run(['artifacts', _SLUG, '--in-cycle', '2'], capsys)
-    assert 'spec.md' in out_c2
-
-    # Also accept the cN spelling.
-    _, out_c2_token = _run(['artifacts', _SLUG, '--in-cycle', 'c2'], capsys)
-    assert 'spec.md' in out_c2_token
-
-
 def test_a_filter_drops_the_walk_only_entries(tmp_path, monkeypatch, capsys):
     """A filtered run suppresses unstamped entries that carry no field to select on.
 
@@ -181,7 +117,7 @@ def test_a_filter_drops_the_walk_only_entries(tmp_path, monkeypatch, capsys):
     _, out_bare = _run(['artifacts', _SLUG], capsys)
     assert 'unstamped' in out_bare
 
-    _, out_filtered = _run(['artifacts', _SLUG, '--kind', 'spec'], capsys)
+    _, out_filtered = _run(['artifacts', _SLUG, '--status', 'live'], capsys)
     assert 'unstamped' not in out_filtered
     # The matched spec row's line is present in both.
     spec_line = next(ln for ln in out_bare.splitlines() if 'stamped.md' in ln)
@@ -201,11 +137,11 @@ def test_an_empty_filter_result_prints_its_line_at_exit_zero(
     (folder / 'spec.md').write_text('spec\n')
     _write_row(folder, 'spec.md', kind='spec')
 
-    rc, out = _run(['artifacts', _SLUG, '--kind', 'snapshot'], capsys)
+    rc, out = _run(['artifacts', _SLUG, '--status', 'missing'], capsys)
 
     expected = (
-        f'hq artifacts: no row matches those flags: {_SLUG}'
-        ' - drop one, or run the verb bare for every live row'
+        f'hq artifacts: no row has status missing: {_SLUG}'
+        ' - run the verb bare for every live row'
     )
     assert rc == 0
     assert out.strip() == expected
@@ -225,11 +161,8 @@ def test_a_filtered_line_is_the_bare_runs_line(tmp_path, monkeypatch, capsys):
     _, out_bare = _run(['artifacts', _SLUG], capsys)
     spec_line = next(ln for ln in out_bare.splitlines() if 'spec.md' in ln)
 
-    _, out_kind = _run(['artifacts', _SLUG, '--kind', 'spec'], capsys)
-    assert spec_line in out_kind.splitlines()
-
-    _, out_rb = _run(['artifacts', _SLUG, '--read-before', 'always'], capsys)
-    assert spec_line in out_rb.splitlines()
+    _, out_status = _run(['artifacts', _SLUG, '--status', 'live'], capsys)
+    assert spec_line in out_status.splitlines()
 
 
 def test_the_bare_run_counts_every_row_it_held_back(tmp_path, monkeypatch, capsys):

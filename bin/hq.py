@@ -68,7 +68,7 @@ _SKIP_NAMES = {
 # - A name matches as one path component, so the cycles entry covers
 #   the directory and every file in it.
 STORE_VERBS = {
-    'ledger.tsv': 'hq artifacts {slug} --all, or hq when {slug} <path>',
+    'ledger.tsv': 'hq artifacts {slug}, or hq when {slug} <path>',
     'standing.md': 'hq standing {slug}',
     'cycles': 'hq diff {slug} <c1> <c2>',
     }
@@ -171,11 +171,7 @@ s<n> for the heading numbered <n>.
 - A section dropped from --where stays reachable: the read verb
   takes --section <anchor>, in this same grammar, for an anchor
   the row does not carry, and --whole for the file whole. Both
-  record the receipt the gate credits.
-- hq artifacts accepts --in-cycle N or --in-cycle cN to select on
-  the path's current cycle field, and --tsv to print all thirteen
-  ledger columns tab-separated under the ledger header line.
-  --all prints every row in those columns, history included.""",
+  record the receipt the gate credits.""",
     'kinds': """\
 hq help kinds - how stamp infers kind and read_before
 
@@ -243,9 +239,7 @@ read_before is a tier - when the file is loaded, and what belongs there:
   and read_before all hold.
 - --successor P sets status=superseded read_before=never unless the
   stamp says otherwise. --archive sets status=archived
-  read_before=never and requires --reason. --defer writes kind=other
-  read_before=never reason=deferred so the file reappears in the next
-  work list; it is refused for a spec or draft.
+  read_before=never and requires --reason.
 - Read first block: one line per live always row with the size of
   what hq read prints - .handoff/<slug>/specs/SPEC.md:11-13
   (320 tok)  label for an anchored row, and (186 lines, 8.2k tok)
@@ -333,7 +327,6 @@ R1  A row whose inferred kind is spec or draft, or whose stored or
       refused: R1: <kind> status must stay live without --successor or --archive
       refused: R1: <kind> kind must stay spec or draft without --successor or --archive
       refused: R1: successor <path> is <status>, not live
-      refused: --defer not allowed for inferred <kind>
     A live always row needs an anchor, whatever its kind: a stamp
     that would leave where at '-' is refused, new row and re-stamp
     alike, and the file's headings print under the line:
@@ -433,8 +426,8 @@ SPEC* stem-mates only the newest is gated.
   read block - check the heading first; every --where form is in
   hq help anchors.
 - Path resolution, the values a re-stamp carries forward, and the
-  status moves --successor, --archive --reason, and --defer make are
-  in hq stamp --help.
+  status moves --successor and --archive --reason make are in
+  hq stamp --help.
 
 Rules the script enforces (hq help rules has each in full):
 
@@ -520,7 +513,8 @@ def anchors(folder: pathlib.Path, argv: argparse.Namespace) -> dict:
     folder : pathlib.Path
         Handoff folder; read to determine the current cycle from the manifest.
     argv : argparse.Namespace
-        Parsed flags; each overrides its ``HQ_*`` environment fallback.
+        Parsed flags; ``--session`` overrides its ``HQ_SESSION``
+        environment fallback.
 
     Returns
     -------
@@ -531,17 +525,19 @@ def anchors(folder: pathlib.Path, argv: argparse.Namespace) -> dict:
 
     Notes
     -----
-    - Precedence: argv flag > ``HQ_*`` env var > git/socket/default.
+    - Precedence: ``HQ_CYCLE``, ``HQ_NOW``, and ``HQ_HOST`` each override
+      the git/socket/default they fall back to; ``--session`` overrides
+      ``HQ_SESSION`` the same way.
     - ``HQ_GIT=0`` disables git calls; branch and sha become ``'-'``.
     - cycle is last manifest row's cycle + 1, or 1 with no manifest rows.
     - A cycle or timestamp that does not parse exits before any verb runs:
-      2 for the flag or env value, 1 for a manifest row.
+      2 for the env value, 1 for a manifest row.
     """
     root = _resolve_root(argv)
-    cycle_raw = getattr(argv, 'cycle', None) or os.environ.get('HQ_CYCLE')
+    cycle_raw = os.environ.get('HQ_CYCLE')
     if cycle_raw:
         if not re.fullmatch(r'\d+', str(cycle_raw).strip()):
-            print('hq: --cycle must be an integer')
+            print('hq: HQ_CYCLE must be an integer')
             sys.exit(2)
         cycle = int(cycle_raw)
     else:
@@ -554,25 +550,20 @@ def anchors(folder: pathlib.Path, argv: argparse.Namespace) -> dict:
                 sys.exit(1)
         cycle = (int(manifest[-1]['cycle']) + 1) if manifest else 1
     now = (
-        getattr(argv, 'now', None)
-        or os.environ.get('HQ_NOW')
+        os.environ.get('HQ_NOW')
         or datetime.datetime.now().isoformat(timespec='seconds')
     )
     try:
         datetime.datetime.fromisoformat(now)
     except ValueError:
-        print('hq: --now must be an ISO 8601 timestamp')
+        print('hq: HQ_NOW must be an ISO 8601 timestamp')
         sys.exit(2)
     session = (
         getattr(argv, 'session', None)
         or os.environ.get('HQ_SESSION')
         or os.environ.get('CLAUDE_CODE_SESSION_ID', 'unknown')
     )
-    host = (
-        getattr(argv, 'host', None)
-        or os.environ.get('HQ_HOST')
-        or socket.gethostname()
-    )
+    host = os.environ.get('HQ_HOST') or socket.gethostname()
     branch, sha, dirty = '-', '-', []
     if os.environ.get('HQ_GIT', '1') != '0':
         branch, sha, dirty = _git_state(root)
@@ -1417,7 +1408,7 @@ def render_standing(
     superseded_ids : set[str]
         Item ids targeted by a supersession line.
     slug : str
-        Handoff slug for the hq command in the superseded line.
+        Handoff slug for the hq command a held-back line ends in.
 
     Returns
     -------
@@ -1425,11 +1416,12 @@ def render_standing(
         Block body: every live constraint as its headline and the first
         sentence of its body, every live decision and dead end as its
         headline, each kind under its heading and newest cycle first
-        within it, then ``superseded N  - hq standing <slug> --all``
-        when any item was superseded.
+        within it.
 
     Notes
     -----
+    - A superseded item leaves the block with no count line; it stays
+      reachable by id with ``hq standing <slug> <id>``.
     - Residency, never a cut: a line that holds text back ends in
       ``+<held>c - hq standing <slug> <id>``, and the held text stays
       whole in standing.md behind that command.
@@ -1442,7 +1434,6 @@ def render_standing(
       split has nothing to hold back.
     """
     live = [i for i in items if i['id'] not in superseded_ids]
-    sup_count = len(items) - len(live)
     out: list[str] = []
     for prefix, heading, body_mode in (
         ('c', '### Constraints', 'sentence'),
@@ -1468,8 +1459,6 @@ def render_standing(
                     line.rstrip(), len(held),
                     f'hq standing {slug} {item["id"]}')
             out.append(line.rstrip())
-    if sup_count:
-        out.append(f'superseded {sup_count}  - hq standing {slug} --all')
     return '\n'.join(out)
 
 
@@ -2162,30 +2151,6 @@ def _append_lines(path: pathlib.Path, lines: list[str]) -> None:
         print(f'advisory: {path.name} lacked its trailing newline; restored')
     with path.open('a', encoding='utf-8') as fh:
         fh.write(lead + ''.join(line + '\n' for line in lines))
-
-
-def _tsv_line(values: list[str]) -> str:
-    """Return one tab-joined line, each value folded onto one line.
-
-    Parameters
-    ----------
-    values : list[str]
-        Field values in column order; each is stringified, and a tab,
-        carriage return, or newline inside one becomes a space.
-
-    Returns
-    -------
-    str
-        The values joined by tabs, with no trailing newline.
-
-    Notes
-    -----
-    - ``_append_tsv`` carries the same fold independently; both must move
-      together whenever the fold changes.
-    """
-    return '\t'.join(
-        ' '.join(str(value).split('\t')).replace('\r', ' ').replace('\n', ' ')
-        for value in values)
 
 
 def _append_tsv(path: pathlib.Path, fields: list[str], row: dict, header: str) -> None:
@@ -4288,7 +4253,7 @@ def _take_lock(
 
 
 def _print_worklist(folder: pathlib.Path, anch: dict) -> None:
-    """Print unstamped files, sha-moved, missing, and deferred rows.
+    """Print unstamped files, sha-moved, and missing rows.
 
     Parameters
     ----------
@@ -4370,11 +4335,6 @@ def _print_worklist(folder: pathlib.Path, anch: dict) -> None:
             ' - name a new successor or archive the row')
     if len(dangling) > 5:
         print(f'  ... and {len(dangling) - 5} more')
-    deferred = [path for path, row in live.items() if row['reason'] == 'deferred']
-    if deferred:
-        shown = ', '.join(deferred[:5])
-        tail = f' ... and {len(deferred) - 5} more' if len(deferred) > 5 else ''
-        print(f'  deferred x{len(deferred)}: {shown}{tail} - stamp each when decided')
     # An always row with no anchor is a whole file read at every
     # resume; stamp refuses its next re-stamp until it conforms, so an
     # older thread converges as its files are touched.
@@ -4499,7 +4459,7 @@ def _verb_begin(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
 
 
 def _do_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int:
-    """Write one ledger row after applying R1 and defer checks.
+    """Write one ledger row after applying R1 checks.
 
     Parameters
     ----------
@@ -4523,8 +4483,7 @@ def _do_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
       base ``abs`` - so one file keeps one ledger key whichever
       spelling stamps it.
     - A refusal appends a receipt row; a successful stamp appends the
-      row; a ``--defer`` stamps with kind ``other`` and reason
-      ``deferred``.
+      row.
     - A row that would sit live at ``always`` with no ``--where`` is
       refused whatever its kind, and the file's headings print under
       the refusal so the next stamp can anchor it.
@@ -4671,19 +4630,16 @@ def _do_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
             and not getattr(argv, 'reason', None)):
         print('hq stamp: --status archived requires --reason')
         return 2
-    defer = getattr(argv, 'defer', False)
     refusal_reason: str | None = None
-    if defer and gate_kind in {'spec', 'draft'}:
-        refusal_reason = f'refused: --defer not allowed for inferred {gate_kind}'
     # A non-live successor would let two specs name each other and
     # leave nothing gated; an explicit one is refused.
-    if refusal_reason is None and successor_given:
+    if successor_given:
         successor_row = live.get(successor)
         if successor_row is not None and successor_row['status'] != 'live':
             refusal_reason = (
                 f'refused: R1: successor {successor} is'
                 f' {successor_row["status"]}, not live')
-    if refusal_reason is None and not defer:
+    if refusal_reason is None:
         kind = getattr(argv, 'kind', None) or prev.get('kind', inferred_kind)
         explicit_rb = getattr(argv, 'read_before', None)
         rb = explicit_rb or prev.get('read_before', _TIER_SEED.get(gate_kind, 'never'))
@@ -4712,7 +4668,7 @@ def _do_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
     where = getattr(argv, 'where', None) or prev.get('where', '-')
     sha12 = _sha12_path(path_obj) if path_obj.is_file() else '-'
     n_lines = str(_line_count(path_obj)) if path_obj.exists() else '-'
-    if refusal_reason is None and not defer:
+    if refusal_reason is None:
         new_row: Row = {
             'cycle': str(anch['cycle']), 'ts': anch['now'],
             'path': stored_path, 'base': base,
@@ -4766,15 +4722,6 @@ def _do_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
                 ' - supply a live --successor or --archive --reason,'
                 ' or leave the row gated')
         return 1
-    if defer:
-        new_row = {
-            'cycle': str(anch['cycle']), 'ts': anch['now'],
-            'path': stored_path, 'base': base,
-            'kind': 'other', 'status': prev.get('status', 'live'),
-            'read_before': 'never', 'successor': successor, 'where': where,
-            'sha12': sha12, 'lines': n_lines, 'reason': 'deferred',
-            'label': label,
-            }
     _append_tsv(ledger_path, LEDGER_FIELDS, new_row, _LEDGER_HEADER)
     # Notes:
     # - The gate is the command's own shape. Only a stamp that
@@ -5624,15 +5571,15 @@ def _verb_done(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
         Anchors dict from ``anchors()``; supplies the timestamp.
     argv : argparse.Namespace
         Parsed ``done`` arguments: ``reason`` records why, ``undo``
-        removes the marker, ``force`` marks a folder whose cycle is open.
+        removes the marker.
 
     Returns
     -------
     int
         0 once the marker is written, removed, or already as asked; 1
-        when a cycle is open and ``--force`` is absent, or a directory
-        stands under the marker's name, with nothing written; 2 when
-        ``--undo`` is paired with ``--reason`` or ``--force``.
+        when a cycle is open, or a directory stands under the marker's
+        name, with nothing written; 2 when ``--undo`` is paired with
+        ``--reason``.
 
     Notes
     -----
@@ -5650,9 +5597,9 @@ def _verb_done(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     """
     marker = folder / _DONE_NAME
     undo = getattr(argv, 'undo', False)
-    if undo and (getattr(argv, 'reason', None) or getattr(argv, 'force', False)):
+    if undo and getattr(argv, 'reason', None):
         print(
-            'hq done: --undo takes neither --reason nor --force'
+            'hq done: --undo takes no --reason'
             ' - reopen with --undo alone, or mark without it')
         return 2
     marked = marker.exists()
@@ -5680,11 +5627,10 @@ def _verb_done(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
             f' {state.get("time", "-")} in c{state.get("cycle", "-")}'
             f' - run hq done {folder.name} --undo to reopen it')
         return 0
-    if (folder / '.hq.lock').exists() and not getattr(argv, 'force', False):
+    if (folder / '.hq.lock').exists():
         print(
             f'hq done: cycle {_read_lock(folder).get("cycle", "?")} is still'
-            f' open - run hq finish {folder.name} --log "<line>" first,'
-            ' or pass --force to mark it done with the cycle open')
+            f' open - run hq finish {folder.name} --log "<line>" first')
         return 1
     manifest = _read_tsv(folder / 'cycles' / 'manifest.tsv', MANIFEST_FIELDS)
     cycle = manifest[-1]['cycle'] if manifest else '-'
@@ -6160,14 +6106,13 @@ def _verb_when(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     anch : dict
         Anchors dict from ``anchors()``; unused but required by dispatch.
     argv : argparse.Namespace
-        Parsed when arguments: path, ``--tsv``.
+        Parsed when arguments: path.
 
     Returns
     -------
     int
-        0 with every row for the path, oldest first, no cap; 1 when no
-        spelling of the path has a row; with ``--tsv`` the ledger header
-        and every column of every row instead of the seven.
+        0 with every row for the path, oldest first, no cap, the seven
+        columns; 1 when no spelling of the path has a row.
 
     Notes
     -----
@@ -6184,14 +6129,8 @@ def _verb_when(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
             f'hq when: {path} not in ledger'
             f' - hq artifacts {folder.name} lists the rows')
         return 1
-    tsv = getattr(argv, 'tsv', False)
-    if tsv:
-        print(_LEDGER_HEADER)
     for row in rows:
         if row['path'] == stored_path:
-            if tsv:
-                print(_tsv_line([row[f] for f in LEDGER_FIELDS]))
-                continue
             print('\t'.join([
                 row['path'], row['cycle'], row['status'], row['read_before'],
                 row['successor'], row['reason'], row['label']]))
@@ -6307,84 +6246,36 @@ def _verb_artifacts(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) 
     anch : dict
         Anchors dict from ``anchors()``; unused but required by dispatch.
     argv : argparse.Namespace
-        Parsed artifacts arguments: ``--kind``, ``--status``,
-        ``--read-before``, ``--in-cycle``, ``--successor``, ``--tsv``,
-        ``--all``.
+        Parsed artifacts arguments: ``--status``.
 
     Returns
     -------
     int
-        0, or 2 where ``--in-cycle`` is not a cycle number; one line per
-        entry, or one per selected row where any filter is given, or the
-        ledger header and one tab-separated row each with ``--tsv`` or
-        ``--all``. A bare run closes with one count line per status it
-        left out, naming the ``--status`` that prints them.
+        0; one line per entry, or one per selected row where
+        ``--status`` is given. A bare run closes with one count line
+        per status it left out, naming the ``--status`` that prints
+        them.
 
     Notes
     -----
     - Selection reads the path's current row, the ``latest_rows`` fold,
-      so a superseded earlier row never answers a filter.
-    - ``--status`` replaces the live-only default; the other filters
-      keep it.
-    - The live-only default also governs a bare ``--tsv`` run, so a row
-      that is not live needs ``--status`` there too.
+      so a superseded earlier row never answers ``--status``.
+    - ``--status`` replaces the live-only default.
     - A row whose file is gone reads ``missing`` against the disk, so a
       path stamped by an absolute spelling that never arrived is
       counted rather than printed, and the count line is the only trace
       it leaves here.
-    - ``--all`` exists so that every ledger row has a verb behind it:
-      without one an agent reaches for ``cat``, which the skill forbids.
-    - ``--all`` reports the ledger as stored - every row in file order,
-      no fold to one row per path, no live default, no walk entry, no
-      reconcile against the disk, and no prose line where a filter
-      matches nothing - so it alone reaches a superseded earlier row,
-      and a vanished file keeps the status it was stamped with.
     - No row matching is exit 0, not a refusal: the query answered.
     """
     rows = _read_tsv(folder / 'ledger.tsv', LEDGER_FIELDS)
-    in_cycle_raw = getattr(argv, 'in_cycle', None)
-    in_cycle = None
-    if in_cycle_raw is not None:
-        digits = in_cycle_raw.lstrip('cC')
-        if not digits.isdecimal():
-            print(
-                f'hq artifacts: --in-cycle {in_cycle_raw!r} is not a cycle number'
-                ' - pass an integer, as 5 or c5')
-            return 2
-        in_cycle = str(int(digits))
-    any_filter = any(
-        getattr(argv, name, None) is not None
-        for name in ('kind', 'status', 'read_before', 'in_cycle', 'successor'))
     explicit_status = getattr(argv, 'status', None)
-    successor_filter = getattr(argv, 'successor', None)
-    dump_all = getattr(argv, 'all', False)
-    # When --successor is given without --status, drop the implicit live
-    # default: the row a successor stamps points at will be superseded, not
-    # live, so the live default would always answer the empty set.
-    selectors = {
-        'status': explicit_status or (
-            None if successor_filter or dump_all else 'live'),
-        'kind': getattr(argv, 'kind', None),
-        'read_before': getattr(argv, 'read_before', None),
-        'cycle': in_cycle,
-        'successor': successor_filter,
-        }
-    wanted = {field: value for field, value in selectors.items() if value}
-    if dump_all:
-        print(_LEDGER_HEADER)
-        for row in rows:
-            if all(row[field] == value for field, value in wanted.items()):
-                print(_tsv_line([row[f] for f in LEDGER_FIELDS]))
-        return 0
+    wanted_status = explicit_status or 'live'
     live = latest_rows(rows)
     walk = _walk_folder(folder)
     live = _reconcile_missing(folder, live)
-    tsv = getattr(argv, 'tsv', False)
-    # A walk entry with no row carries no column to select on, so a
-    # filtered or tsv run reports rows alone.
-    rows_only = tsv or any_filter
-    if tsv:
-        print(_LEDGER_HEADER)
+    # A walk entry with no row carries no status to select on, so a
+    # filtered run reports rows alone.
+    rows_only = explicit_status is not None
     printed = 0
     seen: set[str] = set()
     for name, kind in walk:
@@ -6400,21 +6291,17 @@ def _verb_artifacts(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) 
             if not rows_only and not is_recorded(name, live):
                 print(f'{name}  {kind}?  unstamped')
             continue
-        if all(row[field] == value for field, value in wanted.items()):
+        if row['status'] == wanted_status:
             printed += 1
             print(
-                _tsv_line([row[f] for f in LEDGER_FIELDS]) if tsv else
                 f'{name}  {row["kind"]}  {row["read_before"]}'
                 f'  c{row["cycle"]}  {row["label"]}')
     for path, row in live.items():
         if path in seen:
             continue
-        if row['status'] != 'live' and not any_filter:
-            continue
-        if all(row[field] == value for field, value in wanted.items()):
+        if row['status'] == wanted_status:
             printed += 1
             print(
-                _tsv_line([row[f] for f in LEDGER_FIELDS]) if tsv else
                 f'{path}  {row["kind"]}  {row["read_before"]}'
                 f'  c{row["cycle"]}  {row["label"]}')
     if not rows_only:
@@ -6429,10 +6316,10 @@ def _verb_artifacts(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) 
                 print(
                     f'{status} {held_back[status]}'
                     f'  - hq artifacts {folder.name} --status {status}')
-    if any_filter and not tsv and not printed:
+    if rows_only and not printed:
         print(
-            f'hq artifacts: no row matches those flags: {folder.name}'
-            ' - drop one, or run the verb bare for every live row')
+            f'hq artifacts: no row has status {explicit_status}: {folder.name}'
+            ' - run the verb bare for every live row')
     return 0
 
 
@@ -6448,16 +6335,14 @@ def _verb_standing(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -
     argv : argparse.Namespace
         Parsed standing arguments; ``ids`` names items to print in full,
         ``--all`` includes superseded items in the listing, ``--grep``,
-        ``--kind`` and ``--in-cycle`` select within a listing, ``--tsv``
-        prints a tab-separated table instead.
+        ``--kind`` and ``--in-cycle`` select within a listing.
 
     Returns
     -------
     int
         0 with no id, one line per item; with ids, 0 once every id
         printed and 1 when any id is not in standing.md; 2 on a ``--grep``
-        that is not a regular expression; with ``--tsv``, the header and
-        one row per item instead of prose lines.
+        that is not a regular expression.
 
     Notes
     -----
@@ -6500,7 +6385,6 @@ def _verb_standing(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -
     show_all = getattr(argv, 'all', False)
     wanted = list(getattr(argv, 'ids', None) or [])
     by_id = {item['id']: item for item in items}
-    tsv = getattr(argv, 'tsv', False)
     grep = getattr(argv, 'grep', None)
     kind = getattr(argv, 'kind', None)
     in_cycle = getattr(argv, 'in_cycle', None)
@@ -6530,33 +6414,16 @@ def _verb_standing(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -
                 f'hq standing: {item_id} not in standing.md'
                 f' - hq standing {folder.name} lists the ids')
             rc = 1
-    # In tsv mode a prose refusal must not appear before the header; return
-    # as soon as any id is invalid so the stream starts clean.
-    if tsv and rc:
-        return rc
-    if tsv:
-        print(
-            'id\tprefix\tcycle\theadline\tbody\tsuperseded'
-            '\tsuperseded_by\tsuperseded_in')
     for item in items:
         if wanted:
             if item['id'] not in wanted:
                 continue
         elif not show_all and item['id'] in superseded_ids:
             continue
-        sup_by = sup_in = '-'
         chain = chains.get(item['id'])
-        if chain:
-            sup_by, sup_in = chain[-1], successors[chain[-2]][1]
-        if tsv:
-            print(_tsv_line([
-                item['id'], item['prefix'], item['cycle'] or '-',
-                item['headline'], item['body'] or '-',
-                'yes' if item['id'] in superseded_ids else 'no',
-                sup_by, sup_in]))
-            continue
         sup = ''
         if chain:
+            sup_by, sup_in = chain[-1], successors[chain[-2]][1]
             hops = f' - {" -> ".join(chain)}' if wanted and len(chain) > 2 else ''
             sup = f' [superseded by {sup_by} in c{sup_in}{hops}]'
         elif item['id'] in superseded_ids:
@@ -6637,8 +6504,7 @@ def _verb_list(root: pathlib.Path, argv: argparse.Namespace) -> int:
         Project root; the handoff folders sit under ``root / HANDOFF_DIRNAME``.
     argv : argparse.Namespace
         Parsed ``list`` arguments; ``count`` caps the lines, None for all;
-        ``--done`` lists the folders marked done instead of the open ones;
-        ``--tsv`` prints a tab-separated table instead.
+        ``--done`` lists the folders marked done instead of the open ones.
 
     Returns
     -------
@@ -6650,8 +6516,7 @@ def _verb_list(root: pathlib.Path, argv: argparse.Namespace) -> int:
     -----
     - A folder holding the ``.hq.done`` marker is left out, and the run
       closes with a ``<N> marked done`` line naming ``--done``, which
-      lists those folders and leaves the open ones out. The count line is
-      text only, so a ``--tsv`` run stays one header plus rows.
+      lists those folders and leaves the open ones out.
     - The marker's existence is the whole test, as at ``begin``, so a
       marker no key=value reader can parse still hides its folder.
     - ``count`` caps what is shown, so ``hq list 5`` is the five most
@@ -6668,9 +6533,6 @@ def _verb_list(root: pathlib.Path, argv: argparse.Namespace) -> int:
     - A file the script cannot read prints its slug with ``-`` in every
       field and ``unreadable: <reason>`` as the Task; the survey goes on
       and the exit stays 0.
-    - ``--tsv`` prints the header alone where no folder holds a
-      ``HANDOFF.md``, so every ``--tsv`` run is exactly one header plus
-      zero or more rows.
     """
     count = getattr(argv, 'count', None)
     if count is not None and count < 1:
@@ -6688,11 +6550,7 @@ def _verb_list(root: pathlib.Path, argv: argparse.Namespace) -> int:
     files = [
         path for path in files
         if (path.parent / _DONE_NAME).exists() == only_done]
-    tsv = getattr(argv, 'tsv', False)
     if not files:
-        if tsv:
-            print('slug\twritten\tcycle\tprogress\ttask')
-            return 0
         if only_done:
             print(
                 f'hq list: no handoff under {handoffs} is marked done'
@@ -6737,12 +6595,6 @@ def _verb_list(root: pathlib.Path, argv: argparse.Namespace) -> int:
                     done += box.group(1) != ' '
         progress = f'{done}/{total}' if total else '-'
         rows.append((path.parent.name, written, cycle, progress, task))
-    if tsv:
-        print('slug\twritten\tcycle\tprogress\ttask')
-        for slug, written, cycle, progress, task in rows:
-            print(_tsv_line(
-                [slug, written, cycle.lstrip('c') or '-', progress, task]))
-        return 0
     headers = ('SLUG', 'WRITTEN', 'CYCLE', 'PROGRESS')
     col_widths = [
         max(*(len(row[i]) for row in rows), len(headers[i]))
@@ -6781,11 +6633,12 @@ def _build_parser() -> argparse.ArgumentParser:
         'Every verb but list and help takes the slug first. A slug resolves\n'
         'to an exact folder name under .handoff/, else a unique prefix of\n'
         'one.\n'
-        'Five flags before the verb - --root DIR, --cycle N, --now ISO,\n'
-        '--session ID, --host H - override the HQ_ROOT, HQ_CYCLE, HQ_NOW,\n'
-        'HQ_SESSION, and HQ_HOST environment values the script otherwise\n'
-        'reads; a session never needs them. A ~ in --root or HQ_ROOT is\n'
-        'expanded.\n'
+        'Two flags before the verb - --root DIR, --session ID - override\n'
+        'the HQ_ROOT and HQ_SESSION environment values the script\n'
+        'otherwise reads; a session never needs them. HQ_CYCLE, HQ_NOW,\n'
+        'and HQ_HOST override their own git/socket/default fallbacks the\n'
+        'same way, from the environment alone. A ~ in --root or HQ_ROOT\n'
+        'is expanded.\n'
         'Exit 0 is done; 1 is a refusal or a blocking finding, and nothing is\n'
         'written except that a refused stamp appends its receipt row; 2 is a\n'
         'usage error. All output is stdout, one fact per line.\n'
@@ -6797,10 +6650,7 @@ def _build_parser() -> argparse.ArgumentParser:
         epilog=_top_epilog,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--root', help='project root (HQ_ROOT)')
-    p.add_argument('--cycle', help='override cycle number (HQ_CYCLE)')
-    p.add_argument('--now', help='override timestamp (HQ_NOW)')
     p.add_argument('--session', help='override session id (HQ_SESSION)')
-    p.add_argument('--host', help='override hostname (HQ_HOST)')
     sub = p.add_subparsers(dest='verb', required=True)
 
     sub.add_parser('adopt').add_argument('slug')
@@ -6842,9 +6692,8 @@ def _build_parser() -> argparse.ArgumentParser:
         'third advisory where the label names an s<n> section the new spans\n'
         'do not cover.\n'
         '--successor P sets status=superseded read_before=never; --archive\n'
-        'sets status=archived read_before=never and requires --reason;\n'
-        '--defer marks a non-gated file deferred so it reappears in the next\n'
-        'work list. --batch reads one stamp per stdin line, the same\n'
+        'sets status=archived read_before=never and requires --reason.\n'
+        '--batch reads one stamp per stdin line, the same\n'
         'arguments minus the slug, split like a shell line.\n'
         'See hq help kinds (inference and fields), hq help anchors (--where\n'
         'forms), hq help rules (R1, R2, R3, W1, W2).'
@@ -6867,7 +6716,6 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=['live', 'superseded', 'archived', 'missing'])
     stmp.add_argument('--successor')
     stmp.add_argument('--archive', action='store_true')
-    stmp.add_argument('--defer', action='store_true')
     stmp.add_argument('--where')
     stmp.add_argument('--label')
     stmp.add_argument('--reason')
@@ -6936,9 +6784,8 @@ def _build_parser() -> argparse.ArgumentParser:
         'the folder, holding the slug, the time, the last finished cycle,\n'
         'and the reason.\n'
         '--reason "<line>" records why; whitespace in it collapses to single\n'
-        'spaces. --undo removes the mark and the thread runs on. --force\n'
-        'marks a folder whose cycle is still open, which finish would\n'
-        'otherwise have to close first.\n'
+        'spaces. --undo removes the mark and the thread runs on. done\n'
+        'refuses a folder whose cycle is still open; finish it first.\n'
         'A second done leaves the first mark and prints its date, so the\n'
         'finish date survives a repeat; change the reason by --undo and a\n'
         'fresh done. hq list --done lists the marked folders.'
@@ -6950,7 +6797,6 @@ def _build_parser() -> argparse.ArgumentParser:
     dn.add_argument('slug')
     dn.add_argument('--reason')
     dn.add_argument('--undo', action='store_true')
-    dn.add_argument('--force', action='store_true')
 
     _open_epilog = (
         '--not-carried lists every cursor line from the last finished\n'
@@ -6993,10 +6839,7 @@ def _build_parser() -> argparse.ArgumentParser:
         'tab-separated columns: path cycle status read_before successor\n'
         'reason label. The path keys as stamp stores it; a relative token\n'
         'the folder does not hold is tried against the project root, then\n'
-        'the pinned work dir. A path with no row exits 1.\n'
-        '--tsv prints every ledger column of every such row under the\n'
-        'ledger header line instead of the seven; a path with no row still\n'
-        'prints its own line and exits 1.'
+        'the pinned work dir. A path with no row exits 1.'
     )
     wh = sub.add_parser(
         'when',
@@ -7004,7 +6847,6 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter)
     wh.add_argument('slug')
     wh.add_argument('path')
-    wh.add_argument('--tsv', action='store_true')
 
     _diff_epilog = (
         'Cycles are named N, cN, or cNN. With no section, one line per\n'
@@ -7036,26 +6878,11 @@ def _build_parser() -> argparse.ArgumentParser:
         'that prints those rows. A file gone from the disk reads missing here\n'
         'whatever the ledger stored, so a path stamped by an absolute spelling\n'
         'that never arrived is counted under missing.\n'
-        '--kind, --status, --read-before, --in-cycle, and --successor select on\n'
-        "that field of the path's current row, never a superseded earlier one;\n"
-        '--status replaces the live-only default and --in-cycle takes a bare\n'
-        'integer or cN. Any of them reports rows alone, the unstamped and\n'
-        'unstampable entries dropped for want of a field to select on, and\n'
-        'prints hq artifacts: no row matches those flags when none does, at\n'
-        'exit 0. --tsv prints the thirteen ledger columns under their own\n'
-        'header line instead, the bytes the ledger holds except that a\n'
-        'vanished file reads status missing and a walk entry of kind skip\n'
-        'has its row omitted from the output. It keeps the live-only default\n'
-        'and prints no count line, so pair it with --status to read a row\n'
-        'that is not live.\n'
-        '--all reports every ledger row instead - history and non-live\n'
-        'included, in file order, as the ledger stores them: no fold to one\n'
-        'row per path, no live default, no walk entry, no reconcile against\n'
-        'the disk, no count line, and no prose line where a filter matches\n'
-        'nothing, so an empty run is the header alone. It prints the --tsv\n'
-        'columns whether or not --tsv is given, and the other flags still\n'
-        "select, each on the row printed rather than on the path's current\n"
-        'row.'
+        "--status selects on that field of the path's current row, never a\n"
+        'superseded earlier one, replacing the live-only default. It reports\n'
+        'rows alone, the unstamped and unstampable entries dropped for want\n'
+        'of a field to select on, and prints hq artifacts: no row has status\n'
+        '<status> when none does, at exit 0.'
     )
     art = sub.add_parser(
         'artifacts',
@@ -7063,19 +6890,8 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter)
     art.add_argument('slug')
     art.add_argument(
-        '--kind',
-        choices=['spec', 'draft', 'notes', 'todo', 'snapshot', 'probe-dir', 'other'])
-    art.add_argument(
         '--status',
         choices=['live', 'superseded', 'archived', 'missing'])
-    art.add_argument(
-        '--read-before',
-        dest='read_before',
-        choices=['always', 'edit', 'mention', 'never'])
-    art.add_argument('--in-cycle', dest='in_cycle')
-    art.add_argument('--successor')
-    art.add_argument('--tsv', action='store_true')
-    art.add_argument('--all', action='store_true')
 
     _standing_epilog = (
         'Every unsuperseded item in full; --all adds the superseded ones.\n'
@@ -7089,11 +6905,7 @@ def _build_parser() -> argparse.ArgumentParser:
         'body matches the pattern, case-insensitively, and exits 2 when the\n'
         'pattern is not a regular expression; --kind constraint|decision|\n'
         'dead-end keeps one kind; --in-cycle N keeps the items recorded in\n'
-        'cycle N. The three compose, and a named id outranks all of them.\n'
-        '--tsv prints one header line, id prefix cycle headline body\n'
-        'superseded superseded_by superseded_in, then that row per item\n'
-        'instead, cycles as bare numbers, a nil field as -, and\n'
-        'superseded_by the end of the chain.'
+        'cycle N. The three compose, and a named id outranks all of them.'
     )
     st = sub.add_parser(
         'standing',
@@ -7105,7 +6917,6 @@ def _build_parser() -> argparse.ArgumentParser:
     st.add_argument('--grep')
     st.add_argument('--kind', choices=tuple(_KIND_PREFIX))
     st.add_argument('--in-cycle')
-    st.add_argument('--tsv', action='store_true')
 
     _list_epilog = (
         'One line per folder under .handoff/ holding a HANDOFF.md, newest\n'
@@ -7118,11 +6929,7 @@ def _build_parser() -> argparse.ArgumentParser:
         'shows every one; list 5 the five most recent.\n'
         'A folder marked by hq done is left out, and a closing line counts\n'
         'them: --done lists those folders instead, the open ones left out,\n'
-        'and prints no count line. A count caps whichever set is shown.\n'
-        '--tsv prints one header line, slug written cycle progress task,\n'
-        'then that row per folder instead, tab-separated, the cycle a bare\n'
-        'number and no padding or rule line; with no handoff it prints the\n'
-        'header alone.'
+        'and prints no count line. A count caps whichever set is shown.'
     )
     lst = sub.add_parser(
         'list',
@@ -7130,7 +6937,6 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter)
     lst.add_argument('count', nargs='?', type=int)
     lst.add_argument('--done', action='store_true')
-    lst.add_argument('--tsv', action='store_true')
 
     _work_dir_epilog = (
         "With the slug alone, prints where the thread's made files go:\n"

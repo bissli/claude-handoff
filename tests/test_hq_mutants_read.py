@@ -195,23 +195,23 @@ def _make_items(n: int, prefix: str = 'c') -> list[dict]:
         ]
 
 
-def test_render_standing_prints_every_live_item_and_the_superseded_tail():
-    """Eighty constraints with one superseded render every live one and a tail.
+def test_render_standing_prints_every_live_item_and_no_superseded_line():
+    """Eighty constraints with one superseded render every live one alone.
 
-    Mutation: a line cap that cuts items and prints '... N more'; or the
-    superseded tail dropped, so the block never says a ruling left it.
-    Oracle: hand-counted - 79 live items under one heading plus the tail
-    'superseded 1  - hq standing demo --all' make 81 lines, [c80] absent.
+    Mutation: a line cap that cuts items and prints '... N more'; or a
+    line naming the superseded item appended to the block.
+    Oracle: hand-counted - 79 live items under one heading make 80 lines,
+    the last [c79], and c80 appears nowhere.
     """
     items = _make_items(80, 'c')
     superseded_ids = {items[-1]['id']}
     lines = hq.render_standing(items, superseded_ids, slug='demo').splitlines()
-    assert len(lines) == 81
+    assert len(lines) == 80
     assert lines[0] == '### Constraints'
     assert sum(ln.startswith('[c') for ln in lines) == 79
     assert not any(ln.startswith('... ') for ln in lines)
-    assert '[c80]' not in '\n'.join(lines)
-    assert lines[-1] == 'superseded 1  - hq standing demo --all'
+    assert 'c80' not in '\n'.join(lines)
+    assert lines[-1].startswith('[c79]')
 
 
 def test_read_tsv_continues_past_empty_line(tmp_path):

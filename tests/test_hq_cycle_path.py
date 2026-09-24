@@ -180,13 +180,13 @@ def test_a_lock_time_carrying_a_zone_offset_does_not_crash_begin(
 
 def test_every_work_list_class_caps_at_five_names_and_a_count(
         tmp_path, monkeypatch):
-    """Sha moved, missing live, successor missing, and deferred each stop at
-    five names and print the rest as a count.
+    """Sha moved, missing live, and successor missing each stop at five
+    names and print the rest as a count.
 
     Mutation: a class truncated at five with no count, so a sixth item is
     invisible and the agent finishes with work it never saw.
-    Oracle: six items per class; five lines then '... and 1 more' for the
-    three per-name classes, and 'x6 ... and 1 more' on the deferred line.
+    Oracle: six items per class; five lines then '... and 1 more' for
+    each of the three per-name classes.
     """
     folder = _new_root(tmp_path, monkeypatch)
     assert _run(['begin', _SLUG])[0] == 0
@@ -195,12 +195,10 @@ def test_every_work_list_class_caps_at_five_names_and_a_count(
         (folder / f'moved{i}.py').write_text('x = 1\n')
         (folder / f'gone{i}.py').write_text('y = 1\n')
         (folder / f'old{i}.py').write_text('z = 1\n')
-        (folder / f'notes-d{i}.md').write_text('# n\n')
         assert _run(['stamp', _SLUG, f'moved{i}.py'])[0] == 0
         assert _run(['stamp', _SLUG, f'gone{i}.py'])[0] == 0
         assert _run(['stamp', _SLUG, f'old{i}.py',
                      '--successor', 'target.py'])[0] == 0
-        assert _run(['stamp', _SLUG, f'notes-d{i}.md', '--defer'])[0] == 0
     for i in range(1, 7):
         (folder / f'moved{i}.py').write_text('x = 2\n')
         (folder / f'gone{i}.py').unlink()
@@ -211,10 +209,6 @@ def test_every_work_list_class_caps_at_five_names_and_a_count(
         named = [ln for ln in lines if ln.startswith(prefix)]
         assert len(named) == 5, prefix
         assert lines[lines.index(named[-1]) + 1] == '  ... and 1 more', prefix
-    deferred = [ln for ln in lines if ln.startswith('  deferred x')]
-    assert len(deferred) == 1
-    assert deferred[0].endswith(' - stamp each when decided')
-    assert deferred[0].startswith('  deferred x6: ')
 
 
 def test_finish_checks_r3_before_a_missing_gated_row(tmp_path, monkeypatch):
@@ -477,7 +471,7 @@ def test_a_tab_in_the_log_reaches_the_rendered_log_as_a_space(
 
 def test_an_unparsable_now_is_a_usage_error_that_writes_nothing(
         tmp_path, monkeypatch):
-    """A --now or HQ_NOW that is no timestamp exits 2 before any write.
+    """An HQ_NOW that is no timestamp exits 2 before any write.
 
     Mutation: the bad value carried into the lock's age arithmetic, where
     the except ValueError turns a live foreign lock into a silent takeover.
@@ -487,7 +481,7 @@ def test_an_unparsable_now_is_a_usage_error_that_writes_nothing(
     monkeypatch.setenv('HQ_NOW', 'yesterday')
     rc, out, _ = _run(['begin', _SLUG])
     assert rc == 2
-    assert 'hq: --now must be an ISO 8601 timestamp' in out
+    assert 'hq: HQ_NOW must be an ISO 8601 timestamp' in out
     assert not folder.exists()
 
 
@@ -548,7 +542,7 @@ def test_the_lock_is_created_exclusively(tmp_path, monkeypatch):
 
 def test_a_non_integer_cycle_is_a_usage_error_or_a_refusal(
         tmp_path, monkeypatch):
-    """A non-integer --cycle exits 2; a non-integer manifest cycle exits 1.
+    """A non-integer HQ_CYCLE exits 2; a non-integer manifest cycle exits 1.
 
     Mutation: int() called on either value with no guard, so the agent
     meets a ValueError traceback instead of a line naming the fix.
@@ -559,7 +553,7 @@ def test_a_non_integer_cycle_is_a_usage_error_or_a_refusal(
     monkeypatch.setenv('HQ_CYCLE', 'abc')
     rc, out, _ = _run(['open', _SLUG])
     assert rc == 2
-    assert 'hq: --cycle must be an integer' in out
+    assert 'hq: HQ_CYCLE must be an integer' in out
 
     monkeypatch.delenv('HQ_CYCLE')
     manifest = folder / 'cycles' / 'manifest.tsv'
@@ -571,20 +565,22 @@ def test_a_non_integer_cycle_is_a_usage_error_or_a_refusal(
     assert 'hq: cycles/manifest.tsv row 1 has a non-integer cycle' in out
 
 
-def test_each_anchor_flag_beats_its_environment_variable(
+def test_the_session_flag_beats_its_environment_variable(
         tmp_path, monkeypatch):
-    """--cycle, --now, --session, and --host each override their HQ_* value.
+    """HQ_CYCLE, HQ_NOW, and HQ_HOST set the anchors directly; --session
+    overrides HQ_SESSION.
 
-    Mutation: any one of the four flag lookups dropped from anchors, so the
-    environment silently wins and a replay stamps the wrong cycle or owner.
-    Oracle: the lock begin writes carries all four flag values, each
-    different from the environment value set beside it.
+    Mutation: any one of the three env lookups dropped from anchors, so a
+    default silently wins and a replay stamps the wrong cycle or owner;
+    or --session no longer overriding HQ_SESSION.
+    Oracle: the lock begin writes carries all four values, each set
+    independently of the others.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    rc, _, _ = _run([
-        '--cycle', '7', '--now', '2026-01-02T03:04:05',
-        '--session', 'flag-session', '--host', 'flag-host',
-        'begin', _SLUG])
+    monkeypatch.setenv('HQ_CYCLE', '7')
+    monkeypatch.setenv('HQ_NOW', '2026-01-02T03:04:05')
+    monkeypatch.setenv('HQ_HOST', 'flag-host')
+    rc, _, _ = _run(['--session', 'flag-session', 'begin', _SLUG])
     assert rc == 0
     lock = hq._read_lock(folder)
     assert lock['cycle'] == '7'

@@ -224,7 +224,7 @@ def test_a_fifo_is_named_unstampable_by_begin_and_finish(
 
 def test_a_bad_cycle_on_begin_creates_no_handoff_directory(
         tmp_path, monkeypatch):
-    """`begin --cycle abc` on a fresh root exits 2 and leaves the disk alone.
+    """`begin` with HQ_CYCLE=abc on a fresh root exits 2 and leaves the disk alone.
 
     Mutation: the resolver creating .handoff/ for begin before the anchors
     are validated, so an exit-2 run leaves a directory behind.
@@ -234,7 +234,7 @@ def test_a_bad_cycle_on_begin_creates_no_handoff_directory(
     monkeypatch.setenv('HQ_CYCLE', 'abc')
     rc, out = _run(['begin', _SLUG])
     assert rc == 2
-    assert 'hq: --cycle must be an integer' in out
+    assert 'hq: HQ_CYCLE must be an integer' in out
     assert not (folder.parent).exists()
 
 

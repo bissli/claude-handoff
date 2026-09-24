@@ -644,7 +644,7 @@ def test_read_sends_a_store_to_its_verb_not_to_the_file(tmp_path, monkeypatch):
     _spec(folder)
     for path, verb in [
             ('ledger.tsv',
-             f'hq artifacts {_SLUG} --all, or hq when {_SLUG} <path>'),
+             f'hq artifacts {_SLUG}, or hq when {_SLUG} <path>'),
             ('standing.md', f'hq standing {_SLUG}'),
             ('cycles', f'hq diff {_SLUG} <c1> <c2>'),
             ('cycles/c01.md', f'hq diff {_SLUG} <c1> <c2>'),

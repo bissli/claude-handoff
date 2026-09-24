@@ -297,16 +297,16 @@ def test_finish_prints_the_payload_delta_against_the_last_cycle(
     assert delta != f'{tokens(second) - tokens(first):+d} tok since c2'
 
 
-def test_the_standing_superseded_count_names_a_command_that_returns_them(
+def test_a_superseded_item_leaves_the_block_and_stays_reachable_by_id(
         tmp_path, monkeypatch, capsys):
-    """Verify the superseded count names a command printing those items.
+    """Verify a superseded item leaves the Standing block yet prints by id.
 
-    Mutation: the count line ending in 'hq standing <slug>' without
-    --all, which exits 0 and lists the live items instead, so a count
-    points at text its own command never returns.
-    Oracle: the command parsed out of the rendered line and run as
-    printed against a store whose c01 really is superseded; its output
-    must carry [c01].
+    Mutation: the render keeping a line that names the superseded item;
+    or supersede dropping the old item from standing.md, so its id no
+    longer prints.
+    Oracle: a store whose c01 really is superseded by c02 - the block
+    names c02 alone, and hq standing <slug> c01 prints [c01] with its
+    successor.
     """
     _folder(tmp_path, monkeypatch)
     assert hq.main(['begin', _SLUG]) == 0
@@ -323,13 +323,14 @@ def test_the_standing_superseded_count_names_a_command_that_returns_them(
         _item('c01', 'c', 'Never reuse a nonce', 'The verifier caches it.'),
         _item('c02', 'c', 'Never reuse a key', 'The signer caches it.'),
         ]
-    line = hq.render_standing(items, {'c01'}, _SLUG).splitlines()[-1]
-    assert line.startswith('superseded 1')
+    block = hq.render_standing(items, {'c01'}, _SLUG)
+    assert 'c01' not in block
+    assert '[c02]' in block
 
-    argv = line.split('- ', 1)[1].split()
-    assert '<' not in ' '.join(argv)
-    assert hq.main(argv[1:]) == 0
-    assert '[c01]' in capsys.readouterr().out
+    assert hq.main(['standing', _SLUG, 'c01']) == 0
+    out = capsys.readouterr().out
+    assert '[c01]' in out
+    assert 'superseded by c02' in out
 
 
 def test_every_non_live_artifact_count_names_a_command_that_runs_as_printed(

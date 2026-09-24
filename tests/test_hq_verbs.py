@@ -379,31 +379,6 @@ def test_successor_with_explicit_status_keeps_that_status(
     assert row['successor'] == 'NEXT.md'
 
 
-def test_defer_carries_status_and_successor(tmp_path, monkeypatch):
-    """--defer sets kind, read_before, and reason only; the rest carries.
-
-    Mutation: the deferred row built with status live and successor '-',
-    resurrecting a superseded row.
-    Oracle: a notes file superseded by notes-later.md then deferred keeps
-    status superseded and successor notes-later.md.
-    """
-    folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    (folder / 'notes-early.md').write_text('# Early\n')
-    (folder / 'notes-later.md').write_text('# Later\n')
-    hq.main(['stamp', _SLUG, 'notes-early.md', '--successor', 'notes-later.md'])
-
-    assert hq.main(['stamp', _SLUG, 'notes-early.md', '--defer']) == 0
-
-    lines = (folder / 'ledger.tsv').read_text().splitlines()
-    row = dict(zip(hq.LEDGER_FIELDS, lines[-1].split('\t')))
-    assert row['kind'] == 'other'
-    assert row['read_before'] == 'never'
-    assert row['reason'] == 'deferred'
-    assert row['status'] == 'superseded'
-    assert row['successor'] == 'notes-later.md'
-
-
 def test_directory_or_self_is_not_a_successor(tmp_path, monkeypatch):
     """R1 accepts a successor only when it is an existing file, not itself.
 
@@ -560,25 +535,6 @@ def test_batch_reports_a_line_it_cannot_parse(tmp_path, monkeypatch):
     lines = (folder / 'ledger.tsv').read_text().splitlines()
     assert len(lines) == 2
     assert lines[1].split('\t')[2] == 'notes-a.md'
-
-
-def test_deferred_row_reappears_in_the_work_list(tmp_path, monkeypatch, capsys):
-    """Begin lists deferred rows so a deferred file is not forgotten.
-
-    Mutation: the work list built from unstamped, sha-moved, and missing
-    rows only, so a deferred row is never shown again.
-    Oracle: the second begin prints 'deferred x1: notes-a.md'.
-    """
-    folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    (folder / 'notes-a.md').write_text('# A\n')
-    assert hq.main(['stamp', _SLUG, 'notes-a.md', '--defer']) == 0
-    capsys.readouterr()
-
-    assert hq.main(['begin', _SLUG]) == 0
-
-    out = capsys.readouterr().out
-    assert 'deferred x1: notes-a.md' in out
 
 
 def test_batch_survives_an_unbalanced_quote(tmp_path, monkeypatch):
@@ -1737,33 +1693,6 @@ def test_finish_rarity_counts_files_containing_the_term(
     assert len(hits) == 3
     assert not any('--force' in h for h in hits)
     assert all(any(w in h for h in hits) for w in ('Zephyr', 'Yankee', 'Xenon'))
-
-
-def test_defer_on_spec_returns_1_with_receipt(tmp_path, monkeypatch):
-    """Stamp SPEC.md --defer returns 1 and writes a refused receipt row.
-
-    Mutation: the inferred-kind guard on the defer path removed, letting
-    kind=other read_before=never bypass R1 for a spec with no audit trail.
-    Oracle: exit 1; ledger row carries reason starting 'refused:' with
-    kind=spec and read_before=always (the prior values) unchanged.
-    """
-    folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n')
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--read-before', 'always'])
-
-    ret = hq.main(['stamp', _SLUG, 'SPEC.md', '--defer'])
-    assert ret == 1
-
-    lines = (folder / 'ledger.tsv').read_text().splitlines()
-    last = lines[-1].split('\t')
-    # Ledger field indices: cycle=0 ts=1 path=2 base=3 kind=4
-    # status=5 read_before=6 successor=7 where=8 sha12=9
-    # lines=10 reason=11 label=12
-    assert last[11].startswith('refused:')
-    assert '--defer' in last[11]
-    assert last[4] == 'spec'
-    assert last[6] == 'always'
 
 
 def test_restamp_carries_label_and_where_forward(tmp_path, monkeypatch):

@@ -117,11 +117,11 @@ def _check_stamp(folder, before, path, argv, rc, ctx=None):
 
 def test_every_flag_combination_on_a_fresh_spec_is_covered_or_refused(
         tmp_path, monkeypatch):
-    """Over 1,920 stamp flag combinations, a fresh spec never ends ungated.
+    """Over 960 stamp flag combinations, a fresh spec never ends ungated.
 
     Mutation: any R1 branch dropped - the read_before floor, the status
-    floor, the kind floor, the --defer refusal, the on-disk check of a
-    successor, the archive-needs-reason rule - lets one combination
+    floor, the kind floor, the on-disk check of a successor, the
+    archive-needs-reason rule - lets one combination
     through with exit 0 and a row that is live and not always, or
     superseded toward a file that is not on disk.
     Oracle: _covered, an independent statement of the design's survival
@@ -137,10 +137,9 @@ def test_every_flag_combination_on_a_fresh_spec_is_covered_or_refused(
         (None, 'spec', 'notes'),
         (None, 'NEXT.md', 'gone.md', 'SPEC.md'),
         (False, True),
-        (None, 'why'),
-        (False, True))
+        (None, 'why'))
     count = 0
-    for rb, status, kind, successor, archive, reason, defer in grid:
+    for rb, status, kind, successor, archive, reason in grid:
         (folder / 'ledger.tsv').write_text(header)
         argv = ['stamp', _SLUG, 'SPEC.md', '--where', 's1']
         for flag, value in (('--read-before', rb), ('--status', status),
@@ -148,11 +147,11 @@ def test_every_flag_combination_on_a_fresh_spec_is_covered_or_refused(
                             ('--reason', reason)):
             if value is not None:
                 argv += [flag, value]
-        argv += ['--archive'] * archive + ['--defer'] * defer
+        argv += ['--archive'] * archive
         rc, _ = _run(argv)
         _check_stamp(folder, [], 'SPEC.md', argv, rc)
         count += 1
-    assert count == 1920
+    assert count == 960
 
 
 def test_every_flag_combination_on_a_stamped_spec_is_covered_or_refused(
@@ -181,11 +180,10 @@ def test_every_flag_combination_on_a_stamped_spec_is_covered_or_refused(
         (None, 'live', 'archived'),
         (None, 'notes'),
         (None, 'NEXT.md', 'gone.md'),
-        ((False, None), (True, 'why'), (False, 'why')),
-        (False, True)))
+        ((False, None), (True, 'why'), (False, 'why'))))
     for prior_name, prior in priors.items():
         for heading in ('# Spec\n', '# Plan\n'):
-            for rb, status, kind, successor, (archive, reason), defer in grid:
+            for rb, status, kind, successor, (archive, reason) in grid:
                 (folder / 'ledger.tsv').write_text(header)
                 (folder / 'SPEC.md').write_text('# Spec\n\nOne.\n')
                 assert _run(prior)[0] == 0, prior_name
@@ -197,7 +195,7 @@ def test_every_flag_combination_on_a_stamped_spec_is_covered_or_refused(
                                     ('--reason', reason)):
                     if value is not None:
                         argv += [flag, value]
-                argv += ['--archive'] * archive + ['--defer'] * defer
+                argv += ['--archive'] * archive
                 rc, _ = _run(argv)
                 _check_stamp(folder, before, 'SPEC.md', argv, rc, (prior_name, heading))
 
@@ -245,8 +243,6 @@ def test_random_verb_sequences_hold_the_ledger_invariants(tmp_path, monkeypatch)
                     argv += ['--archive']
                 if rng.random() < 0.3:
                     argv += ['--reason', f'r{rng.randint(1, 9)}']
-                if rng.random() < 0.1:
-                    argv += ['--defer']
                 if rng.random() < 0.3:
                     argv += ['--label', f'l{rng.randint(1, 99)}']
                 if rng.random() < 0.3:

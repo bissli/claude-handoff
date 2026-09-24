@@ -35,8 +35,8 @@ _FOREIGN_FLAGS = {
 # Exit-2 usage slips whose text is the whole remedy: they name the
 # token the parser rejected, on a command that wrote nothing.
 _USAGE_ONLY_PRINTS = {
-    'hq: --cycle must be an integer',
-    'hq: --now must be an ISO 8601 timestamp',
+    'hq: HQ_CYCLE must be an integer',
+    'hq: HQ_NOW must be an ISO 8601 timestamp',
     'hq: root is not a directory',
     'hq: ambiguous slug',
     'hq stamp: path is required',

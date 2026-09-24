@@ -236,20 +236,19 @@ def test_kind_change_off_spec_is_a_demotion():
     assert hq.check_r1(row_notes_always, 'spec', False) is not None
 
 
-def test_defer_refused_for_inferred_spec():
-    """Verify --defer is refused when the inferred kind is spec or draft.
+def test_an_ungated_other_row_is_refused_only_for_a_gated_kind():
+    """Verify kind=other read_before=never is refused for spec and draft alone.
 
-    Mutation: the --defer escape open to a spec, letting kind=other
-    read_before=never bypass R1 without a receipt.
-    Oracle: hand-computed - a deferred row (kind=other, read_before=never,
-    reason=deferred) is refused for spec and draft inferred kinds, allowed
-    for notes and other.
+    Mutation: the R1 kind floor covering spec but not draft, or reaching
+    past the gated kinds to refuse a notes or other file.
+    Oracle: hand-computed - the row is refused for spec and draft inferred
+    kinds, allowed for notes and other.
     """
-    deferred = _row(kind='other', read_before='never', reason='deferred')
-    assert hq.check_r1(deferred, 'spec', False) is not None
-    assert hq.check_r1(deferred, 'draft', False) is not None
-    assert hq.check_r1(deferred, 'notes', False) is None
-    assert hq.check_r1(deferred, 'other', False) is None
+    ungated = _row(kind='other', read_before='never')
+    assert hq.check_r1(ungated, 'spec', False) is not None
+    assert hq.check_r1(ungated, 'draft', False) is not None
+    assert hq.check_r1(ungated, 'notes', False) is None
+    assert hq.check_r1(ungated, 'other', False) is None
 
 
 # --- check_r3 ---------------------------------------------------------
@@ -662,14 +661,14 @@ def test_artifacts_block_collapses_never_rows_and_caps_at_40():
 
 
 def test_standing_block_omits_superseded_and_prints_every_live_item():
-    """Verify superseded items appear only as a count and no cap cuts the rest.
+    """Verify superseded items leave the block and no cap cuts the rest.
 
-    Mutation: printing superseded items in full, so the block grows with
-    every ruling since the thread began; or a line cap folding live
-    decisions into a '... N more' line, which drops a ruling the reader
-    must not undo.
-    Oracle: hand-computed - d02 is superseded so 'Superseded decision' is
-    absent; 82 unsuperseded decisions render 82 headline lines.
+    Mutation: printing superseded items in full or by id, so the block
+    grows with every ruling since the thread began; or a line cap
+    folding live decisions into a '... N more' line, which drops a
+    ruling the reader must not undo.
+    Oracle: hand-computed - d02 is superseded so neither its headline nor
+    its id appears; c01 and d01 render.
     """
     items = [
         {'id': 'c01', 'prefix': 'c', 'cycle': '1',
@@ -681,9 +680,7 @@ def test_standing_block_omits_superseded_and_prints_every_live_item():
     ]
     result = hq.render_standing(items, {'d02'}, 'test-slug')
     assert 'Superseded decision' not in result
-    assert '[d02]' not in result
-    assert 'superseded 1' in result
-    assert 'hq standing test-slug' in result
+    assert 'd02' not in result
     assert '[c01]' in result
     assert '[d01]' in result
 
@@ -934,13 +931,13 @@ def test_non_live_count_line_has_a_fixed_order():
     assert counted == ['superseded', 'archived', 'missing']
 
 
-def test_standing_renders_every_live_constraint_and_keeps_the_superseded_line():
-    """Verify no cap cuts the constraints and the superseded count closes the block.
+def test_standing_renders_every_live_constraint_and_no_superseded_line():
+    """Verify no cap cuts the constraints and nothing names the superseded one.
 
-    Mutation: a line cap that truncates the constraints; the superseded
-    line appended before the items, or dropped.
+    Mutation: a line cap that truncates the constraints; a line naming
+    the superseded item appended to the block.
     Oracle: hand-computed - 86 constraints with one superseded render as
-    87 lines: the heading, 85 items in full, and 'superseded 1'.
+    86 lines: the heading and 85 items in full, [c85] last.
     """
     items = [
         {'id': f'c{n:02d}', 'prefix': 'c', 'cycle': '1',
@@ -948,10 +945,9 @@ def test_standing_renders_every_live_constraint_and_keeps_the_superseded_line():
         for n in range(1, 87)
     ]
     result = hq.render_standing(items, {'c86'}, 'slug').splitlines()
-    assert len(result) == 87
-    assert result[-1] == 'superseded 1  - hq standing slug --all'
-    assert result[-2] == '[c85] (c1) **rule 85** body'
-    assert '[c86]' not in '\n'.join(result)
+    assert len(result) == 86
+    assert result[-1] == '[c85] (c1) **rule 85** body'
+    assert 'c86' not in '\n'.join(result)
 
 
 def test_every_kind_renders_whole_under_its_heading():

@@ -91,15 +91,14 @@ def test_done_hides_the_folder_from_list_and_done_shows_it(
     assert 'marked done - run hq list --done' not in done_out
 
 
-def test_done_refuses_an_open_cycle_until_finish_or_force(
+def test_done_refuses_an_open_cycle_until_finish(
         tmp_path, monkeypatch, capsys):
-    """A held lock stops done, and --force overrides it.
+    """A held lock stops done until finish closes the cycle.
 
     Mutation: the lock guard dropped, so a thread is marked mid-cycle and
-    its lock outlives it; or --force read from the wrong flag, so the
-    override never fires.
-    Oracle: the marker file's own existence after each of the three calls
-    - refused, refused with the lock still held, then written.
+    its lock outlives it; or a leftover flag reopening the override.
+    Oracle: the marker file's own existence after each call - refused
+    while the lock stands, written once finish clears it.
     """
     root = _new_root(tmp_path, monkeypatch)
     folder = root / '.handoff' / _SLUG
@@ -111,10 +110,12 @@ def test_done_refuses_an_open_cycle_until_finish_or_force(
     assert not (folder / hq._DONE_NAME).exists()
     assert 'is still open' in out
     assert f'hq finish {_SLUG}' in out
+    assert '--force' not in out
 
     assert (folder / '.hq.lock').exists()
 
-    rc, _ = _run(['done', _SLUG, '--force'], capsys)
+    assert hq.main(['finish', _SLUG, '--log', 'closed']) == 0
+    rc, _ = _run(['done', _SLUG], capsys)
     assert rc == 0
     assert (folder / hq._DONE_NAME).exists()
 
@@ -228,27 +229,6 @@ def test_the_marker_is_invisible_to_the_folder_walk(tmp_path, monkeypatch, capsy
     assert hq._DONE_NAME not in out
     assert 'unstamped' not in out
     assert [name for name, _ in hq._walk_folder(folder)] == []
-
-
-def test_list_tsv_stays_one_header_and_its_rows(tmp_path, monkeypatch, capsys):
-    """The count line never reaches --tsv output.
-
-    Mutation: printing the count line before the tsv return, which puts a
-    line with no tabs under a header a caller parses by column.
-    Oracle: every line after the header holding four tabs.
-    """
-    _new_root(tmp_path, monkeypatch)
-    _cycle(_SLUG)
-    _cycle(_OTHER)
-    assert hq.main(['done', _SLUG]) == 0
-    capsys.readouterr()
-
-    _, out = _run(['list', '--tsv'], capsys)
-    lines = out.splitlines()
-    assert lines[0] == 'slug\twritten\tcycle\tprogress\ttask'
-    assert len(lines) == 2
-    assert lines[1].count('\t') == 4
-    assert lines[1].startswith(_OTHER)
 
 
 def test_the_stop_hook_leaves_a_marked_folder_alone(
@@ -377,12 +357,12 @@ def test_adopt_refuses_a_marked_folder(tmp_path, monkeypatch, capsys):
     assert 'hq adopt: legacy-slug is marked done' in out
 
 
-def test_undo_refuses_the_marking_flags(tmp_path, monkeypatch, capsys):
-    """--undo paired with --reason or --force is a usage error.
+def test_undo_refuses_the_reason_flag(tmp_path, monkeypatch, capsys):
+    """--undo paired with --reason is a usage error.
 
     Mutation: the pair accepted, so a reason passed with --undo is
     silently dropped and the caller believes it was recorded.
-    Oracle: exit 2 and an untouched marker for each pairing.
+    Oracle: exit 2 and an untouched marker.
     """
     root = _new_root(tmp_path, monkeypatch)
     folder = root / '.handoff' / _SLUG
@@ -393,9 +373,5 @@ def test_undo_refuses_the_marking_flags(tmp_path, monkeypatch, capsys):
 
     rc, out = _run(['done', _SLUG, '--undo', '--reason', 'oops'], capsys)
     assert rc == 2
-    assert 'neither --reason nor --force' in out
-    assert (folder / hq._DONE_NAME).read_bytes() == before
-
-    rc, _ = _run(['done', _SLUG, '--undo', '--force'], capsys)
-    assert rc == 2
+    assert 'takes no --reason' in out
     assert (folder / hq._DONE_NAME).read_bytes() == before

@@ -665,42 +665,6 @@ def test_do_stamp_refused_row_lowercase_ts_key(tmp_path, monkeypatch):
     assert refused['ts'] == _NOW
 
 
-def test_do_stamp_deferred_row_lowercase_keys(tmp_path, monkeypatch):
-    """_do_stamp() deferred_row uses lowercase 'cycle', 'ts', 'base' keys.
-
-    Mutation: 'CYCLE', 'TS', 'BASE', 'WHERE', 'SHA12', 'LINES', 'LABEL'
-    in defer_row; ledger fields for those columns become '-'.
-    Oracle: deferred row has correct cycle, ts, base, sha12, lines, label.
-    """
-    folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    (folder / 'note.md').write_text('# Note\n\nContent.\n')
-    hq.main(['stamp', _SLUG, 'note.md', '--defer'])
-    rows = _rows(folder)
-    row = rows[-1]
-    assert row['cycle'] == '1'
-    assert row['ts'] == _NOW
-    assert row['base'] == 'folder'
-    assert row['reason'] == 'deferred'
-    assert row['lines'] != '-'
-    assert row['sha12'] != '-'
-    assert row['label'] == '-'
-
-
-def test_do_stamp_defer_status_uses_live_default(tmp_path, monkeypatch):
-    """_do_stamp() defer_row prev.get('status', 'live') defaults to 'live'.
-
-    Mutation: no default (None) or 'LIVE' makes status wrong on new path.
-    Oracle: first deferred stamp has status='live' (hand-computed default).
-    """
-    folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    (folder / 'note.md').write_text('# Note\n\nContent.\n')
-    hq.main(['stamp', _SLUG, 'note.md', '--defer'])
-    rows = _rows(folder)
-    assert rows[-1]['status'] == 'live'
-
-
 def test_do_stamp_top_level_false_for_nested_file(tmp_path, monkeypatch):
     """_do_stamp() passes top_level=False for files nested inside the folder.
 
@@ -769,8 +733,8 @@ def test_do_stamp_successor_check_refusal_not_overridden(
         tmp_path, monkeypatch):
     """Successor-refusal is the reported reason, not a later R1 check.
 
-    Mutation: refusal_reason is None or not defer enters the normal-row
-    block even when refusal_reason is already set; R1 overwrites the reason.
+    Mutation: the row-build block runs even when refusal_reason is
+    already set, and R1 overwrites the successor's reason.
     Oracle: reason in ledger is the successor-not-live message.
     """
     folder = _root(tmp_path, monkeypatch)
@@ -849,22 +813,6 @@ def test_do_stamp_kind_carried_from_prev_row(tmp_path, monkeypatch):
     hq.main(['stamp', _SLUG, 'doc.md'])
     rows = _rows(folder)
     assert rows[-1]['kind'] == 'spec'
-
-
-def test_do_stamp_defer_ok_for_non_spec(tmp_path, monkeypatch):
-    """_do_stamp() allows --defer for non-spec/draft files.
-
-    Mutation: getattr(argv, 'defer', True) makes defer always active,
-    including for spec files where it should be refused.
-    Oracle: spec file with --defer is refused; other file with --defer passes.
-    """
-    folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    (folder / 'notes.md').write_text('# Notes\n\nContent.\n')
-    rc = hq.main(['stamp', _SLUG, 'notes.md', '--defer'])
-    assert rc == 0
-    rows = _rows(folder)
-    assert rows[-1]['reason'] == 'deferred'
 
 
 def test_do_stamp_path_required_message_lowercase(tmp_path, monkeypatch,
@@ -1500,60 +1448,34 @@ def test_do_stamp_first_stamp_refused_row_has_dash_successor(
     assert rows[-1]['where'] == '-'
 
 
-def test_do_stamp_deferred_row_where_field_lowercase(tmp_path, monkeypatch):
-    """_do_stamp() deferred row uses 'where' key (lowercase), not 'WHERE'.
+def test_do_stamp_new_row_where_field_lowercase(tmp_path, monkeypatch):
+    """_do_stamp() new row uses 'where' key (lowercase), not 'WHERE'.
 
-    Mutation: 'WHERE': where in defer_row; _append_tsv writes '-' for the
+    Mutation: 'WHERE': where in new_row; _append_tsv writes '-' for the
     lowercase 'where' LEDGER field because the key is missing.
-    Oracle: deferred stamp with --where has where field matching the value.
+    Oracle: a stamp with --where has a where field matching the value.
     """
     folder = _root(tmp_path, monkeypatch)
     hq.main(['begin', _SLUG])
     (folder / 'note.md').write_text('# Note\n\nContent.\n')
-    hq.main(['stamp', _SLUG, 'note.md', '--defer', '--where', 'section-2'])
+    hq.main(['stamp', _SLUG, 'note.md', '--where', 'section-2'])
     rows = _rows(folder)
-    assert rows[-1]['reason'] == 'deferred'
     assert rows[-1]['where'] == 'section-2'
 
 
-def test_do_stamp_deferred_row_label_field_lowercase(tmp_path, monkeypatch):
-    """_do_stamp() deferred row uses 'label' key (lowercase), not 'LABEL'.
+def test_do_stamp_new_row_label_field_lowercase(tmp_path, monkeypatch):
+    """_do_stamp() new row uses 'label' key (lowercase), not 'LABEL'.
 
-    Mutation: 'LABEL': label in defer_row; _append_tsv writes '-' for
+    Mutation: 'LABEL': label in new_row; _append_tsv writes '-' for
     lowercase 'label' LEDGER field.
-    Oracle: deferred stamp with --label has label field matching the value.
+    Oracle: a stamp with --label has a label field matching the value.
     """
     folder = _root(tmp_path, monkeypatch)
     hq.main(['begin', _SLUG])
     (folder / 'note.md').write_text('# Note\n\nContent.\n')
-    hq.main(['stamp', _SLUG, 'note.md', '--defer', '--label', 'v1.2'])
+    hq.main(['stamp', _SLUG, 'note.md', '--label', 'v1.2'])
     rows = _rows(folder)
-    assert rows[-1]['reason'] == 'deferred'
     assert rows[-1]['label'] == 'v1.2'
-
-
-def test_do_stamp_defer_on_spec_refused_not_overridden_by_successor(
-        tmp_path, monkeypatch):
-    """defer+non-live-successor: reason is from defer check, not successor.
-
-    Mutation: 'and' -> 'or' in 'if refusal_reason is None and successor_given'
-    makes the successor check run even when refusal already set; an archived
-    successor then overwrites the defer-refusal reason.
-    Oracle: --defer --successor archived_path gives 'refused: --defer' reason.
-    """
-    folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    (folder / 'old.md').write_text('# Old\n\nContent.\n')
-    (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n')
-    hq.main(['stamp', _SLUG, 'old.md'])
-    hq.main(['stamp', _SLUG, 'old.md', '--archive', '--reason', 'done'])
-    hq.main(['stamp', _SLUG, 'SPEC.md'])
-    # --defer on spec with archived successor: defer check fires first
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--defer', '--successor', 'old.md'])
-    rows = _rows(folder)
-    refused = rows[-1]
-    assert refused['reason'].startswith('refused:')
-    assert '--defer' in refused['reason']
 
 
 # ---------------------------------------------------------------------------
