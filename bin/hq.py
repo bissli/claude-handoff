@@ -308,6 +308,10 @@ The reading steps hq open prints after its findings; each binds.
   thread - then put them to the user and stop. Otherwise state the
   task and the Now step in two sentences, then execute Now; the Plan
   follows.
+- An item the Standing block names prints whole with
+  hq standing <slug> <id>. Where the thread started, how it got
+  here, or where it stands overall goes to hq arc <slug> first; the
+  agent answers from it and reads further only for a fact it lacks.
 - A later bare /handoff that writes targets this handoff: write target
   rule 2 in the skill.""",
     'rules': """\
@@ -407,6 +411,16 @@ Cursor rules:
   State: the Standing block carries it.
 - No line ceiling binds the cursor: a block holds text back over a
   store; the cursor has none, so a reworded line drops facts.
+
+The Log line - the finish --log text is the cycle's whole entry in
+hq arc:
+
+- It says what the cycle did to the task - what shipped, what a
+  measurement found, what was decided - with the name, version, or
+  figure a reader can check.
+- A standing id is spelled out; a bare id reads as nothing.
+- A cycle that only repaired the record says which fact it restored.
+- A check writes check: <n> findings applied - <what they changed>.
 
 Ledger tiers - read_before is a tier, and stamp seeds it from the
 kind: a spec seeds always, a draft edit, all else never. Of several
@@ -1497,20 +1511,23 @@ def render_standing(
     return '\n'.join(out)
 
 
-def render_log(manifest: list[dict], n: int = 3) -> str:
+def render_log(manifest: list[dict], slug: str, n: int = 3) -> str:
     """Render the ## Log block body.
 
     Parameters
     ----------
     manifest : list[dict]
         All finished cycles in order, each a dict keyed by MANIFEST_FIELDS.
+    slug : str
+        Folder name the rollup line's ``hq arc`` command names.
     n : int, default 3
         Number of recent cycles to show in full.
 
     Returns
     -------
     str
-        Log lines joined with newlines.
+        Log lines joined with newlines; the cycles older than the last
+        ``n`` collapse into one ``- cycles <a>-<b> - hq arc <slug>`` line.
     """
     if not manifest:
         return ''
@@ -1527,8 +1544,125 @@ def render_log(manifest: list[dict], n: int = 3) -> str:
     if older:
         first = manifest[0]['cycle']
         last_old = older[-1]['cycle']
-        out.append(f'- cycles {first}-{last_old}: see cycles/manifest.tsv')
+        out.append(f'- cycles {first}-{last_old} - hq arc {slug}')
     return '\n'.join(out)
+
+
+def render_arc(
+    slug: str,
+    manifest: list[dict],
+    handoff_text: str,
+    first_text: str) -> str:
+    """Render the whole-thread arc: where it began, each cycle, where it stands.
+
+    Parameters
+    ----------
+    slug : str
+        Folder name the title line carries.
+    manifest : list[dict]
+        Every finished cycle in order, keyed by MANIFEST_FIELDS; not empty.
+    handoff_text : str
+        The live HANDOFF.md, source of Task, Now, Open questions, and Plan.
+    first_text : str
+        ``cycles/c<first>.md``, the first finished cycle's archive, or ''
+        where it is absent; source of Began as and the prior Log.
+
+    Returns
+    -------
+    str
+        The arc, newline-terminated::
+
+            # Arc: <slug>  cycles <a>-<b>, <first written> to <last written>
+            Began as (c<a>): <first sentence of the first cycle's Task>
+            Task: <first sentence of ## Task>
+            Before c<a> (the prior Log, cycles/c<a>.md):
+            <every non-blank line of that archive's ## Log>
+            History:
+            - c<N> <written>  <manifest log>
+            Now: <first sentence of ## Now>
+            Open questions (<n>):
+            - <first sentence of each item>
+            Plan, open (<n>):
+            - <first sentence of each open item>
+
+    Notes
+    -----
+    - Began as prints only when it differs from Task; Before only for a
+      thread adoption began, whose first manifest log names the prior
+      Log; Open questions only when the section holds an item.
+    - Every manifest row and every open item prints, no cap: the arc
+      grows one History line a cycle and replaces reading the archives.
+    - A nested open Plan item keeps one level of indent.
+    """
+    parsed: list[dict[str, list[str]]] = []
+    for text in (handoff_text, first_text):
+        sections: dict[str, list[str]] = {}
+        heading = ''
+        for line in text.splitlines():
+            if line.startswith('## '):
+                heading = line[3:].strip()
+                sections.setdefault(heading, [])
+            elif line.startswith('<!-- hq:'):
+                heading = ''
+            elif heading:
+                sections[heading].append(line)
+        parsed.append(sections)
+    current, first_cycle = parsed
+
+    def first_sentence(lines: list[str]) -> str:
+        """First sentence of wrapped lines joined, with bold markup dropped.
+        """
+        joined = ' '.join(ln.strip() for ln in lines if ln.strip())
+        return split_headline(joined.replace('**', ''))[0]
+
+    first, last = manifest[0], manifest[-1]
+    task = first_sentence(current.get('Task', []))
+    began = first_sentence(first_cycle.get('Task', []))
+    out = [
+        (f'# Arc: {slug}  cycles {first["cycle"]}-{last["cycle"]},'
+         f' {first["written"]} to {last["written"]}')
+        ]
+    if began and began != task:
+        out.append(f'Began as (c{first["cycle"]}): {began}')
+    out.append(f'Task: {task}')
+    if first['log'].startswith('adopted; prior Log:'):
+        out.append(
+            f'Before c{first["cycle"]} (the prior Log,'
+            f' cycles/c{int(first["cycle"]):02d}.md):')
+        out.extend(ln for ln in first_cycle.get('Log', []) if ln.strip())
+    out.append('History:')
+    out.extend(f'- c{row["cycle"]} {row["written"]}  {row["log"]}' for row in manifest)
+    out.append(f'Now: {first_sentence(current.get("Now", []))}')
+    # An item opens at a bullet, a bold span, or a number at column
+    # one, or after a blank line; an indented line continues it.
+    asked: list[str] = []
+    item: list[str] = []
+    for line in current.get('Open questions', []) + ['']:
+        if (re.match(r'(- |\*\*|\d+[.)] )', line) or not line.strip()) and item:
+            asked.append(first_sentence(item))
+            item = []
+        if line.strip():
+            item.append(re.sub(r'^(- |\d+[.)] )', '', line))
+    if asked:
+        out.append(f'Open questions ({len(asked)}):')
+        out.extend(f'- {q}' for q in asked)
+    opens: list[str] = []
+    plan_item: list[str] | None = None
+    depth = ''
+    for line in current.get('Plan', []) + ['']:
+        box = re.match(r'(\s*)- \[([ xX])\] (.*)', line)
+        if plan_item is not None and not box and line.startswith(' ') and line.strip():
+            plan_item.append(line)
+            continue
+        if plan_item is not None:
+            opens.append(f'{depth}- {first_sentence(plan_item)}')
+            plan_item = None
+        if box and box.group(2) == ' ':
+            depth = '  ' if box.group(1) else ''
+            plan_item = [box.group(3)]
+    out.append(f'Plan, open ({len(opens)}):')
+    out.extend(opens)
+    return '\n'.join(out) + '\n'
 
 
 def collisions(
@@ -3995,7 +4129,7 @@ def _verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
         'written': archive_written,
         'repos': archive_repos,
         'log': adopt_log,
-        }])
+        }], folder.name)
     branch_a = anch['branch']
     sha7_a = anch['sha']
     if branch_a != '-':
@@ -5505,7 +5639,7 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
         'written': anch['now'][:10],
         'repos': repos,
         'log': log_text,
-        }])
+        }], folder.name)
     new_handoff = _assemble_handoff(
         folder, cursor_clean, header_line, log_body,
         live, walk, standing_text_new, int(anch['cycle']))
@@ -6247,6 +6381,42 @@ def _verb_diff(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     return 0
 
 
+def _verb_arc(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int:
+    """Run arc: the whole thread in one read, a line a cycle.
+
+    Parameters
+    ----------
+    folder : pathlib.Path
+        Handoff folder holding HANDOFF.md and cycles/.
+    anch : dict
+        Anchors dict from ``anchors()``; unused but required by dispatch.
+    argv : argparse.Namespace
+        Parsed arc arguments; the slug alone.
+
+    Returns
+    -------
+    int
+        0 with ``render_arc``'s text; 1 when no cycle has finished, so
+        the manifest holds no row.
+
+    Notes
+    -----
+    - Read-only: it writes no receipt and no thread record, and arms
+      no gate.
+    """
+    manifest = _read_tsv(folder / 'cycles' / 'manifest.tsv', MANIFEST_FIELDS)
+    if not manifest:
+        print(f'hq arc: {folder.name} has no finished cycle - read HANDOFF.md')
+        return 1
+    first_path = folder / 'cycles' / f'c{int(manifest[0]["cycle"]):02d}.md'
+    first_text = (
+        first_path.read_text(encoding='utf-8', errors='replace')
+        if first_path.exists() else '')
+    handoff_text = (folder / 'HANDOFF.md').read_text(encoding='utf-8', errors='replace')
+    sys.stdout.write(render_arc(folder.name, manifest, handoff_text, first_text))
+    return 0
+
+
 def _verb_artifacts(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int:
     """Run artifacts: print live rows and unstamped walk entries, no cap.
 
@@ -6638,7 +6808,7 @@ def _verb_list(root: pathlib.Path, argv: argparse.Namespace) -> int:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    """Return the top-level argument parser for all sixteen verbs.
+    """Return the top-level argument parser for every verb.
     """
     _top_epilog = (
         'Every verb but list and help takes the slug first. A slug resolves\n'
@@ -6766,7 +6936,13 @@ def _build_parser() -> argparse.ArgumentParser:
     sp.add_argument('new_id')
 
     _finish_epilog = (
-        '--log is the one line the Log keeps for this cycle. --acknowledge\n'
+        '--log is the one line the Log keeps for this cycle and its whole\n'
+        'entry in hq arc: what the cycle did to the task - what shipped,\n'
+        'what a measurement found, what was decided - with the name,\n'
+        'version, or figure a reader can check. A standing id is spelled\n'
+        'out; a bare id reads as nothing. A cycle that only repaired the\n'
+        'record says which fact it restored; a check writes check: <n>\n'
+        'findings applied - <what they changed>. --acknowledge\n'
         '"<reason>" turns a W1 or W2 witness break into an acknowledged line\n'
         'and records the break and the reason in the manifest.\n'
         'The cursor lines from the last finished cycle that nothing now\n'
@@ -6877,6 +7053,20 @@ def _build_parser() -> argparse.ArgumentParser:
     df.add_argument('c2')
     df.add_argument('section', nargs='?')
     df.add_argument('--full', action='store_true')
+
+    _arc_epilog = (
+        'The whole thread in one read: where it began, one History line\n'
+        "per finished cycle - c<N> <written>  <that cycle's --log> - then\n"
+        'Now, the open questions, and the open Plan items of HANDOFF.md,\n'
+        'each by its first sentence. A thread adoption began prints its\n'
+        'prior Log before the History. No cap: it grows one line a cycle.\n'
+        'It writes nothing. A folder with no finished cycle exits 1.'
+    )
+    arc = sub.add_parser(
+        'arc',
+        epilog=_arc_epilog,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    arc.add_argument('slug')
 
     _artifacts_epilog = (
         'Every live row as a full line - path kind read_before cN label - with\n'
@@ -7183,6 +7373,7 @@ def main(argv: list[str]) -> int:
             'read': _verb_read,
             'when': _verb_when,
             'diff': _verb_diff,
+            'arc': _verb_arc,
             'artifacts': _verb_artifacts,
             'standing': _verb_standing,
             }

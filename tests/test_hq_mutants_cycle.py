@@ -194,7 +194,7 @@ def test_render_log_missing_repos_uses_dash_default():
     """
     row = {'written': '2026-09-01', 'cycle': '1', 'log': 'seed commit'}
     # No 'repos' key - should use the short '- written: log' format.
-    out = hq.render_log([row], n=1)
+    out = hq.render_log([row], 'slug', n=1)
     assert 'None' not in out, 'missing repos must not render as None'
     assert out.startswith('- 2026-09-01:'), (
         f'missing repos must use short format, got {out!r}')

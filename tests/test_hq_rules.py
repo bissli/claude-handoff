@@ -713,9 +713,11 @@ def test_log_renders_three_cycles_plus_rollup():
 
     Mutation: any block growing with cycles - printing every log entry makes
     the Log section proportional to finished-cycle count; also, moving the
-    roll-up line before the three cycle lines inverts the design order.
+    roll-up line before the three cycle lines inverts the design order; or
+    the roll-up naming the manifest file, or no slug, in place of hq arc.
     Oracle: hand-computed - five manifest rows; lines 0-2 are cycles 3, 4, 5
-    in that order; line 3 is the rollup naming manifest.tsv; cycles 1-2 absent.
+    in that order; line 3 is the rollup naming hq arc on the slug; cycles
+    1-2 absent.
     """
     manifest = [
         {'cycle': '1', 'written': '2026-01-01', 'repos': 'main@abc1234',
@@ -729,14 +731,13 @@ def test_log_renders_three_cycles_plus_rollup():
         {'cycle': '5', 'written': '2026-01-05', 'repos': 'main@abc1238',
          'log': 'shipped step 3', 'note': '-'},
     ]
-    result = hq.render_log(manifest)
+    result = hq.render_log(manifest, 'auth-token-refresh')
     lines = result.splitlines()
     assert len(lines) == 4
     assert 'shipped step 1' in lines[0]
     assert 'shipped step 2' in lines[1]
     assert 'shipped step 3' in lines[2]
-    assert 'cycles 1-2' in lines[3]
-    assert 'manifest.tsv' in lines[3]
+    assert lines[3] == '- cycles 1-2 - hq arc auth-token-refresh'
     assert 'initial setup' not in result
     assert 'first pass' not in result
 
