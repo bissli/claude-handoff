@@ -166,7 +166,6 @@ Refresh expired OAuth tokens in the poller instead of failing the run.
 Wire refresh_token() into poll() at scripts/auth.py:88, in the 401 branch.
 
 ## Plan
-- [x] Steps 1-3: token store, refresh endpoint, unit tests (cycles 1-2)
 - [ ] Wire refresh into the poll() 401 branch
 - [ ] Integration test against the staging IdP
 

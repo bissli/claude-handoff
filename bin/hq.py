@@ -401,10 +401,17 @@ Cursor rules:
 - Absolute dates. ASCII only.
 - Now is the single next action; Plan, the approved plan, is what
   follows it; neither is re-opened.
-- Now alone is spent each cycle. Every other line stays (a done Plan
-  item ticked '- [x]') or moves whole to a note body or a stamped
-  sibling - what a resuming reader does not need first moves, never
-  cut; finish lists a line dropped anyway.
+- Now alone is spent each cycle. Every other line stays or moves
+  whole to a note body or a stamped sibling - what a resuming reader
+  does not need first moves, never cut; finish lists a line dropped
+  anyway.
+- A done Plan item, and an open item's detail beyond its done
+  condition, move whole to a stamped notes sibling; a fact true for
+  the rest of the thread becomes a constraint.
+- Every approach a cycle closes becomes one Standing item naming it:
+  a ruled-out approach is a dead end whose headline carries the scope
+  it was ruled out on, and a result later work builds on is a
+  decision. A headline that only points elsewhere does not count.
 - Anything still awaiting the user - a question, an unapproved plan -
   goes under Open questions; read stops there.
 - An item recorded with note or under ## Unfiled is not repeated in
@@ -6705,12 +6712,14 @@ def _verb_list(root: pathlib.Path, argv: argparse.Namespace) -> int:
     - Order is each ``HANDOFF.md``'s modification time, newest first,
       the order ``ls -t`` gives; files changed in the same second list
       A to Z by slug.
-    - The line is ``<slug>  <written>  c<N>  <done>/<total>  <task>``.
-      A non-conforming header gives ``-`` for the date and the cycle; a
-      Plan with no checkbox item, or no Plan, gives ``-`` for the
-      progress; a missing Task line gives ``-``.
+    - The line is ``<slug>  <written>  c<N>  <open> open  <task>``,
+      ``<open>`` counting the ``- [ ]`` items: a done item moves out of
+      the cursor, so a done count would read zero. A non-conforming
+      header gives ``-`` for the date and the cycle; a Plan with no
+      checkbox item, or no Plan, gives ``-`` for the progress; a missing
+      Task line gives ``-``.
     - Only ``- [ ]``, ``- [x]``, and ``- [X]`` bullets under ``## Plan``
-      count; a checkbox under any other section is not a plan item.
+      are plan items; a checkbox under any other section is not.
     - A file the script cannot read prints its slug with ``-`` in every
       field and ``unreadable: <reason>`` as the Task; the survey goes on
       and the exit stays 0.
@@ -6758,7 +6767,7 @@ def _verb_list(root: pathlib.Path, argv: argparse.Namespace) -> int:
             written = written_match.group(1) if written_match else '-'
             cycle = f'c{parsed["cycle"]}'
         task = '-'
-        done = total = 0
+        open_cnt = total = 0
         section = ''
         for line in text.splitlines():
             if line.startswith('## '):
@@ -6773,8 +6782,8 @@ def _verb_list(root: pathlib.Path, argv: argparse.Namespace) -> int:
                 box = re.match(r'\s*- \[([ xX])\]', line)
                 if box:
                     total += 1
-                    done += box.group(1) != ' '
-        progress = f'{done}/{total}' if total else '-'
+                    open_cnt += box.group(1) == ' '
+        progress = f'{open_cnt} open' if total else '-'
         rows.append((path.parent.name, written, cycle, progress, task))
     headers = ('SLUG', 'WRITTEN', 'CYCLE', 'PROGRESS')
     col_widths = [
@@ -7121,11 +7130,11 @@ def _build_parser() -> argparse.ArgumentParser:
     _list_epilog = (
         'One line per folder under .handoff/ holding a HANDOFF.md, newest\n'
         "first by that file's mtime: <slug>  <Written date>  c<N>\n"
-        '<done>/<total>  <Task line>. <done>/<total> counts - [x] over all\n'
-        "- [ ] and - [x] items under ## Plan alone, '-' when the Plan has no\n"
-        "checkbox item; a file with no conforming header shows '-' for the\n"
-        "date and the cycle; an unreadable file shows '-  -  -  unreadable:\n"
-        "<reason>'. Ties in the same second list A to Z by slug. A bare list\n"
+        '<N> open  <Task line>. <N> open counts the - [ ] items under ## Plan\n'
+        "alone, '-' when the Plan has no checkbox item; a file with no\n"
+        "conforming header shows '-' for the date and the cycle; an\n"
+        "unreadable file shows '-  -  -  unreadable: <reason>'. Ties in the\n"
+        'same second list A to Z by slug. A bare list\n'
         'shows every one; list 5 the five most recent.\n'
         'A folder marked by hq done is left out, and a closing line counts\n'
         'them: --done lists those folders instead, the open ones left out,\n'

@@ -117,8 +117,9 @@ def test_list_count_limits_output(tmp_path, monkeypatch, capsys):
 def test_list_fields_conforming_file(tmp_path, monkeypatch, capsys):
     """List produces the correct five fields for a conforming HANDOFF.md.
 
-    Mutation: counting checkboxes outside Plan (gives 2/4), not counting
-    the indented one (gives 1/2), or reading the wrong header token.
+    Mutation: counting checkboxes outside Plan (gives 3 open), not
+    counting the indented one (gives 1 open), counting done items (gives
+    3 open), or reading the wrong header token.
     Oracle: hand-computed line for a known fixture.
     """
     root = _new_root(tmp_path, monkeypatch)
@@ -137,7 +138,7 @@ def test_list_fields_conforming_file(tmp_path, monkeypatch, capsys):
         '## Plan\n\n'
         '- [x] step one\n'
         '- [ ] step two\n'
-        '  - [x] sub-item\n\n'
+        '  - [ ] sub-item\n\n'
         '## State\n\n'
         '- [ ] state item\n',
         encoding='utf-8')
@@ -145,16 +146,21 @@ def test_list_fields_conforming_file(tmp_path, monkeypatch, capsys):
     rc, out, _ = _run(['list'], capsys)
     assert rc == 0
     # Skip header and separator; CYCLE and PROGRESS columns widen to fit
-    # their header labels (5 and 8 chars), so c3 pads to 5 and 2/3 to 8.
+    # their header labels (5 and 8 chars), so c3 pads to 5 and 2 open
+    # to 8.
     data_line = out.splitlines()[2]
-    assert data_line == f'{slug}  2026-09-01  c3     2/3       {task_line}'
+    assert data_line == f'{slug}  2026-09-01  c3     2 open    {task_line}'
 
 
 def test_list_no_plan_checkboxes_prints_dash(tmp_path, monkeypatch, capsys):
-    """List prints '-' for progress when Plan has only numbered items or no Plan.
+    """List prints '-' for progress when Plan has only numbered items or no
+    Plan, and '0 open' when every checkbox item is done.
 
-    Mutation: f'{done}/{total}' unconditionally, producing '0/0'.
-    Oracle: the exact field is '-' for a numbered-only Plan and a missing Plan.
+    Mutation: f'{open_cnt} open' unconditionally, producing '0 open' for
+    no checkbox; or the guard testing the open count, producing '-' for
+    an all-done Plan.
+    Oracle: the exact field is '-' for a numbered-only Plan and a missing
+    Plan, and '0 open' for an all-done Plan.
     """
     root = _new_root(tmp_path, monkeypatch)
     handoff_root = root / '.handoff'
@@ -176,15 +182,25 @@ def test_list_no_plan_checkboxes_prints_dash(tmp_path, monkeypatch, capsys):
         '## Task\n\nDo it.\n',
         encoding='utf-8')
 
+    # Folder whose Plan items are all done.
+    alldone = handoff_root / 'slug-alldone'
+    alldone.mkdir()
+    (alldone / 'HANDOFF.md').write_text(
+        '# Handoff: x\n\nWritten: 2026-09-03 | Cycle: 3 | h @ a\n\n'
+        '## Task\n\nDo it.\n\n## Plan\n\n- [x] First thing\n',
+        encoding='utf-8')
+
+    os.utime(alldone / 'HANDOFF.md', (3000000, 3000000))
     os.utime(noplan / 'HANDOFF.md', (2000000, 2000000))
     os.utime(numbered / 'HANDOFF.md', (1000000, 1000000))
 
     rc, out, _ = _run(['list'], capsys)
     assert rc == 0
     # Skip header and separator; strip empty tokens from padding.
-    for line in out.splitlines()[2:]:
-        parts = [p.strip() for p in line.split('  ') if p.strip()]
-        assert parts[3] == '-', f'expected - for progress in: {line!r}'
+    progress = [
+        [p.strip() for p in line.split('  ') if p.strip()][3]
+        for line in out.splitlines()[2:]]
+    assert progress == ['0 open', '-', '-']
 
 
 def test_list_non_conforming_file_prints_dashes(tmp_path, monkeypatch, capsys):
@@ -354,7 +370,7 @@ def test_list_parses_task_plan_and_block_edges(tmp_path, monkeypatch, capsys):
     Mutation: the task == '-' guard dropped (last line wins); the heading
     .strip() dropped ('## Plan   ' counts nothing); the '<!-- hq:' section
     clear dropped (the block's checkbox counts).
-    Oracle: the exact data line 'edges  2026-09-03  c4     1/2       First line.'
+    Oracle: the exact data line 'edges  2026-09-03  c4     1 open    First line.'
     (CYCLE and PROGRESS pad to their header widths, 5 and 8).
     """
     root = _new_root(tmp_path, monkeypatch)
@@ -372,4 +388,4 @@ def test_list_parses_task_plan_and_block_edges(tmp_path, monkeypatch, capsys):
         encoding='utf-8')
     rc, out, _ = _run(['list'], capsys)
     assert rc == 0
-    assert out.splitlines()[2] == 'edges  2026-09-03  c4     1/2       First line.'
+    assert out.splitlines()[2] == 'edges  2026-09-03  c4     1 open    First line.'
