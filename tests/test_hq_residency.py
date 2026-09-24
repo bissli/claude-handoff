@@ -84,7 +84,7 @@ def test_a_constraint_body_past_its_first_sentence_is_held_back():
     second = 'Cycle 2 reproduced a double charge at 1,400 ms.'
     lines = hq.render_standing(
         [_item('c07', 'c', 'Never retry without the key', f'{first} {second}')],
-        set(), 'demo').splitlines()
+        set(), 'demo', whole_ids={'c07'}).splitlines()
     assert lines == [
         '### Constraints',
         (f'[c07] (c1) **Never retry without the key** {first}'
@@ -111,7 +111,7 @@ def test_a_constraint_body_with_no_sentence_end_stays_resident_whole():
         'word and is the one an operator opens')
     lines = hq.render_standing(
         [_item('c01', 'c', 'Read the quirks note first', body)],
-        set(), 'demo').splitlines()
+        set(), 'demo', whole_ids={'c01'}).splitlines()
     assert len(body) == 167
     assert lines[1] == f'[c01] (c1) **Read the quirks note first** {body}'
     assert '+' not in lines[1]
@@ -135,7 +135,7 @@ def test_an_edit_label_is_resident_to_the_cap_and_names_hq_when():
     lines = hq.render_artifacts(
         [('notes/n.md', 'notes')],
         {'notes/n.md': _row(label=label)},
-        'demo').splitlines()
+        'demo', {'notes/n.md'}).splitlines()
     row = next(ln for ln in lines if ln.startswith('notes/n.md'))
     assert row == (
         f'notes/n.md  notes  edit  c1  {label[:119]}'
@@ -323,7 +323,7 @@ def test_a_superseded_item_leaves_the_block_and_stays_reachable_by_id(
         _item('c01', 'c', 'Never reuse a nonce', 'The verifier caches it.'),
         _item('c02', 'c', 'Never reuse a key', 'The signer caches it.'),
         ]
-    block = hq.render_standing(items, {'c01'}, _SLUG)
+    block = hq.render_standing(items, {'c01'}, _SLUG, whole_ids={'c02'})
     assert 'c01' not in block
     assert '[c02]' in block
 
@@ -358,7 +358,7 @@ def test_every_non_live_artifact_count_names_a_command_that_runs_as_printed(
             hq._LEDGER_HEADER)
     capsys.readouterr()
 
-    block = hq.render_artifacts([], rows, _SLUG)
+    block = hq.render_artifacts([], rows, _SLUG, set())
     counted = [
         ln for ln in block.splitlines() if ln.startswith(tuple(at_status))]
     assert len(counted) == len(at_status)
@@ -396,8 +396,9 @@ def test_a_held_decision_body_names_a_command_that_returns_it(
     capsys.readouterr()
 
     items, sup = hq._parse_standing((folder / 'standing.md').read_text())
+    whole_ids = {item['id'] for item in items}
     line = next(
-        ln for ln in hq.render_standing(items, sup, _SLUG).splitlines()
+        ln for ln in hq.render_standing(items, sup, _SLUG, whole_ids).splitlines()
         if ln.startswith('[d01]'))
     resident, suffix = line.split('  +', 1)
     assert suffix == f'{len(body)}c - hq standing {_SLUG} d01'

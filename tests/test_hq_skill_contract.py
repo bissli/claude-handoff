@@ -111,14 +111,19 @@ def _corpus():
 def _fenced_commands(text):
     """Yield each hq command line from fenced blocks, joined across
     backslash continuations and cut before any heredoc marker.
+
+    A ```markdown block holds a rendered HANDOFF.md, whose closing lines
+    name a command before their prose, so it yields nothing.
     """
     in_fence = False
+    rendered = False
     buf = ''
     for line in text.splitlines():
         if line.startswith('```'):
             in_fence = not in_fence
+            rendered = in_fence and line[3:].strip() == 'markdown'
             continue
-        if not in_fence or line.startswith('#'):
+        if not in_fence or rendered or line.startswith('#'):
             continue
         buf += line.rstrip()
         if buf.endswith('\\'):

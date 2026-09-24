@@ -67,9 +67,11 @@ _SKIP_NAMES = {
 #   them by it, so both halves name the same route.
 # - cycles/ is absent: no verb prints an archived cycle whole, so the
 #   agent reads cycles/cNN.md by range and never edits it.
+# - Each verb prints one item or one path's rows: a reader sent here
+#   never pays for the whole store, which bare hq standing prints.
 STORE_VERBS = {
-    'ledger.tsv': 'hq artifacts {slug}, or hq when {slug} <path>',
-    'standing.md': 'hq standing {slug}',
+    'ledger.tsv': 'hq when {slug} <path>',
+    'standing.md': 'hq standing {slug} <id>',
     }
 HANDOFF_DIRNAME = '.handoff'
 # The per-session cache the hooks key by session id. The status line
@@ -119,7 +121,6 @@ _TEMP_DIRS = (
     pathlib.Path(os.path.abspath(tempfile.gettempdir())), pathlib.Path('/tmp'))
 _KIND_DIRS = {'specs': 'spec', 'drafts': 'draft', 'notes': 'notes', 'outputs': 'other'}
 _GATE_RB = {'always', 'edit'}
-_FULL_RB = {'always', 'edit', 'mention'}
 _LABEL_RESIDENT = 120
 _KIND_PREFIX = {'decision': 'd', 'constraint': 'c', 'dead-end': 'x'}
 # Least recoverable last: a superseded row has a successor to follow, an
@@ -245,10 +246,12 @@ read_before is a tier - when the file is loaded, and what belongs there:
   for a whole file an older cycle left; a file that is not UTF-8
   text shows bytes, (35 KB), and a directory (N files). Tokens are
   len(text) // 4.
-- Artifacts block: rows with read_before in {always, edit, mention}
-  print in full, no cap; read_before=never rows collapse to counts by
-  kind; rows no longer live collapse to superseded/archived/missing
-  counts.
+- Artifacts block: a live row prints in full, no cap, when it is
+  graded always, this cycle stamped it, or the cursor names its path
+  or basename. Every other live row prints as its path alone, and one
+  closing line names hq when <slug> <path>, which prints that path's
+  rows; a folded row still gates. Rows no longer live collapse to
+  superseded/archived/missing counts.
 - Paths in both blocks resolve from a base the block's first line
   names. The bases are the project root and a work dir pinned
   outside the root - root ~/code/proj; work dir ~/code/proj-wt -
@@ -261,11 +264,13 @@ read_before is a tier - when the file is loaded, and what belongs there:
   keep the path as stamped, which stamp takes either way; the
   spelling a block prints is a spelling stamp takes too, and it
   keys the row the stored spelling keys.
-- Standing block: a constraint prints its headline and the first
-  sentence of its body, a decision or dead end its headline, no cap;
-  +Nc counts the characters held back, and hq standing <slug> <id>
-  prints an item in full. Ids are d decision, c constraint, x dead
-  end; (cN) is the cycle that recorded the item.
+- Standing block: an item the cursor cites by id, or one this cycle
+  recorded, prints whole - a constraint its headline and the first
+  sentence of its body, a decision or dead end its headline; +Nc
+  counts the characters held back. Every other item prints as
+  [id] headline, no cap, and hq standing <slug> <id> prints any item
+  in full. Ids are d decision, c constraint, x dead end; (cN) is the
+  cycle that recorded the item.
 - Log line: <branch>@<sha> +N - N counts the paths git reported
   dirty when that cycle finished.""",
     'read': """\
@@ -386,9 +391,9 @@ Cursor rules:
   its pointer line is generated, never typed.
 - Skip what the repo records: git history, CLAUDE.md, README content.
 - Too big for the file but worth keeping: a sibling notes/<topic>.md,
-  stamped --read-before edit when the cursor points at it, so its
-  label, to 120 characters, stays in the Artifacts block instead of
-  a count.
+  stamped --read-before edit when the cursor points at it; its label,
+  to 120 characters, prints in the Artifacts block while the cursor
+  names it.
 - Name where a credential lives, never its value.
 - Absolute dates. ASCII only.
 - Now is the single next action; Plan, the approved plan, is what
@@ -1113,9 +1118,10 @@ def artifact_lines(
     walk: list[tuple[str, str]],
     rows: dict[str, Row],
     slug: str,
+    whole_paths: set[str],
     shown: dict[str, tuple[str, str]] | None = None,
-) -> tuple[list[str], dict[str, int], dict[str, int], set[str]]:
-    """Sort artifacts into full lines, a never count, a non-live count, bases.
+) -> tuple[list[str], list[str], dict[str, int], set[str]]:
+    """Sort artifacts into full lines, folded paths, a non-live count, bases.
 
     Parameters
     ----------
@@ -1127,23 +1133,26 @@ def artifact_lines(
         already applied; the disk is never consulted.
     slug : str
         Handoff slug for the ``hq when`` command a capped label names.
+    whole_paths : set[str]
+        Stored paths that print a full line when their row is live, as
+        ``_assemble_handoff`` decides them.
     shown : dict[str, tuple[str, str]] | None, default None
         Display path and base phrase per stored path, as ``shown_paths``
         returns it; a path absent from it prints as stored.
 
     Returns
     -------
-    tuple[list[str], dict[str, int], dict[str, int], set[str]]
-        The full lines, uncapped, in walk order and then ledger order for
-        the rows the walk cannot see; the ``never`` rows counted by kind;
-        the rows no longer live counted by status; the base phrases the
-        emitted lines print against.
+    tuple[list[str], list[str], dict[str, int], set[str]]
+        The full lines and the display paths of the other live rows,
+        both uncapped and in walk order and then ledger order for the
+        rows the walk cannot see; the rows no longer live counted by
+        status; the base phrases the emitted lines print against.
 
     Notes
     -----
     - A full line is ``path  kind  read_before  cN  label`` for a live row
-      with ``read_before`` in {always, edit, mention}, or
-      ``path  kind?  unstamped`` for a walk entry with no row.
+      in ``whole_paths``, or ``path  kind?  unstamped`` for a walk entry
+      with no row.
     - An ``always`` row prints no label: ``render_read`` prints it
       verbatim for every live ``always`` row, so a second copy here is
       duplicate bytes.
@@ -1154,7 +1163,7 @@ def artifact_lines(
       the block names a base only where a printed path resolves from it.
     """
     full_lines: list[str] = []
-    kind_never: dict[str, int] = {}
+    folded_paths: list[str] = []
     non_live: dict[str, int] = {}
     bases: set[str] = set()
     seen: set[str] = set()
@@ -1180,21 +1189,22 @@ def artifact_lines(
         status, rb = row['status'], row['read_before']
         if status != 'live':
             non_live[status] = non_live.get(status, 0) + 1
-        elif rb in _FULL_RB:
-            stem = f'{display}  {row["kind"]}  {rb}  c{row["cycle"]}'
-            if rb == 'always':
-                full_lines.append(stem)
+        else:
+            if path not in whole_paths:
+                folded_paths.append(display)
             else:
-                label = row['label']
-                resident = resident_label(label)
-                full_lines.append(holdback_line(
-                    f'{stem}  {resident}',
-                    len(label) - len(resident),
-                    f'hq when {slug} {display}'))
+                stem = f'{display}  {row["kind"]}  {rb}  c{row["cycle"]}'
+                if rb == 'always':
+                    full_lines.append(stem)
+                else:
+                    label = row['label']
+                    resident = resident_label(label)
+                    full_lines.append(holdback_line(
+                        f'{stem}  {resident}',
+                        len(label) - len(resident),
+                        f'hq when {slug} {display}'))
             if base:
                 bases.add(base)
-        else:
-            kind_never[row['kind']] = kind_never.get(row['kind'], 0) + 1
 
     for path, inferred in walk:
         seen.add(path)
@@ -1206,13 +1216,14 @@ def artifact_lines(
     for path, row in rows.items():
         if path not in seen:
             _classify(path, row, row.get('kind', 'other'))
-    return full_lines, kind_never, non_live, bases
+    return full_lines, folded_paths, non_live, bases
 
 
 def render_artifacts(
     walk: list[tuple[str, str]],
     rows: dict[str, Row],
     slug: str,
+    whole_paths: set[str],
     shown: dict[str, tuple[str, str]] | None = None,
 ) -> str:
     """Render the hq:artifacts block body.
@@ -1227,6 +1238,9 @@ def render_artifacts(
         already applied; the renderer never consults the disk.
     slug : str
         Handoff slug for the hq command in count lines.
+    whole_paths : set[str]
+        Stored paths that print a full line when their row is live, as
+        ``_assemble_handoff`` decides them.
     shown : dict[str, tuple[str, str]] | None, default None
         Display path and base phrase per stored path, as ``shown_paths``
         returns it; a path absent from it prints as stored.
@@ -1234,18 +1248,24 @@ def render_artifacts(
     Returns
     -------
     str
-        Block body lines joined with newlines: every live row graded
-        always, edit, or mention as a full line, then the never rows
-        counted by kind and the rows no longer live counted by status.
-        A first line names every base the printed paths resolve from.
+        Block body lines joined with newlines: every live row in
+        ``whole_paths`` and every unstamped entry as a full line, then
+        every other live row as its path alone and one closing line
+        naming ``hq when <slug> <path>``, then the rows no longer live
+        counted by status. A first line names every base the printed
+        paths resolve from.
+
+    Notes
+    -----
+    - The closing line keeps ``<path>`` as a placeholder: it serves
+      every path-only line above it, so no one path fills it.
     """
-    full_lines, kind_never, non_live, bases = artifact_lines(
-        walk, rows, slug, shown)
+    full_lines, folded_paths, non_live, bases = artifact_lines(
+        walk, rows, slug, whole_paths, shown)
     out = ['; '.join(sorted(bases))] if bases else []
-    out += full_lines
-    if kind_never:
-        parts = '  '.join(f'{k} x{v}' for k, v in sorted(kind_never.items()))
-        out.append(f'{parts}  - hq artifacts {slug}')
+    out += full_lines + folded_paths
+    if folded_paths:
+        out.append(f'hq when {slug} <path> prints any row above whole')
     if non_live:
         ordered = [k for k in _NON_LIVE_ORDER if k in non_live]
         ordered += sorted(k for k in non_live if k not in ordered)
@@ -1391,10 +1411,16 @@ def holdback_line(resident: str, held_chars: int, command: str) -> str:
     return f'{resident}  +{held_chars}c - {command}'
 
 
+# A standing id cited as a word of its own: not part of a path, a
+# longer token, or a hyphenated name.
+_CITED_ID = re.compile(r'(?<![\w/.-])([cdx]\d{2,})(?![\w-])')
+
+
 def render_standing(
     items: list[dict],
     superseded_ids: set[str],
     slug: str,
+    whole_ids: set[str],
 ) -> str:
     """Render the hq:standing block body.
 
@@ -1406,14 +1432,19 @@ def render_standing(
         Item ids targeted by a supersession line.
     slug : str
         Handoff slug for the hq command a held-back line ends in.
+    whole_ids : set[str]
+        Ids of the items that render whole, as ``_assemble_handoff``
+        decides them.
 
     Returns
     -------
     str
-        Block body: every live constraint as its headline and the first
-        sentence of its body, every live decision and dead end as its
-        headline, each kind under its heading and newest cycle first
-        within it.
+        Block body, each kind under its heading and newest cycle first
+        within it: a live item in ``whole_ids`` whole - a constraint as
+        its headline and the first sentence of its body, a decision or
+        dead end as its headline - and every other live item as
+        ``[id] headline``. A closing line naming ``hq standing <slug>
+        <id>`` follows when any item printed as ``[id] headline``.
 
     Notes
     -----
@@ -1429,9 +1460,12 @@ def render_standing(
     - The command carries the item's own id, so it runs as printed.
     - A constraint body with no sentence end stays resident whole: the
       split has nothing to hold back.
+    - The closing line keeps ``<id>`` as a placeholder: it serves every
+      ``[id] headline`` line above it, so no one id fills it.
     """
     live = [i for i in items if i['id'] not in superseded_ids]
     out: list[str] = []
+    folded = False
     for prefix, heading, body_mode in (
         ('c', '### Constraints', 'sentence'),
         ('d', '### Decisions', 'headline'),
@@ -1443,6 +1477,10 @@ def render_standing(
         group.sort(key=lambda i: -int(i.get('cycle') or 0))
         out.append(heading)
         for item in group:
+            if item['id'] not in whole_ids:
+                out.append(f'[{item["id"]}] {item["headline"]}')
+                folded = True
+                continue
             pfx = f'(c{item["cycle"]}) ' if item.get('cycle') else ''
             line = f'[{item["id"]}] {pfx}**{item["headline"]}**'
             body = item.get('body', '')
@@ -1456,6 +1494,8 @@ def render_standing(
                     line.rstrip(), len(held),
                     f'hq standing {slug} {item["id"]}')
             out.append(line.rstrip())
+    if folded:
+        out.append(f'hq standing {slug} <id> prints any item above whole')
     return '\n'.join(out)
 
 
@@ -3152,6 +3192,7 @@ def _assemble_handoff(
     live: dict[str, Row],
     walk: list[tuple[str, str]],
     standing_text: str,
+    cycle: int,
 ) -> str:
     """Render read/artifacts/standing blocks and return full HANDOFF.md text.
 
@@ -3171,6 +3212,8 @@ def _assemble_handoff(
         Top-level entries as (path, inferred_kind); skip entries included.
     standing_text : str
         Current text of standing.md.
+    cycle : int
+        Cycle being filed, whose items and stamps render whole.
 
     Returns
     -------
@@ -3186,14 +3229,27 @@ def _assemble_handoff(
         f'<!-- hq:read {block_sha(_rh)} -->\n'
         f'## Read first\n{read_body}\n<!-- /hq:read -->'
     )
-    artifacts_body = render_artifacts(art_walk, live, folder.name, shown)
+    # A name matches as a plain substring, so a short basename inside a
+    # longer word keeps its row whole, at the cost of one resident line.
+    whole_paths = {
+        path for path, row in live.items()
+        if row['read_before'] == 'always'
+        or row['cycle'].strip() == str(cycle)
+        or path in cursor_text
+        or pathlib.PurePath(path).name in cursor_text}
+    artifacts_body = render_artifacts(
+        art_walk, live, folder.name, whole_paths, shown)
     _ah = '## Artifacts\n' + artifacts_body
     artifacts_block = (
         f'<!-- hq:artifacts {block_sha(_ah)} -->\n'
         f'## Artifacts\n{artifacts_body}\n<!-- /hq:artifacts -->'
     )
     s_items, s_sup = _parse_standing(standing_text)
-    standing_body = render_standing(s_items, s_sup, folder.name)
+    cited = set(_CITED_ID.findall(cursor_text))
+    whole_ids = {
+        item['id'] for item in s_items
+        if item['id'] in cited or item.get('cycle') == str(cycle)}
+    standing_body = render_standing(s_items, s_sup, folder.name, whole_ids)
     _sh = '## Standing\n' + standing_body
     standing_block = (
         f'<!-- hq:standing {block_sha(_sh)} -->\n'
@@ -3967,7 +4023,8 @@ def _verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
         header_line_a = f'Written: {ts[:10]} | Cycle: {cycle}'
     new_handoff = _assemble_handoff(
         folder, cursor_text, header_line_a, log_body_f,
-        _reconcile_missing(folder, fresh_live), walk, fresh_standing_text)
+        _reconcile_missing(folder, fresh_live), walk, fresh_standing_text,
+        cycle)
     handoff_path.write_text(new_handoff, encoding='utf-8')
     # The ledger and standing digests stay adopt-time: witness() checks
     # the next finish against the files as this write left them.
@@ -5467,7 +5524,7 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
         }])
     new_handoff = _assemble_handoff(
         folder, cursor_clean, header_line, log_body,
-        live, walk, standing_text_new)
+        live, walk, standing_text_new, int(anch['cycle']))
     (folder / 'cycles').mkdir(exist_ok=True)
     if new_note_lines:
         _append_lines(standing_path, new_note_lines)
@@ -6003,7 +6060,7 @@ def _verb_read(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
                   f' - run this instead:'
                   f' {STORE_VERBS[store].format(slug=folder.name)}')
             return 1
-        print(f'hq read: {path} not in ledger - read it whole by hand')
+        print(f'hq read: {path} not in ledger - read the span needed by hand')
         return 1
     file_path = _stored_path(folder, stored_path)[1]
     row = latest_rows(rows)[stored_path]

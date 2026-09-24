@@ -176,7 +176,8 @@ def test_render_artifacts_prints_every_unstamped_entry_with_no_cap():
     """
     walk = [(f'file{i:02d}.md', 'spec') for i in range(41)]
     rows: dict = {}
-    lines = hq.render_artifacts(walk, rows, slug='demo').splitlines()
+    lines = hq.render_artifacts(
+        walk, rows, slug='demo', whole_paths=set()).splitlines()
     assert len(lines) == 41
     assert all(ln.endswith('  spec?  unstamped') for ln in lines)
 
@@ -205,7 +206,9 @@ def test_render_standing_prints_every_live_item_and_no_superseded_line():
     """
     items = _make_items(80, 'c')
     superseded_ids = {items[-1]['id']}
-    lines = hq.render_standing(items, superseded_ids, slug='demo').splitlines()
+    whole_ids = {item['id'] for item in items}
+    lines = hq.render_standing(
+        items, superseded_ids, slug='demo', whole_ids=whole_ids).splitlines()
     assert len(lines) == 80
     assert lines[0] == '### Constraints'
     assert sum(ln.startswith('[c') for ln in lines) == 79
@@ -1277,7 +1280,7 @@ def test_render_artifacts_non_live_missing_before_custom_status():
     row_m = _row(status='missing', kind='notes', read_before='never')
     row_a = _row(status='aborted', kind='notes', read_before='never')
     rows = {'a.md': row_a, 'b.md': row_m}
-    result = hq.render_artifacts([], rows, 'slug')
+    result = hq.render_artifacts([], rows, 'slug', set())
     counted = [
         ln.split()[0] for ln in result.splitlines()
         if ln.startswith(('missing', 'aborted'))]

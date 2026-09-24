@@ -568,7 +568,7 @@ def test_artifacts_block_lists_an_unpointed_file():
     """
     walk = [('notes.md', 'notes')]
     rows = {}
-    result = hq.render_artifacts(walk, rows, 'test-slug')
+    result = hq.render_artifacts(walk, rows, 'test-slug', set())
     assert 'notes.md  notes?  unstamped' in result.splitlines()
 
 
@@ -595,12 +595,14 @@ def test_a_stamped_spec_enters_the_read_block_with_its_span():
 
 
 def test_artifacts_mention_row_renders_as_full_line():
-    """Verify render_artifacts emits a full line for a mention row.
+    """Verify render_artifacts emits a full line for a row in whole_paths.
 
-    Mutation: narrowing _FULL_RB to {'always', 'edit'} collapses every
-    mention row into the never count line silently.
-    Oracle: hand-computed - a live mention row yields the full
-    'path  kind  mention  cN  label' line, not a count entry.
+    Mutation: a mention row inside whole_paths still folded into the
+    never count line, or its read_before/cycle/label dropped from the
+    printed line.
+    Oracle: hand-computed - a live mention row named in whole_paths
+    yields the full 'path  kind  mention  cN  label' line, not a count
+    entry.
     """
     walk = [('notes.md', 'notes')]
     rows = {
@@ -610,18 +612,19 @@ def test_artifacts_mention_row_renders_as_full_line():
             cycle='3', label='background reference',
         )
     }
-    result = hq.render_artifacts(walk, rows, 'test-slug')
+    result = hq.render_artifacts(walk, rows, 'test-slug', {'notes.md'})
     assert 'notes.md  notes  mention  c3  background reference' in result.splitlines()
 
 
 def test_artifacts_block_collapses_never_rows_and_caps_at_40():
-    """Verify never rows appear only as count lines and full-line cap is 40.
+    """Verify a row outside whole_paths folds and one inside prints in full.
 
-    Mutation: any block growing with cycles - never rows rendered in full
-    make the block proportional to ledger size rather than bounded.
-    Oracle: hand-computed - 42 never-rows produce zero full lines and one
-    count line; 41 always-rows produce exactly 40 full lines plus the
-    count line 'spec x1', keyed on the kind and not on the read_before.
+    Mutation: a row named in whole_paths still folded to its path, or a
+    row outside whole_paths still printed as a full line.
+    Oracle: hand-computed - 42 never-rows outside whole_paths produce
+    zero full lines, 42 path-only lines and one closing line; 41
+    always-rows all named in whole_paths produce exactly 41 full lines
+    and no closing line.
     """
     never_walk = [(f'notes-{i:02d}.md', 'notes') for i in range(42)]
     never_rows = {
@@ -631,13 +634,15 @@ def test_artifacts_block_collapses_never_rows_and_caps_at_40():
         )
         for i in range(42)
     }
-    result_never = hq.render_artifacts(never_walk, never_rows, 'slug')
+    result_never = hq.render_artifacts(never_walk, never_rows, 'slug', set())
     full_never = [
         line for line in result_never.splitlines()
         if '  notes  ' in line and '  never  ' in line
     ]
     assert full_never == []
-    assert 'notes x42  - hq artifacts slug' in result_never
+    lines_never = result_never.splitlines()
+    assert lines_never[:42] == [f'notes-{i:02d}.md' for i in range(42)]
+    assert lines_never[42:] == ['hq when slug <path> prints any row above whole']
 
     always_walk = [(f'SPEC-{i:02d}.md', 'spec') for i in range(41)]
     always_rows = {
@@ -648,13 +653,15 @@ def test_artifacts_block_collapses_never_rows_and_caps_at_40():
         )
         for i in range(41)
     }
-    result_always = hq.render_artifacts(always_walk, always_rows, 'slug')
+    always_whole = set(always_rows)
+    result_always = hq.render_artifacts(
+        always_walk, always_rows, 'slug', always_whole)
     full_always = [
         line for line in result_always.splitlines()
         if '  spec  ' in line and '  always  ' in line
     ]
     assert len(full_always) == 41
-    assert ' - hq artifacts ' not in result_always
+    assert 'hq when slug <path>' not in result_always
 
 
 # --- render_standing --------------------------------------------------
@@ -678,7 +685,8 @@ def test_standing_block_omits_superseded_and_prints_every_live_item():
         {'id': 'd02', 'prefix': 'd', 'cycle': '2',
          'headline': 'Superseded decision', 'body': ''},
     ]
-    result = hq.render_standing(items, {'d02'}, 'test-slug')
+    result = hq.render_standing(
+        items, {'d02'}, 'test-slug', whole_ids={'c01', 'd01'})
     assert 'Superseded decision' not in result
     assert 'd02' not in result
     assert '[c01]' in result
@@ -689,7 +697,8 @@ def test_standing_block_omits_superseded_and_prints_every_live_item():
          'headline': f'Decision number {i}', 'body': ''}
         for i in range(82)
     ]
-    result2 = hq.render_standing(many, set(), 'slug2')
+    result2 = hq.render_standing(
+        many, set(), 'slug2', whole_ids={item['id'] for item in many})
     content_lines = [line for line in result2.splitlines() if line.strip()]
     assert len(content_lines) == 83
     assert sum(ln.startswith('[d') for ln in content_lines) == 82
@@ -902,12 +911,12 @@ def test_artifacts_render_trusts_row_status_for_abs_rows():
 
     Mutation: presence judged by membership in the top-level walk, so every
     abs row counts as missing and never renders in full.
-    Oracle: hand-computed full line for a live edit abs row and no missing
-    count.
+    Oracle: hand-computed full line for a live edit abs row named in
+    whole_paths, and no missing count.
     """
     rows = {'~/x.md': _ledger_row(
         path='~/x.md', base='abs', read_before='edit', label='outside note')}
-    result = hq.render_artifacts([], rows, 'slug')
+    result = hq.render_artifacts([], rows, 'slug', {'~/x.md'})
     assert '~/x.md  notes  edit  c1  outside note' in result
     assert 'missing' not in result
 
@@ -924,7 +933,7 @@ def test_non_live_count_line_has_a_fixed_order():
         'b.md': _ledger_row(path='b.md', status='missing'),
         'c.md': _ledger_row(path='c.md', status='superseded'),
     }
-    result = hq.render_artifacts([], rows, 'slug')
+    result = hq.render_artifacts([], rows, 'slug', set())
     counted = [
         ln.split()[0] for ln in result.splitlines()
         if ln.startswith(('superseded', 'archived', 'missing'))]
@@ -944,7 +953,9 @@ def test_standing_renders_every_live_constraint_and_no_superseded_line():
          'headline': f'rule {n}', 'body': 'body'}
         for n in range(1, 87)
     ]
-    result = hq.render_standing(items, {'c86'}, 'slug').splitlines()
+    result = hq.render_standing(
+        items, {'c86'}, 'slug',
+        whole_ids={item['id'] for item in items}).splitlines()
     assert len(result) == 86
     assert result[-1] == '[c85] (c1) **rule 85** body'
     assert 'c86' not in '\n'.join(result)
@@ -967,14 +978,18 @@ def test_every_kind_renders_whole_under_its_heading():
             for i in range(1, n + 1)]
 
     items = _items('c', 26, 'why it holds') + _items('d', 38, '') + _items('x', 26, '')
-    lines = hq.render_standing(items, set(), 'widget-alpha').splitlines()
+    lines = hq.render_standing(
+        items, set(), 'widget-alpha',
+        whole_ids={item['id'] for item in items}).splitlines()
     assert len(lines) == 93
     headings = ('### Constraints', '### Decisions', '### Dead ends')
     assert [lines.count(h) for h in headings] == [1, 1, 1]
     assert [sum(ln.startswith(f'[{p}') for ln in lines) for p in 'cdx'] == [26, 38, 26]
     assert not any(ln.startswith('... ') for ln in lines)
+    more_items = _items('c', 90, 'b') + _items('x', 5, '')
     lines = hq.render_standing(
-        _items('c', 90, 'b') + _items('x', 5, ''), set(), 'widget-alpha').splitlines()
+        more_items, set(), 'widget-alpha',
+        whole_ids={item['id'] for item in more_items}).splitlines()
     assert len(lines) == 97
     assert '### Dead ends' in lines
     assert sum(ln.startswith('[x') for ln in lines) == 5
@@ -1179,7 +1194,8 @@ def test_render_standing_holds_each_kind_back_and_the_eighty_line_boundary():
          'body': held_x},
         ]
     assert (len(held_c), len(held_d), len(held_x)) == (25, 11, 13)
-    assert hq.render_standing(items, set(), 'slug').splitlines() == [
+    whole_ids = {item['id'] for item in items}
+    assert hq.render_standing(items, set(), 'slug', whole_ids).splitlines() == [
         '### Constraints',
         ('[c01] (c1) **Never log tokens** Not at debug.'
          f'  +{len(held_c)}c - hq standing slug c01'),
@@ -1192,11 +1208,15 @@ def test_render_standing_holds_each_kind_back_and_the_eighty_line_boundary():
         {'id': f'c{n:02d}', 'prefix': 'c', 'cycle': '1', 'headline': f'r{n}', 'body': 'b'}
         for n in range(1, 80)
         ]
-    lines = hq.render_standing(many, set(), 'slug').splitlines()
+    lines = hq.render_standing(
+        many, set(), 'slug',
+        whole_ids={item['id'] for item in many}).splitlines()
     assert len(lines) == 80
     assert not lines[-1].startswith('... ')
     more = many + [{'id': 'c80', 'prefix': 'c', 'cycle': '1', 'headline': 'r80', 'body': 'b'}]
-    lines = hq.render_standing(more, set(), 'slug').splitlines()
+    lines = hq.render_standing(
+        more, set(), 'slug',
+        whole_ids={item['id'] for item in more}).splitlines()
     assert len(lines) == 81
     assert lines[-1] == '[c80] (c1) **r80** b'
 
@@ -1220,7 +1240,8 @@ def test_standing_sorts_each_kind_by_cycle_descending_and_stably():
         {'id': 'c09', 'prefix': 'c', 'cycle': '3', 'headline': 'Rotate the key',
          'body': 'Every quarter.'},
         ]
-    assert hq.render_standing(items, set(), 'slug').splitlines() == [
+    whole_ids = {item['id'] for item in items}
+    assert hq.render_standing(items, set(), 'slug', whole_ids).splitlines() == [
         '### Constraints',
         '[c09] (c3) **Rotate the key** Every quarter.',
         '[c05] (c1) **Never log tokens** Not at debug.',

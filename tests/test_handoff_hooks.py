@@ -994,7 +994,7 @@ def test_store_guard_fires_on_the_shape_seen_in_practice(monkeypatch, capsys,
                        {'command': 'cat .hq.lock ledger.tsv'})
     out = _context(_run(monkeypatch, capsys, handoff_gate, payload))
     assert f'{_SLUG}/ledger.tsv is dictated, not opened' in out
-    assert f'hq artifacts {_SLUG}' in out
+    assert f'hq when {_SLUG} <path>' in out
 
 
 def test_store_guard_stays_silent_on_the_verbs_it_names(monkeypatch, capsys,
@@ -1076,8 +1076,9 @@ def test_store_guard_pairs_each_store_with_its_own_verb(monkeypatch, capsys,
     """Verify each store names its own verb and a cycles/ read passes.
 
     Mutation: one verb for both stores, which sends a reader of
-    standing.md to hq artifacts; or cycles/ left in the guard, which
-    reports the range read of an archived cycle the store rule allows.
+    standing.md to hq when; a bare hq standing <slug>, which prints the
+    whole store; or cycles/ left in the guard, which reports the range
+    read of an archived cycle the store rule allows.
     Oracle: the hand-written verb per store, checked against the
     documented mapping rather than against the code, and no context
     for a cycles/ file or the manifest.
@@ -1091,8 +1092,8 @@ def test_store_guard_pairs_each_store_with_its_own_verb(monkeypatch, capsys,
                            {'command': f'cat .handoff/{_SLUG}/{target}'})
         return _run(monkeypatch, capsys, handoff_gate, payload)
 
-    assert f'hq artifacts {_SLUG}' in _context(verb('G50', 'ledger.tsv'))
-    assert f'hq standing {_SLUG}' in _context(verb('G51', 'standing.md'))
+    assert f'hq when {_SLUG} <path>' in _context(verb('G50', 'ledger.tsv'))
+    assert f'hq standing {_SLUG} <id>' in _context(verb('G51', 'standing.md'))
     assert verb('G52', 'cycles/c01.md') == ''
     assert verb('G54', 'cycles/manifest.tsv') == ''
 
@@ -1144,7 +1145,7 @@ def test_store_reads_grades_a_read_tool_payload(monkeypatch, capsys,
     payload = _payload(root, tr, 'G7', 'Read',
                        {'file_path': str(folder / 'standing.md')})
     out = _context(_run(monkeypatch, capsys, handoff_gate, payload))
-    assert f'hq standing {_SLUG}' in out
+    assert f'hq standing {_SLUG} <id>' in out
 
 
 def test_store_guard_joins_the_write_gate_report(monkeypatch, capsys,
@@ -1164,7 +1165,7 @@ def test_store_guard_joins_the_write_gate_report(monkeypatch, capsys,
         root, tr, 'G8', 'Bash',
         {'command': f'cat .handoff/{_SLUG}/ledger.tsv > out.txt'})
     out = _context(_run(monkeypatch, capsys, handoff_gate, payload))
-    assert f'hq artifacts {_SLUG}' in out
+    assert f'hq when {_SLUG} <path>' in out
     assert 'SPEC.md' in out
     assert _SPEC_SPAN in out
 

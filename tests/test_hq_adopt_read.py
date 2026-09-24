@@ -804,7 +804,7 @@ def test_artifacts_block_prints_every_full_row_with_no_cap():
         f'SPEC-{i:02d}.md': _row(path=f'SPEC-{i:02d}.md', cycle=str(i + 1))
         for i in range(43)
         }
-    body = hq.render_artifacts(walk, rows, 'demo').splitlines()
+    body = hq.render_artifacts(walk, rows, 'demo', set(rows)).splitlines()
     assert len(body) == 43
     assert sum(1 for ln in body if '  spec  always  ' in ln) == 43
     assert not any(' - hq artifacts ' in ln for ln in body)

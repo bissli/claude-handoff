@@ -41,23 +41,25 @@ root ~/code/poller
 .handoff/auth-token-refresh/specs/SPEC.md:11-13  (14 tok)  refresh contract; s3 is the retry schedule
 <!-- /hq:read -->
 
-<!-- hq:artifacts 992af43983f9 -->
+<!-- hq:artifacts f8c343183272 -->
 ## Artifacts
 root ~/code/poller
-.handoff/auth-token-refresh/notes/idp-quirks.md  notes  edit  c1  staging IdP quirks, found the hard way
 .handoff/auth-token-refresh/specs/SPEC.md  spec  always  c1
 scripts/auth.py  draft  edit  c1  poller; the 401 branch is under edit
+.handoff/auth-token-refresh/notes/idp-quirks.md
+hq when auth-token-refresh <path> prints any row above whole
 <!-- /hq:artifacts -->
 
-<!-- hq:standing c89c0cedae47 -->
+<!-- hq:standing 936662dbc05b -->
 ## Standing
 ### Constraints
-[c01] (c1) **Never log token values** Not even at debug; the user said so.
+[c01] Never log token values
 ### Decisions
-[d01] (c1) **Refresh in-process, no sidecar**  +37c - hq standing auth-token-refresh d01
+[d01] Refresh in-process, no sidecar
 ### Dead ends
-[x01] (c1) **httpx event hooks for auto-refresh**  +41c - hq standing auth-token-refresh x01
-[x02] (c1) **A pid in the lock.**  +29c - hq standing auth-token-refresh x02
+[x01] httpx event hooks for auto-refresh
+[x02] A pid in the lock.
+hq standing auth-token-refresh <id> prints any item above whole
 <!-- /hq:standing -->
 
 ## Log

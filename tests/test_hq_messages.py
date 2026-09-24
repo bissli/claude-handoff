@@ -633,7 +633,7 @@ def test_read_sends_a_store_to_its_verb_not_to_the_file(tmp_path, monkeypatch):
     """Read refuses the two dictated stores by naming the verb instead.
 
     Mutation: falling through to the not-in-ledger refusal, which reads
-    'read it whole by hand' and so tells the agent to do the one thing
+    'read the span needed by hand' and so tells the agent to do the one thing
     the PreToolUse gate reports it for; or cycles/ left in the map, so
     an archived cycle the agent may read by range is refused as a store.
     Oracle: the hand-written verb per store from hq.STORE_VERBS, and
@@ -643,9 +643,8 @@ def test_read_sends_a_store_to_its_verb_not_to_the_file(tmp_path, monkeypatch):
     _run(['begin', _SLUG])
     _spec(folder)
     for path, verb in [
-            ('ledger.tsv',
-             f'hq artifacts {_SLUG}, or hq when {_SLUG} <path>'),
-            ('standing.md', f'hq standing {_SLUG}'),
+            ('ledger.tsv', f'hq when {_SLUG} <path>'),
+            ('standing.md', f'hq standing {_SLUG} <id>'),
             ]:
         rc, out, _ = _run(['read', _SLUG, path])
         assert (rc, out.strip()) == (
@@ -653,7 +652,7 @@ def test_read_sends_a_store_to_its_verb_not_to_the_file(tmp_path, monkeypatch):
                 f' - run this instead: {verb}'))
     rc, out, _ = _run(['read', _SLUG, 'cycles/c01.md'])
     assert (rc, out.strip()) == (
-        1, 'hq read: cycles/c01.md not in ledger - read it whole by hand')
+        1, 'hq read: cycles/c01.md not in ledger - read the span needed by hand')
 
 
 def test_read_and_diff_refusals_print_their_documented_lines(tmp_path, monkeypatch):
@@ -668,7 +667,7 @@ def test_read_and_diff_refusals_print_their_documented_lines(tmp_path, monkeypat
     _spec(folder)
     rc, out, _ = _run(['read', _SLUG, 'ghost.md'])
     assert (rc, out.strip()) == (
-        1, 'hq read: ghost.md not in ledger - read it whole by hand')
+        1, 'hq read: ghost.md not in ledger - read the span needed by hand')
     assert _run(['stamp', _SLUG, 'SPEC.md', '--where', 'Ghost'])[0] == 0
     rc, out, _ = _run(['read', _SLUG, 'SPEC.md'])
     assert (rc, out.strip()) == (

@@ -279,7 +279,7 @@ def test_render_standing_body_opening_with_comma_joins_without_space():
         'headline': 'X',
         'body': ', and keep it',
         }]
-    lines = hq.render_standing(items, set(), 'slug').splitlines()
+    lines = hq.render_standing(items, set(), 'slug', whole_ids={'c01'}).splitlines()
     assert '[c01] (c8) **X**, and keep it' in lines
 
 
@@ -296,7 +296,7 @@ def test_render_standing_body_opening_with_word_joins_with_space():
         'headline': 'X',
         'body': 'Not even at debug.',
         }]
-    lines = hq.render_standing(items, set(), 'slug').splitlines()
+    lines = hq.render_standing(items, set(), 'slug', whole_ids={'c01'}).splitlines()
     assert '[c01] (c8) **X** Not even at debug.' in lines
 
 
@@ -314,7 +314,7 @@ def test_render_standing_empty_body_renders_headline_only():
         'headline': 'X',
         'body': '',
         }]
-    lines = hq.render_standing(items, set(), 'slug').splitlines()
+    lines = hq.render_standing(items, set(), 'slug', whole_ids={'c01'}).splitlines()
     assert '[c01] (c8) **X**' in lines
     target = next(ln for ln in lines if '**X**' in ln)
     assert target == '[c01] (c8) **X**'

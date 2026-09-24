@@ -732,7 +732,7 @@ def test_assemble_handoff_skip_entries_excluded(tmp_path):
         live=live,
         walk=walk,
         standing_text='',
-    )
+        cycle=1)
     assert 'spec.md' in text, 'spec file must appear in the artifacts block'
     # The skip name 'conflicted copy' must NOT appear as an artifact row.
     assert 'conflicted copy' not in text or '| skip |' not in text
@@ -763,7 +763,7 @@ def test_assemble_handoff_skip_string_literal_exact(tmp_path):
         live=live,
         walk=walk,
         standing_text='',
-    )
+        cycle=1)
     assert 'bad\tname' not in text, (
         'skip entry must not appear in the assembled handoff')
 
@@ -799,7 +799,7 @@ def test_assemble_handoff_read_lines_default_zero(tmp_path):
         live=live,
         walk=walk,
         standing_text='',
-    )
+        cycle=1)
     assert 'doc.md' in text
 
 

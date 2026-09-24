@@ -1108,8 +1108,8 @@ def test_missing_row_whose_file_returns_reads_live(tmp_path, monkeypatch):
     """A row stored missing renders live once its file is on disk.
 
     Mutation: reconciliation adding missing marks but never clearing one.
-    Oracle: after later.md is created, the artifacts block counts it under
-    its kind and carries no missing count.
+    Oracle: after later.md is created, the artifacts block prints it as
+    a path-only line and carries no missing count.
     """
     folder = _new_root(tmp_path, monkeypatch)
     _conforming(folder, 3, '## Task\nx\n\n## Key files\n'
@@ -1125,8 +1125,8 @@ def test_missing_row_whose_file_returns_reads_live(tmp_path, monkeypatch):
 
     block = (folder / 'HANDOFF.md').read_text().split('<!-- hq:artifacts', 1)[1]
     block = block.split('<!-- /hq:artifacts -->', 1)[0]
-    assert 'missing' not in block
-    assert 'other x1' in block
+    assert not any(ln.startswith('missing ') for ln in block.splitlines())
+    assert f'.handoff/{_SLUG}/later.md' in block.splitlines()
 
 
 def test_adopt_never_renders_an_absent_pointer_in_full(tmp_path, monkeypatch):
