@@ -203,12 +203,11 @@ read_before is a tier - when the file is loaded, and what belongs there:
   grade    means                      loaded when
   always   the contract               every resume, Read first
   edit     read before you change it  the gate, at a write to it
-  mention  know it exists             on demand, hq read
-  never    on the record              hq artifacts, hq when
+  never    on the record              on demand, hq read or hq when
 
 - always holds spec sections and anchored notes; edit holds drafts,
-  code, tests, and templates; mention holds notes, evidence, and
-  reviews; never holds outputs, snapshots, and superseded rows.
+  code, tests, and templates; never holds notes, evidence, reviews,
+  outputs, snapshots, and superseded rows.
 - always requires an anchor: a stamp that would leave a live always
   row with no --where is refused, new row and re-stamp alike, whatever
   the kind, and the receipt row records it; the file's headings print
@@ -227,12 +226,12 @@ read_before is a tier - when the file is loaded, and what belongs there:
   or a Spec/Design first heading still infers spec; any other outside
   file infers other/never - pass --kind spec to gate it always or
   --kind draft to gate it edit; the writer grades a note the cursor
-  points at mention or edit.
+  points at edit when a change to it must read it first.
 - When a stem (SPEC) has several members, adopt and begin gate only
   the newest spec-kind file; every older stem-mate is stamped
   superseded/never pointing at the newest.
 - --kind takes spec, draft, notes, todo, snapshot, probe-dir, or
-  other; --read-before always, edit, mention, or never; --status
+  other; --read-before always, edit, or never; --status
   live, superseded, archived, or missing.
 - --kind, --read-before, --status, --where, and --label default to
   the previous row's value; --reason carries only while kind, status,
@@ -416,14 +415,13 @@ SPEC* stem-mates only the newest is gated.
   tier     read                     when
   always   the contract             every resume
   edit     before a change to it    the gate, at a write to it
-  mention  on demand                hq read
-  never    on the record            hq artifacts, hq when
+  never    on demand                hq read, hq when
 
 - always requires an anchor: a stamp that would leave a live always
   row with no --where is refused and the file's headings print under
   the refusal; a spec needed whole is anchored at its title heading.
   A whole file is never eager: a note or a source file the cursor
-  points at is edit or mention.
+  points at is edit or never.
 - stamp accepts a wrong anchor, which shows only as SPEC.md:? in the
   read block - check the heading first; every --where form is in
   hq help anchors.
@@ -3519,14 +3517,9 @@ def _verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
         if grade == 'read now':
             rb_over = 'always'
         elif grade == 'reference only':
-            # edit lands on a notes file; the seeding branches turn it
-            # into mention for any other ungated kind.
+            # edit lands on a notes file; any other kind keeps its
+            # seeded tier.
             rb_over = 'edit'
-        elif grade:
-            # An ungraded group: the label stays in view, the file is
-            # not gated, and the seeding branches keep a gated kind at
-            # always.
-            rb_over = 'mention'
         # A section number may carry one letter, `section 11b`, or be
         # dotted, `section 24.4`; the whole token is the anchor.
         sref_m = re.findall(
@@ -3610,8 +3603,6 @@ def _verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
                     rb_merged: str | None = 'always'
                 elif 'edit' in {prev_rb, rb_over}:
                     rb_merged = 'edit'
-                elif 'mention' in {prev_rb, rb_over}:
-                    rb_merged = 'mention'
                 else:
                     rb_merged = None
                 anchors_seen = [p for p in prev_where.split(';') if p and p != '-']
@@ -3681,7 +3672,7 @@ def _verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
             # A header the parser does not know, `Read before touching
             # the gateway:`, still ends the group above it: the bullets
             # under it take the header's own text as their group, which
-            # grades mention, never the grade of a label the author
+            # carries no grade, never the grade of a label the author
             # closed.
             kf_group = kf_loose_current.lower()
         kf_loose.append(kf_loose_current)
@@ -3763,16 +3754,11 @@ def _verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
         kf_label, kf_rb, kf_where = kf_map.get(name, ('-', None, '-'))
         if name in kf_map:
             kf_matched.add(name)
-        if kf_rb is not None and successor == '-':
-            # Notes:
-            # - always applies to every kind; edit only to a notes file.
-            # - Any other grade lifts a row that would otherwise read
-            #   never to mention, so its label shows in the Artifacts
-            #   block, and never demotes a gated kind.
-            if kf_rb == 'always' or (kf_rb == 'edit' and kind == 'notes'):
-                rb = kf_rb
-            elif rb == 'never':
-                rb = 'mention'
+        # always applies to every kind and edit only to a notes file, so
+        # a grade never demotes a gated kind.
+        if successor == '-' and (
+                kf_rb == 'always' or (kf_rb == 'edit' and kind == 'notes')):
+            rb = kf_rb
         row: Row = {
             'cycle': cycle_str, 'ts': ts, 'path': name, 'base': 'folder',
             'kind': kind, 'status': status, 'read_before': rb,
@@ -3827,8 +3813,6 @@ def _verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
         # The grade applies exactly as the walk branch applies it.
         if kf_rb == 'always' or (kf_rb == 'edit' and kind == 'notes'):
             rb = kf_rb
-        elif kf_rb is not None and rb == 'never':
-            rb = 'mention'
         row = {
             'cycle': cycle_str, 'ts': ts, 'path': stored_again, 'base': base,
             'kind': kind, 'status': 'live' if on_disk else 'missing',
@@ -6737,7 +6721,7 @@ def _build_parser() -> argparse.ArgumentParser:
     stmp.add_argument(
         '--read-before',
         dest='read_before',
-        choices=['always', 'edit', 'mention', 'never'])
+        choices=['always', 'edit', 'never'])
     stmp.add_argument(
         '--status',
         choices=['live', 'superseded', 'archived', 'missing'])

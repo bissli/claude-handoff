@@ -113,8 +113,8 @@ def test_a_row_is_whole_when_always_stamped_this_cycle_or_named(
         'stamp', _SLUG, 'specs/SPEC.md', '--where', 'Spec',
         '--label', 'the contract'])[0] == 0
     for name, grade in (
-            ('brief', 'edit'), ('idp', 'mention'), ('old', 'edit'),
-            ('gone', 'mention')):
+            ('brief', 'edit'), ('idp', 'never'), ('old', 'edit'),
+            ('gone', 'never')):
         assert _run([
             'stamp', _SLUG, f'notes/{name}.md', '--read-before', grade,
             '--label', f'note {name}'])[0] == 0
@@ -137,7 +137,7 @@ def test_a_row_is_whole_when_always_stamped_this_cycle_or_named(
     base = f'.handoff/{_SLUG}'
     assert artifacts[2:] == [
         f'{base}/notes/brief.md  notes  edit  c1  note brief',
-        f'{base}/notes/idp.md  notes  mention  c1  note idp',
+        f'{base}/notes/idp.md  notes  never  c1  note idp',
         f'{base}/outputs/new.md  other  never  c2  new output',
         f'{base}/specs/SPEC.md  spec  always  c1',
         f'{base}/notes/old.md',
@@ -225,7 +225,7 @@ def test_finish_keeps_a_cited_item_and_a_named_row_whole_next_cycle(
         'note', _SLUG, 'constraint', '--headline', 'Never log token values',
         'Not even at debug.'])[0] == 0
     assert _run([
-        'stamp', _SLUG, 'notes/a.md', '--read-before', 'mention',
+        'stamp', _SLUG, 'notes/a.md', '--read-before', 'never',
         '--label', 'note a'])[0] == 0
     assert _run([
         'stamp', _SLUG, 'notes/b.md', '--read-before', 'edit',

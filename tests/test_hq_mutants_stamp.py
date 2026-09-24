@@ -1247,19 +1247,6 @@ def test_build_parser_stamp_kind_choice_probe_dir(tmp_path, monkeypatch):
     assert rc == 0
 
 
-def test_build_parser_stamp_read_before_choice_mention(tmp_path, monkeypatch):
-    """_build_parser() includes 'mention' as valid --read-before choice.
-
-    Mutation: choices has 'MENTION'; --read-before mention is rejected.
-    Oracle: stamp with --read-before mention parses.
-    """
-    folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    (folder / 'doc.md').write_text('# Doc\n\nContent.\n')
-    rc = hq.main(['stamp', _SLUG, 'doc.md', '--read-before', 'mention'])
-    assert rc == 0
-
-
 def test_build_parser_stamp_status_choice_superseded(tmp_path, monkeypatch):
     """_build_parser() includes 'superseded' as valid --status choice.
 

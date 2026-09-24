@@ -1015,7 +1015,7 @@ def test_print_worklist_abs_path_missing_reported(tmp_path, monkeypatch):
 
     # Stamp an abs row pointing to a file that does not exist.
     gone = str(tmp_path / 'gone_external.md')
-    rc1, _, _ = _run(['stamp', _SLUG, gone, '--read-before', 'mention'])
+    rc1, _, _ = _run(['stamp', _SLUG, gone, '--read-before', 'never'])
     assert rc1 == 0
     rc2, out2, _ = _run(['begin', _SLUG])
     assert rc2 == 0
@@ -1036,7 +1036,7 @@ def test_print_worklist_abs_missing_not_present(tmp_path, monkeypatch):
     # Stamp an abs row that actually exists.
     ext = tmp_path / 'existing.md'
     ext.write_text('content\n', encoding='utf-8')
-    rc1, _, _ = _run(['stamp', _SLUG, str(ext), '--read-before', 'mention'])
+    rc1, _, _ = _run(['stamp', _SLUG, str(ext), '--read-before', 'never'])
     assert rc1 == 0
     rc2, out2, _ = _run(['begin', _SLUG])
     assert rc2 == 0
@@ -1076,7 +1076,7 @@ def test_verb_begin_no_ledger_triggers_creation(tmp_path, monkeypatch):
     assert rc0 == 0
     # Stamp a file so ledger.tsv has content.
     (folder / 'doc.md').write_text('# Doc\n', encoding='utf-8')
-    rc1, _, _ = _run(['stamp', _SLUG, 'doc.md', '--read-before', 'mention'])
+    rc1, _, _ = _run(['stamp', _SLUG, 'doc.md', '--read-before', 'never'])
     assert rc1 == 0
     # Second begin: must not wipe the ledger.
     rc2, _, _ = _run(['begin', _SLUG])
@@ -1434,7 +1434,7 @@ def test_verb_finish_unstamped_filter_not_in_live(tmp_path, monkeypatch):
     (folder / 'stamped.md').write_text('# Stamped\n', encoding='utf-8')
     (folder / 'free.md').write_text('# Free\n', encoding='utf-8')
     (folder / 'SPEC (conflicted copy 2026-09-09).md').write_text('# S\n')
-    rc1, _, _ = _run(['stamp', _SLUG, 'stamped.md', '--read-before', 'mention'])
+    rc1, _, _ = _run(['stamp', _SLUG, 'stamped.md', '--read-before', 'never'])
     assert rc1 == 0
     rc2, out2, _ = _run(['finish', _SLUG, '--log', 'check unstamped'])
     assert rc2 == 0
@@ -1488,13 +1488,13 @@ def test_do_stamp_label_comparand_is_the_last_row_not_the_first(
     rc0, _, _ = _run(['begin', _SLUG])
     assert rc0 == 0
     (folder / 'doc.md').write_text('# Doc\n', encoding='utf-8')
-    rc1, _, _ = _run(['stamp', _SLUG, 'doc.md', '--read-before', 'mention',
+    rc1, _, _ = _run(['stamp', _SLUG, 'doc.md', '--read-before', 'never',
                       '--label', 'ab'])
     assert rc1 == 0
-    rc2, _, _ = _run(['stamp', _SLUG, 'doc.md', '--read-before', 'mention',
+    rc2, _, _ = _run(['stamp', _SLUG, 'doc.md', '--read-before', 'never',
                       '--label', 'a long label here'])
     assert rc2 == 0
-    rc3, out3, _ = _run(['stamp', _SLUG, 'doc.md', '--read-before', 'mention',
+    rc3, out3, _ = _run(['stamp', _SLUG, 'doc.md', '--read-before', 'never',
                          '--label', 'medium one'])
     assert rc3 == 0
     assert 'label shorter' in out3, (
@@ -1517,11 +1517,11 @@ def test_do_stamp_label_advisory_silent_on_a_first_stamp_and_a_carry_forward(
     rc0, _, _ = _run(['begin', _SLUG])
     assert rc0 == 0
     (folder / 'doc.md').write_text('# Doc\n', encoding='utf-8')
-    rc1, out1, _ = _run(['stamp', _SLUG, 'doc.md', '--read-before', 'mention'])
+    rc1, out1, _ = _run(['stamp', _SLUG, 'doc.md', '--read-before', 'never'])
     assert rc1 == 0
     assert 'label shorter' not in out1
     assert 'label dropped' not in out1
-    rc2, _, _ = _run(['stamp', _SLUG, 'doc.md', '--read-before', 'mention',
+    rc2, _, _ = _run(['stamp', _SLUG, 'doc.md', '--read-before', 'never',
                       '--label', 'a long label here'])
     assert rc2 == 0
     rc3, out3, _ = _run(['stamp', _SLUG, 'doc.md', '--read-before', 'edit'])
@@ -1543,11 +1543,11 @@ def test_do_stamp_sref_lowercase_pattern(tmp_path, monkeypatch):
     rc0, _, _ = _run(['begin', _SLUG])
     assert rc0 == 0
     (folder / 'doc.md').write_text('# Doc\n', encoding='utf-8')
-    rc1, _, _ = _run(['stamp', _SLUG, 'doc.md', '--read-before', 'mention',
+    rc1, _, _ = _run(['stamp', _SLUG, 'doc.md', '--read-before', 'never',
                       '--label', 'covers s3 data section carefully'])
     assert rc1 == 0
     # Re-stamp in the same cycle, dropping s3.
-    rc2, out2, _ = _run(['stamp', _SLUG, 'doc.md', '--read-before', 'mention',
+    rc2, out2, _ = _run(['stamp', _SLUG, 'doc.md', '--read-before', 'never',
                          '--label', 'covers data section carefully here'])
     assert rc2 == 0
     assert 's3' in out2 or 'label dropped' in out2, (
@@ -1633,7 +1633,7 @@ def test_verb_finish_walk_continue_not_break(tmp_path, monkeypatch):
     # Heading '# Spec: AlphaEngine' makes bbb.md kind='spec' via infer_kind.
     (folder / 'bbb.md').write_text(
         '# Spec: AlphaEngine\n\n## AlphaEngine overview\n', encoding='utf-8')
-    rc1, _, _ = _run(['stamp', _SLUG, 'aaa.md', '--read-before', 'mention'])
+    rc1, _, _ = _run(['stamp', _SLUG, 'aaa.md', '--read-before', 'never'])
     # Spec files require --read-before always.
     rc2, _, _ = _run(['stamp', _SLUG, 'bbb.md', '--read-before', 'always',
                       '--where', 'Spec: AlphaEngine'])

@@ -350,7 +350,7 @@ def test_stamp_takes_the_repo_path_the_block_prints(
     monkeypatch.setenv('HQ_CYCLE', '2')
     assert hq.main(['begin', _SLUG]) == 0
     assert hq.main([
-        'stamp', _SLUG, str(repo_file), '--read-before', 'mention',
+        'stamp', _SLUG, str(repo_file), '--read-before', 'never',
         '--label', 'the loader']) == 0
     assert hq.main(['finish', _SLUG, '--log', 'c2']) == 0
     display = next(
@@ -395,7 +395,7 @@ def test_a_repo_row_recorded_missing_by_the_printed_path_stays_one_row(
     monkeypatch.setenv('HQ_CYCLE', '2')
     assert hq.main(['begin', _SLUG]) == 0
     assert hq.main([
-        'stamp', _SLUG, str(repo_file), '--read-before', 'mention',
+        'stamp', _SLUG, str(repo_file), '--read-before', 'never',
         '--label', 'the loader']) == 0
     assert hq.main(['finish', _SLUG, '--log', 'c2']) == 0
     display = next(

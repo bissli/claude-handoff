@@ -436,10 +436,10 @@ def test_open_label_check_reads_an_abs_row_through_its_rendered_display(
     (root / 'a' / 'x.md').write_text('# X\n')
     _run(['begin', _SLUG])
     assert _run(['stamp', _SLUG, str(root / 'a' / 'x.md'),
-                 '--read-before', 'mention', '--label', 'first label'])[0] == 0
+                 '--read-before', 'never', '--label', 'first label'])[0] == 0
     assert _run(['finish', _SLUG, '--log', 'one'])[0] == 0
     assert _run(['stamp', _SLUG, str(root / 'a' / 'x.md'),
-                 '--read-before', 'mention', '--label', 'second label'])[0] == 0
+                 '--read-before', 'never', '--label', 'second label'])[0] == 0
 
     rc, out, _ = _run(['open', _SLUG])
 
@@ -474,9 +474,9 @@ def test_open_label_check_passes_over_a_display_the_block_prints_twice(
     """
     folder, root = _two_copies(tmp_path, monkeypatch)
     assert _run(['stamp', _SLUG, str(root / 'a' / 'x.md'),
-                 '--read-before', 'mention', '--label', 'root copy'])[0] == 0
+                 '--read-before', 'never', '--label', 'root copy'])[0] == 0
     assert _run(['stamp', _SLUG, str(root / 'wt' / 'a' / 'x.md'),
-                 '--read-before', 'mention', '--label', 'work dir copy'])[0] == 0
+                 '--read-before', 'never', '--label', 'work dir copy'])[0] == 0
     assert _run(['finish', _SLUG, '--log', 'one'])[0] == 0
     assert _run(['stamp', _SLUG, str(root / 'a' / 'x.md'), '--archive',
                  '--reason', 'the work dir copy is the one'])[0] == 0
@@ -499,10 +499,10 @@ def test_open_label_check_passes_over_a_display_two_live_rows_share(
     """
     folder, root = _two_copies(tmp_path, monkeypatch)
     assert _run(['stamp', _SLUG, str(root / 'a' / 'x.md'),
-                 '--read-before', 'mention', '--label', 'root copy'])[0] == 0
+                 '--read-before', 'never', '--label', 'root copy'])[0] == 0
     assert _run(['finish', _SLUG, '--log', 'one'])[0] == 0
     assert _run(['stamp', _SLUG, str(root / 'wt' / 'a' / 'x.md'),
-                 '--read-before', 'mention', '--label', 'work dir copy'])[0] == 0
+                 '--read-before', 'never', '--label', 'work dir copy'])[0] == 0
 
     rc, out, _ = _run(['open', _SLUG])
 
@@ -522,7 +522,7 @@ def test_open_label_check_survives_a_label_whose_trailing_space_the_block_drops(
     folder = _root(tmp_path, monkeypatch)
     (folder / 'doc.md').write_text('# Doc\n')
     _run(['begin', _SLUG])
-    assert _run(['stamp', _SLUG, 'doc.md', '--read-before', 'mention',
+    assert _run(['stamp', _SLUG, 'doc.md', '--read-before', 'never',
                  '--label', 'fix the parser '])[0] == 0
     assert _run(['finish', _SLUG, '--log', 'one'])[0] == 0
 
@@ -546,11 +546,11 @@ def test_open_label_check_speaks_for_a_cycle_another_session_left_unfinished(
     folder = _root(tmp_path, monkeypatch)
     (folder / 'doc.md').write_text('# Doc\n')
     _run(['begin', _SLUG])
-    assert _run(['stamp', _SLUG, 'doc.md', '--read-before', 'mention',
+    assert _run(['stamp', _SLUG, 'doc.md', '--read-before', 'never',
                  '--label', 'first label'])[0] == 0
     assert _run(['finish', _SLUG, '--log', 'one'])[0] == 0
     assert _run(['begin', _SLUG])[0] == 0
-    assert _run(['stamp', _SLUG, 'doc.md', '--read-before', 'mention',
+    assert _run(['stamp', _SLUG, 'doc.md', '--read-before', 'never',
                  '--label', 'second label'])[0] == 0
     rc, out, _ = _run(['open', _SLUG])
     assert (rc, 'LEDGER BEHIND' in out) == (0, False), out
@@ -779,24 +779,24 @@ def test_the_reference_example_file_is_the_scripts_own_output(
 
 def test_the_artifacts_block_prints_every_full_row_with_no_cap(
         tmp_path, monkeypatch):
-    """Finish renders all 41 mention rows in full and prints no cap advisory.
+    """Finish renders all 41 never rows in full and prints no cap advisory.
 
     Mutation: a line cap on the full rows, folding the overflow into the
     kind counts; or a finish advisory counting rows over such a cap.
-    Oracle: hand-counted - 41 mention rows render 41 full lines and no
+    Oracle: hand-counted - 41 never rows render 41 full lines and no
     count line; finish prints no 'advisory: artifacts' line.
     """
     folder = _root(tmp_path, monkeypatch)
     _run(['begin', _SLUG])
     for i in range(41):
         (folder / f'note-{i:02d}.md').write_text('# N\n')
-        assert _run(['stamp', _SLUG, f'note-{i:02d}.md', '--read-before', 'mention',
+        assert _run(['stamp', _SLUG, f'note-{i:02d}.md', '--read-before', 'never',
                      '--label', 'a note'])[0] == 0
     rc, out, _ = _run(['finish', _SLUG, '--log', 'forty-one'])
     assert rc == 0
     assert 'advisory: artifacts' not in out
     block = hq.split_handoff((folder / 'HANDOFF.md').read_text())['blocks']['artifacts']
-    full = [ln for ln in block.splitlines() if '  other  mention  ' in ln]
+    full = [ln for ln in block.splitlines() if '  other  never  ' in ln]
     assert len(full) == 41
     assert not any(' - hq artifacts ' in ln for ln in block.splitlines())
 

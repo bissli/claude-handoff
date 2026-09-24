@@ -240,8 +240,8 @@ def test_adopt_infers_a_nested_pointer_below_the_top_level(
     Mutation: infer_kind called without top_level=False, so sub/deep.py is a
     draft and R1 locks it at always; or `Reference only` applied as edit
     whatever the kind.
-    Oracle: the sub/deep.py row - kind other, read_before mention (the
-    Reference only grade on a non-notes file), no refusal.
+    Oracle: the sub/deep.py row - kind other, read_before never (the
+    Reference only grade never applies to a non-notes file), no refusal.
     """
     folder = _root(tmp_path, monkeypatch)
     (folder / 'sub').mkdir()
@@ -252,7 +252,7 @@ def test_adopt_infers_a_nested_pointer_below_the_top_level(
     assert hq.main(['adopt', _SLUG]) == 0
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['sub/deep.py']['kind'] == 'other'
-    assert rows['sub/deep.py']['read_before'] == 'mention'
+    assert rows['sub/deep.py']['read_before'] == 'never'
     assert rows['sub/deep.py']['reason'] == '-'
 
 

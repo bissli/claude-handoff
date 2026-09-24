@@ -1160,7 +1160,7 @@ def test_artifacts_verb_hides_a_folder_row_whose_file_is_gone(
     folder = _new_root(tmp_path, monkeypatch)
     hq.main(['begin', _SLUG])
     (folder / 'notes-a.md').write_text('# A\n')
-    hq.main(['stamp', _SLUG, 'notes-a.md', '--read-before', 'mention', '--label', 'n'])
+    hq.main(['stamp', _SLUG, 'notes-a.md', '--read-before', 'never', '--label', 'n'])
     (folder / 'notes-a.md').unlink()
     capsys.readouterr()
 
@@ -2633,12 +2633,12 @@ def test_label_keeping_a_token_only_inside_a_longer_word_is_a_loss(
     hq.main(['begin', _SLUG])
     (folder / 'doc.md').write_text('# Doc\n')
     assert hq.main([
-        'stamp', _SLUG, 'doc.md', '--read-before', 'mention',
+        'stamp', _SLUG, 'doc.md', '--read-before', 'never',
         '--label', 'the `env` guard']) == 0
     capsys.readouterr()
 
     assert hq.main([
-        'stamp', _SLUG, 'doc.md', '--read-before', 'mention',
+        'stamp', _SLUG, 'doc.md', '--read-before', 'never',
         '--label', 'the environment guard rewritten at length']) == 0
 
     out = capsys.readouterr().out
@@ -2661,12 +2661,12 @@ def test_a_shorter_label_that_also_drops_a_token_prints_both_lines(
     hq.main(['begin', _SLUG])
     (folder / 'doc.md').write_text('# Doc\n')
     assert hq.main([
-        'stamp', _SLUG, 'doc.md', '--read-before', 'mention',
+        'stamp', _SLUG, 'doc.md', '--read-before', 'never',
         '--label', 'the `--force` and `FINX_SURFACE` path']) == 0
     capsys.readouterr()
 
     assert hq.main([
-        'stamp', _SLUG, 'doc.md', '--read-before', 'mention',
+        'stamp', _SLUG, 'doc.md', '--read-before', 'never',
         '--label', 'the FINX_SURFACE path']) == 0
 
     out = capsys.readouterr().out
@@ -2812,8 +2812,8 @@ def test_a_draft_keeps_edit_or_always_and_steps_down_from_an_old_always(
 
     Mutation: the draft floor kept at always alone, so the step-down an
     older thread needs is refused; or the floor dropped to any tier, so
-    a draft lands at mention and leaves the gate.
-    Oracle: drafts/x.py seeds edit; --read-before mention exits 1 with
+    a draft lands at never and leaves the gate.
+    Oracle: drafts/x.py seeds edit; --read-before never exits 1 with
     the documented draft line; a seeded always row on poller.py
     re-stamped --read-before edit exits 0 and reads edit.
     """
@@ -2825,7 +2825,7 @@ def test_a_draft_keeps_edit_or_always_and_steps_down_from_an_old_always(
     rows = (folder / 'ledger.tsv').read_text().splitlines()
     assert dict(zip(hq.LEDGER_FIELDS, rows[-1].split('\t')))['read_before'] == 'edit'
     capsys.readouterr()
-    assert hq.main(['stamp', _SLUG, 'drafts/x.py', '--read-before', 'mention']) == 1
+    assert hq.main(['stamp', _SLUG, 'drafts/x.py', '--read-before', 'never']) == 1
     assert capsys.readouterr().out.startswith(
         'hq stamp: refused: R1: draft read_before must stay edit or always'
         ' without --successor or --archive')

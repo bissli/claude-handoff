@@ -339,20 +339,20 @@ def test_a_label_wrapped_over_two_lines_grades_the_bullets_below_it(
     assert 'conservation: every original line carried' in capsys.readouterr().out
 
 
-def test_a_colon_line_that_is_no_label_opens_an_ungraded_mention_group(
+def test_a_colon_line_that_is_no_label_opens_an_ungraded_never_group(
         tmp_path, monkeypatch):
     """A `Read before touching the gateway:` line ends the group above it.
 
     Mutation: the unrecognized colon line leaving the grade above in
     force, so the pointer under it is gated always across a boundary the
-    author drew; or the ungraded group seeding never, so its labels fold
-    into a count and leave the Artifacts block; or the mention grade
-    applied to a spec, which R1 then refuses.
+    author drew; or the notes row losing its label, so it folds into a
+    count and leaves the Artifacts block; or an ungraded group promoting
+    the spec below always, which R1 then refuses.
     Oracle: hand-computed - only Read now grades always; the notes
-    pointer under the unrecognized header reads mention with its label
-    kept; the spec under it stays always with no refusal; the header
-    line lands under Unfiled; prose that ends no group leaves the grade
-    in force.
+    pointer under the unrecognized header keeps its seeded never with
+    its label kept; the spec under it stays always with no refusal; the
+    header line lands under Unfiled; prose that ends no group leaves the
+    grade in force.
     """
     folder = _root(tmp_path, monkeypatch)
     for name in ('notes-a.md', 'notes-b.md', 'notes-gate.md', 'SPEC-gate.md'):
@@ -369,7 +369,7 @@ def test_a_colon_line_that_is_no_label_opens_an_ungraded_mention_group(
     rows = {r['path']: r for r in _ledger(folder)}
     assert [rows[p]['read_before'] for p in ('notes-a.md', 'notes-b.md')] == [
         'always', 'always']
-    assert rows['notes-gate.md']['read_before'] == 'mention'
+    assert rows['notes-gate.md']['read_before'] == 'never'
     assert rows['notes-gate.md']['label'] == 'the gateway notes'
     assert (rows['SPEC-gate.md']['read_before'], rows['SPEC-gate.md']['reason']) == (
         'always', '-')
@@ -377,17 +377,18 @@ def test_a_colon_line_that_is_no_label_opens_an_ungraded_mention_group(
     assert '- unfiled: Read before touching the gateway:' in text
 
 
-def test_reference_only_grades_a_non_notes_row_mention_so_its_label_shows(
+def test_reference_only_leaves_a_non_notes_row_seeded_with_its_label(
         tmp_path, monkeypatch):
-    """Under `Reference only:` a notes file reads edit, any other file mention.
+    """Under `Reference only:` a notes file reads edit, any other file never.
 
-    Mutation: the mention fallback dropped, so a .yaml or a nested .py
-    stays never and its label folds into the Artifacts count unseen; or
-    the fallback applied without the never guard, so the spec is demoted
-    to mention and R1 refuses it with an advisory.
-    Oracle: hand-computed from the kind table - notes to edit, other to
-    mention with its label kept, spec to always with no refusal, and a
-    directory with no pointer stays never.
+    Mutation: the edit grade applied to any kind under `Reference only`,
+    not just notes, so a .yaml or a nested .py is promoted to edit
+    instead of keeping its seeded never; or the notes-only guard
+    dropped, so the spec is demoted below always and R1 refuses it with
+    an advisory.
+    Oracle: hand-computed from the kind table - notes to edit, other
+    kinds keep their seeded never with the label kept, spec to always
+    with no refusal, and a directory with no pointer stays never.
     """
     folder = _root(tmp_path, monkeypatch)
     (folder / 'SPEC.md').write_text('# Spec\n')
@@ -408,22 +409,23 @@ def test_reference_only_grades_a_non_notes_row_mention_so_its_label_shows(
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['notes-bg.md']['read_before'] == 'edit'
     assert (rows['stack.yaml']['read_before'], rows['stack.yaml']['label']) == (
-        'mention', 'the stack config')
-    assert rows['sub/helper.py']['read_before'] == 'mention'
+        'never', 'the stack config')
+    assert rows['sub/helper.py']['read_before'] == 'never'
     assert (rows['SPEC.md']['read_before'], rows['SPEC.md']['reason']) == (
         'always', '-')
     assert rows['probes']['read_before'] == 'never'
 
 
-def test_an_ungraded_header_that_mentions_a_label_word_still_grades_mention(
+def test_an_ungraded_header_that_mentions_a_label_word_still_grades_never(
         tmp_path, monkeypatch):
-    """A colon line saying 'read now' mid-sentence grades mention, not always.
+    """A colon line saying 'read now' mid-sentence grades never, not always.
 
     Mutation: the grade test a substring match, so the header text an
     ungraded group carries as its grade matches 'read now' or 'reference
     only' inside it and gates or edit-grades the pointers below.
     Oracle: hand-computed - only an exact label grades always or edit;
-    the two pointers under the two mid-sentence headers read mention.
+    the two pointers under the two mid-sentence headers keep their
+    seeded never.
     """
     folder = _root(tmp_path, monkeypatch)
     for name in ('alpha.md', 'stack.yaml', 'notes-beta.md'):
@@ -439,8 +441,8 @@ def test_an_ungraded_header_that_mentions_a_label_word_still_grades_mention(
 
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['alpha.md']['read_before'] == 'always'
-    assert rows['stack.yaml']['read_before'] == 'mention'
-    assert rows['notes-beta.md']['read_before'] == 'mention'
+    assert rows['stack.yaml']['read_before'] == 'never'
+    assert rows['notes-beta.md']['read_before'] == 'never'
 
 
 def test_a_bare_multi_range_pointer_after_a_separator_keeps_its_ranges(
@@ -467,15 +469,16 @@ def test_a_bare_multi_range_pointer_after_a_separator_keeps_its_ranges(
     assert rows['zeta.md']['label'] == 'the ranges'
 
 
-def test_two_bullets_to_one_path_under_an_ungraded_group_merge_to_mention(
+def test_two_bullets_to_one_path_under_an_ungraded_group_merge_to_never(
         tmp_path, monkeypatch):
-    """Two bullets to one path under an ungraded group keep the mention grade.
+    """Two bullets to one path under an ungraded group keep the seeded tier.
 
-    Mutation: the merge carrying always and edit only, so two mention
-    grades collapse to none and the merged row reads never with its label
-    folded into a count.
+    Mutation: the merge treating an ungraded grade as always or edit
+    instead of no tier, so the merged row is promoted above its seeded
+    never; or the label merge dropped, so the twice-named path's label
+    is not joined.
     Oracle: hand-computed - the once-named path and the twice-named path
-    both read mention, the latter with the two labels joined.
+    both read never, the latter with the two labels joined.
     """
     folder = _root(tmp_path, monkeypatch)
     (folder / 'zeta.md').write_text('x\n')
@@ -487,9 +490,9 @@ def test_two_bullets_to_one_path_under_an_ungraded_group_merge_to_mention(
     assert hq.main(['adopt', _SLUG]) == 0
 
     rows = {r['path']: r for r in _ledger(folder)}
-    assert rows['stack.yaml']['read_before'] == 'mention'
+    assert rows['stack.yaml']['read_before'] == 'never'
     assert (rows['zeta.md']['read_before'], rows['zeta.md']['label']) == (
-        'mention', 'the loader; also the cache')
+        'never', 'the loader; also the cache')
 
 
 # --- The conservation witness ---
