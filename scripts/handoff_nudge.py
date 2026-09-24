@@ -16,6 +16,10 @@ Notes
   work starts, which is the one moment an instruction redirects a turn
   without interrupting it. A Stop hook cannot say this: by the time
   Stop fires, the only stopping point left is now.
+- The message makes the handoff conditional on work a later session
+  must pick up. The end of a task is the most natural stopping point
+  there is, so an unconditional request reads as an order to hand off
+  a task already finished and committed.
 - Being past the point is a standing condition, not an event, so the
   message repeats every turn it holds and the hook keeps no state. A
   handoff written at 290K leaves a session at 295K and climbing, where
@@ -130,10 +134,13 @@ def main() -> int:
 
     message = (
         f"Context {context // 1000}K, past this session's"
-        f' {handoff_at // 1000}K handoff point. Finish the work in flight,'
-        ' then run /handoff at the next natural stopping point. Do not'
-        ' interrupt a task for it, and do not start work that will not'
-        ' fit in what is left.')
+        f' {handoff_at // 1000}K handoff point. If work remains for a later'
+        ' session - a task in flight, an edit not yet committed, an open'
+        ' plan step, an open question, a decision or finding the repo does'
+        ' not record - run /handoff at the next natural stopping point. A'
+        ' task that is finished and committed, with nothing left open or'
+        ' unrecorded, needs no handoff. Do not start work that will not fit'
+        ' in what is left.')
     json.dump({
         'hookSpecificOutput': {
             'hookEventName': 'UserPromptSubmit',

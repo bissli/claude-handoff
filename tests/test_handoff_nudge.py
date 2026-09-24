@@ -13,8 +13,9 @@ import pathlib
 import subprocess
 import sys
 
-from bin import hq
 from scripts import context_budget, handoff_nudge
+
+from bin import hq
 
 _SESSION = 'session-nudge'
 _REPO = pathlib.Path(__file__).resolve().parent.parent
@@ -153,6 +154,25 @@ def test_nudge_fires_at_the_point_and_stays_silent_one_token_below(
                 context=289999, handoff_at=290000)
     _feed(monkeypatch, work)
     assert _run() == (0, '')
+
+
+def test_nudge_asks_for_a_handoff_only_when_work_remains(
+        tmp_path, monkeypatch):
+    """Verify the message makes the handoff conditional on open work.
+
+    Mutation: the text reverted to "Finish the work in flight, then run
+    /handoff", which an agent that has just committed its task reads as
+    an order to hand that task off.
+    Oracle: the literal condition and the finished-task exemption, and
+    the absence of the unconditional sequence.
+    """
+    work = _arm(tmp_path, monkeypatch, context=300000, handoff_at=290000)
+    _feed(monkeypatch, work)
+    message = json.loads(_run()[1])['hookSpecificOutput']['additionalContext']
+    assert 'If work remains for a later session' in message
+    assert ('A task that is finished and committed, with nothing left'
+            ' open or unrecorded, needs no handoff.') in message
+    assert 'then run /handoff' not in message
 
 
 def test_nudge_measures_context_live_rather_than_from_stored_state(

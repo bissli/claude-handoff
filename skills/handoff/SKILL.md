@@ -73,19 +73,25 @@ Only a file that outlives the session or is stamped is bound.
 
 ## Which verb, which target
 
-One question settles the verb: does this session hold anything worth
-telling a fresh session?
+One question settles the verb: does this session hold anything a
+fresh session needs that the repo does not already hold?
 
-- Yes - a file edited, a decision settled, a finding the repo does
-  not already record, a handoff read here. Write.
-- No - a session whose opening move this is, or one that has only
+- Yes - work in flight, an edit not yet committed, an open plan step,
+  an open question, a decision or finding the repo does not record, a
+  handoff read here with a step still open. Write.
+- No, after work - every edit committed, nothing left open or
+  unrecorded - say there is nothing to hand off and stop; touch
+  nothing. Where the work closed a thread read here, name
+  `/handoff done <slug>` to the user; never run it. A user who wants a
+  record anyway types `/handoff write`.
+- No, in a session whose opening move this is, or one that has only
   looked something up. Read.
 
 Ask it of the content, never of how late the session is.
 
 | Input                              | Action                                 |
 | ---------------------------------- | -------------------------------------- |
-| `/handoff`                         | write; read when the session is fresh  |
+| `/handoff`                         | what the question above settles        |
 | `/handoff <slug>`                  | the same, against `.handoff/<slug>/`   |
 | `/handoff list [n]`                | this repo, newest first; n caps it     |
 | `/handoff check [slug]`            | review one handoff in place, fix it    |
@@ -96,9 +102,10 @@ Ask it of the content, never of how late the session is.
 | `/handoff done <slug>`             | end the thread: `hq done`              |
 | `/handoff done <slug> --undo`      | reopen it: `hq done --undo`            |
 
-`write` and `read` as the first word override the inference, an
-optional slug after each. A first argument matching a verb above is
-that verb, not a slug.
+`write` and `read` as the first word, typed by the user, override the
+inference, an optional slug after each. A verb the agent picks itself,
+as when answering a nudge, goes through the question. A first argument
+matching a verb above is that verb, not a slug.
 
 Guess neither the verb nor the target. Where either is ambiguous,
 say so, list the candidates, and stop - touch nothing.

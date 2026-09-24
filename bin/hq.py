@@ -91,8 +91,8 @@ _CYCLE_WRITE_VERBS = ('note', 'stamp', 'supersede')
 SENTINEL = os.path.expanduser('~/.claude/.nudge-handoff')
 _SENTINEL_BODY = (
     '# claude-handoff: while this file exists, the nudge asks the'
-    ' agent\n# to hand off once the session passes its handoff'
-    ' point.\n# Remove it with: hq nudge off\n'
+    ' agent\n# to hand off open work once the session passes its'
+    ' handoff point.\n# Remove it with: hq nudge off\n'
     )
 # The directories earlier plugin versions kept the folder under; a
 # path written under one of them names where a folder used to be.
@@ -311,8 +311,8 @@ The reading steps hq open prints after its findings; each binds.
   thread - then put them to the user and stop. Otherwise state the
   task and the Now step in two sentences, then execute Now; the Plan
   follows.
-- A later bare /handoff targets this handoff: write target rule 2 in
-  the skill.""",
+- A later bare /handoff that writes targets this handoff: write target
+  rule 2 in the skill.""",
     'rules': """\
 hq help rules - what the script refuses and why
 
@@ -7163,9 +7163,9 @@ def _build_parser() -> argparse.ArgumentParser:
         'exiting 0, since presence alone decides and neither is a mistake.\n'
         'While the file exists the UserPromptSubmit hook asks the agent to\n'
         'hand off at its next stopping point once the session passes its\n'
-        'handoff point. The file is machine-wide, so this verb takes no\n'
-        'slug, and its contents are free: the line the verb writes says\n'
-        'what the file is for.')
+        'handoff point, if work remains for a later session. The file is\n'
+        'machine-wide, so this verb takes no slug, and its contents are\n'
+        'free: the line the verb writes says what the file is for.')
     nud = sub.add_parser(
         'nudge',
         epilog=_nudge_epilog,

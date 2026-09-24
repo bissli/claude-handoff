@@ -324,9 +324,11 @@ its handoff point while the agent driving it never learns.
 
 Creating `~/.claude/.nudge-handoff` changes that. While the file
 exists, a `UserPromptSubmit` hook names the context and the handoff
-point to the agent at the top of each turn, and asks for a handoff at
-the next natural stopping point rather than at once. That is the one
-moment an instruction redirects a turn without interrupting work
+point to the agent at the top of each turn. It asks for a handoff at
+the next natural stopping point rather than at once, and only when work
+remains for a later session. A task that is finished and committed, with
+nothing left open or unrecorded, needs none. The top of a turn is the
+one moment an instruction redirects a turn without interrupting work
 already under way.
 
 ```
