@@ -268,12 +268,13 @@ the agent never grants itself the skip.
   launching):
   from the file alone, fill five slots - the task, the next action,
   why it is next, how to verify it, what to ask the user; an empty
-  slot is a finding. For each line of the read block, open the
-  resolved span and report any point where the Now step contradicts
-  it. For each todo file the Plan points at, verify that the Now step
-  agrees with its live item. `finish` renders the header line and the
-  blocks after this pass, so they are a cycle behind: a stale or
-  absent sha, cycle, id, row, or label there is never a finding. Read
+  slot is a finding, except `none` in the last. For each `always` row
+  `hq artifacts <slug>` prints, open its span with `hq read <slug>
+  <path>` and report any point where the Now step contradicts it. For
+  each todo file the Plan points at, verify that the Now step agrees
+  with its live item. `finish` renders the header line and the blocks
+  after this pass, so they are a cycle behind: a stale or absent sha,
+  cycle, id, row, or label there is never a finding. Read
   a standing id the cursor cites with `hq standing <slug> <id>`, never
   from the block. Last, name each cursor line the next session does
   not act on. A line it acts on is one it executes, checks, obeys, or
