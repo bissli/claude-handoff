@@ -33,12 +33,12 @@ heading, wording unchanged:
   - A clause after the label is fine (`Read now, under x/ unless
     noted:`), wrapped over several lines or not.
   - `Read now:` seeds `always`; `Reference only:` seeds `edit` on a
-    notes file and `mention` on any other; a spec or draft stays
+    notes file and leaves any other at `never`; a spec or draft stays
     `always` under either.
   - A label grades every bullet below it until the next label. A
     line ending in `:` that is neither label ends the group and opens
-    an ungraded one, whose pointers seed `mention` (a spec or draft
-    still stays `always`) so their labels stay in view.
+    an ungraded one, whose pointers keep their seed: `never`, or
+    `always` for a spec or draft.
   - Every pointer names a real path: `adopt` resolves no shorthand
     such as an alias declared in prose. A pointer it cannot find on
     disk seeds a `missing` row and prints `Key files pointer not on
