@@ -4777,7 +4777,14 @@ def _do_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
     if refusal_reason is None:
         kind = getattr(argv, 'kind', None) or prev.get('kind', inferred_kind)
         explicit_rb = getattr(argv, 'read_before', None)
-        rb = explicit_rb or prev.get('read_before', _TIER_SEED.get(gate_kind, 'never'))
+        carried_rb = prev.get('read_before', _TIER_SEED.get(gate_kind, 'never'))
+        # A re-stamp to spec or draft from a row at never takes the new
+        # kind's tier: never carried forward leaves --kind draft refused
+        # by R1. A tier above never is the row's own and stays.
+        kind_changed = bool(prev) and kind != prev.get('kind')
+        rb = explicit_rb or (
+            _TIER_SEED.get(kind, 'never') if kind_changed and carried_rb == 'never'
+            else carried_rb)
         explicit_status = getattr(argv, 'status', None)
         status = explicit_status or prev.get('status', 'live')
         # --status archived and --archive are the same demotion and
@@ -6789,6 +6796,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "no anchor is refused and prints the file's headings.\n"
         '--kind, --read-before, --status, --where, and --label default to the\n'
         "previous row's value; omit them on a re-stamp to carry them forward.\n"
+        'A --kind spec or draft on a row at never seeds --read-before from\n'
+        'that kind instead.\n'
         '--reason carries only while kind, status, and read_before all hold.\n'
         'A label shorter than its comparand, or missing one of its backticked\n'
         'tokens or s<n> references, draws an advisory on the stamp that wrote\n'

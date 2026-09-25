@@ -2730,6 +2730,36 @@ def test_a_kind_declared_draft_is_gated_like_a_spec(tmp_path, monkeypatch):
     assert hq.main(['stamp', _SLUG, 'plan.txt', '--read-before', 'never']) == 1
 
 
+def test_a_restamp_declaring_draft_gates_a_row_stamped_other(
+        tmp_path, monkeypatch):
+    """--kind draft on a re-stamp of an other/never row lands draft/edit,
+    and a kind change on a row above never keeps its tier.
+
+    Mutation: read_before carried from the previous row when the kind
+    changes, so R1 refuses the draft at never; or every kind change
+    reseeded, so an other row at edit re-stamped --kind notes drops to
+    never.
+    Oracle: hq help kinds, "pass --kind draft to gate it edit", and the
+    ledger row's read_before field.
+    """
+    folder = _new_root(tmp_path, monkeypatch)
+    hq.main(['begin', _SLUG])
+    (folder / 'plan.txt').write_text('def run(): pass\n')
+    (folder / 'data.txt').write_text('rows\n')
+
+    def last_row():
+        lines = (folder / 'ledger.tsv').read_text().splitlines()
+        return dict(zip(hq.LEDGER_FIELDS, lines[-1].split('\t')))
+
+    assert hq.main(['stamp', _SLUG, 'plan.txt']) == 0
+    assert hq.main(['stamp', _SLUG, 'plan.txt', '--kind', 'draft']) == 0
+    assert (last_row()['kind'], last_row()['read_before']) == ('draft', 'edit')
+
+    assert hq.main(['stamp', _SLUG, 'data.txt', '--read-before', 'edit']) == 0
+    assert hq.main(['stamp', _SLUG, 'data.txt', '--kind', 'notes']) == 0
+    assert (last_row()['kind'], last_row()['read_before']) == ('notes', 'edit')
+
+
 def test_help_with_no_topic_lists_every_key(capsys):
     """Hq help with no topic prints one line per HELP_TOPICS key, exit 0.
 
