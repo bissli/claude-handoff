@@ -13,9 +13,8 @@ Notes
   at the cache-write rate, and its output, and the formula leaves both
   out. Neither grows with context, so their share falls as a session
   runs.
-- Only the expensive models are listed. A long Sonnet or Haiku session
-  costs little enough that interrupting one to talk about money would
-  spend more attention than it saves, so they are left alone.
+- Haiku is not listed: its 200K window holds a turn well under the
+  target, so a warning would spend more attention than it saves.
 """
 
 # Dollars per user turn. Everything else follows from this.
@@ -33,6 +32,8 @@ CACHE_READ_PER_MTOK = {
     'fable': 1.00,
     'opus-5-5': 0.20,
     'opus': 0.50,
+    'sonnet-5': 0.20,
+    'sonnet': 0.30,
     }
 
 # Assistant calls per user turn, measured across 604 compaction cycles.

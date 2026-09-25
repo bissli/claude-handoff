@@ -40,9 +40,10 @@ src="docs/resend-light.svg">
 
 Prompt caching is what makes this affordable at all: a token re-read
 from the cache costs a twentieth of a fresh one on Opus 5.5 and a
-fortieth on Fable 5.1. Those are the two models where this is worth
-money: Opus 5.5, Claude Code's default, and Fable 5.1, the top tier,
-which bills two and a half times as much for a fresh token.
+fortieth on Fable 5.1. The two models this matters most for are Opus
+5.5, Claude Code's default, and Fable 5.1, the top tier, which bills
+two and a half times as much for a fresh token. Sonnet 5 re-reads
+history at Opus 5.5's price, so it is gauged the same way.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/cache-discount-dark.svg">
@@ -300,8 +301,9 @@ turn. Each model's token thresholds are derived from it:
 | --------- | ------- | ----------- | ---------------- |
 | Opus 5.5  | 352,273 | 500,000     | $0.62            |
 | Fable 5.1 | 281,818 | 400,000     | $0.62            |
+| Sonnet 5  | 352,273 | 500,000     | $0.62            |
 
-Cost parity puts both current models clear of the compaction cycle's
+Cost parity puts every current model clear of the compaction cycle's
 floor, so each sits on its dollar line. A model billed at the older
 cache-read rate does not: an Opus 5 turn costs $0.62 at 140,909 tokens,
 below the 206,600 a five-turn compaction cycle needs, so its target is
@@ -312,9 +314,9 @@ binds; it is latched per session and never rises.
 
 Over budget stays a dollar figure ($0.88) and is never scaled up with
 the target, so a heavy session cannot march the loudest warning out to
-$5 a turn. Sonnet and Haiku are deliberately absent: a long session on
-either costs little enough that interrupting it would cost more
-attention than it saves.
+$5 a turn. Haiku is absent: its 200K context window holds a turn well
+under the target, so a warning would cost more attention than it
+saves.
 
 ## Pushing the agent to hand off (optional)
 
@@ -353,10 +355,11 @@ Anthropic list prices (September 2026), per million tokens:
 | --------- | ------: | ----------: | -----------: | ------: |
 | Opus 5.5  | $4.00  | $0.20      | $5.00       | $20.00 |
 | Fable 5.1 | $10.00 | $0.25      | $12.50      | $50.00 |
+| Sonnet 5  | $2.00  | $0.20      | $2.50       | $10.00 |
 
 A cache read is a multiple of the input price, and the multiple is not
 the same everywhere: 0.05 on Opus 5.5 and 0.025 on Fable 5.1, against
-the 0.1 every earlier model charges. The plugin stores the product, so
+the 0.1 Sonnet 5 and every earlier model charge. The plugin stores the product, so
 a model matched to its family rather than its own generation is priced
 at up to two and a half times what it bills.
 

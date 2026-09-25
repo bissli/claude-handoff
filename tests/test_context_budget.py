@@ -54,24 +54,26 @@ def test_a_generation_priced_on_its_own_is_not_read_as_its_family():
     assert budget.model_tier('claude-opus-5') == 'opus'
     assert budget.model_tier('claude-fable-5-1') == 'fable-5-1'
     assert budget.model_tier('claude-fable-5') == 'fable'
-    assert budget.model_tier('claude-sonnet-5') is None
+    assert budget.model_tier('claude-sonnet-5') == 'sonnet-5'
+    assert budget.model_tier('claude-sonnet-4-6') == 'sonnet'
     for tier, price in (('opus-5-5', 0.20), ('opus', 0.50),
-                        ('fable-5-1', 0.25), ('fable', 1.00)):
+                        ('fable-5-1', 0.25), ('fable', 1.00),
+                        ('sonnet-5', 0.20), ('sonnet', 0.30)):
         assert abs(budget.cost_per_turn(1_000_000, tier)
                    - price * budget.CALLS_PER_TURN) < 1e-9
 
 
 def test_a_cheap_model_is_left_alone(monkeypatch, capsys, tmp_path):
-    """Verify a Sonnet or Haiku session raises no warning at all.
+    """Verify a Haiku session raises no warning, and a Sonnet one does.
 
     Mutation: model_tier falling back to 'opus-5-5' for an unlisted model,
     which is what makes a plugin nag about a session whose whole cost is
-    a few cents and train the user to ignore it.
-    Oracle: a spy on stdout - the same 600K transcript prints on opus and
-    prints nothing on sonnet.
+    a few cents and train the user to ignore it; or Sonnet dropped from
+    the price table, which silences a session billed at Opus 5.5's rate.
+    Oracle: a spy on stdout - the same 600K transcript prints on opus
+    and sonnet and prints nothing on haiku.
     """
     monkeypatch.setattr(cb, 'STATE_DIR', str(tmp_path / 'state'))
-    assert budget.model_tier('claude-sonnet-5') is None
     assert budget.model_tier('claude-haiku-4-5') is None
 
     def run(model, session):
@@ -90,7 +92,8 @@ def test_a_cheap_model_is_left_alone(monkeypatch, capsys, tmp_path):
         return capsys.readouterr().out.strip()
 
     assert run('claude-opus-5-5', 'a')
-    assert run('claude-sonnet-5', 'b') == ''
+    assert run('claude-sonnet-5', 'c')
+    assert run('claude-haiku-4-5', 'b') == ''
 
 
 def test_the_over_band_holds_the_dollar_limit_and_the_order():
