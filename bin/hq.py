@@ -5172,7 +5172,12 @@ def _verb_note(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
             if len(body) >= 2 and body[0] == body[-1] and body[0] in '"\'':
                 if body[0] not in body[1:-1]:
                     body = body[1:-1]
-            rc = max(rc, _do_note(folder, anch, kind_str, headline, body.strip()))
+            note_rc = _do_note(folder, anch, kind_str, headline, body.strip())
+            if note_rc:
+                print(
+                    f'hq note: batch line {line_no} refused: {line}'
+                    ' - fix it and re-run it alone; the other lines ran')
+            rc = max(rc, note_rc)
         return rc
     return _do_note(
         folder, anch,

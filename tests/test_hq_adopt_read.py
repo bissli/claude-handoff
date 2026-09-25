@@ -193,6 +193,28 @@ def test_note_batch_names_the_bad_line_and_runs_the_rest(
     assert 'no headline here' not in standing
 
 
+def test_note_batch_names_a_line_refused_after_it_parsed(
+        tmp_path, monkeypatch, capsys):
+    """A parsed batch line refused for an empty headline names its line.
+
+    Mutation: the batch loop dropping line_no when _do_note refuses, so a
+    writer re-running the whole batch duplicates the lines that landed.
+    Oracle: line 2, the empty headline, named by number, and only line 1
+    in standing.md.
+    """
+    folder = _root(tmp_path, monkeypatch)
+    hq.main(['begin', _SLUG])
+    monkeypatch.setattr('sys.stdin', io.StringIO(
+        'decision --headline "Fine" "ok"\n'
+        'decision --headline "" "oops"\n'))
+    assert hq.main(['note', _SLUG, '--batch', '-']) == 2
+    out = capsys.readouterr().out
+    assert 'hq note: batch line 2 refused' in out
+    standing = (folder / 'standing.md').read_text()
+    assert '**Fine** ok' in standing
+    assert 'oops' not in standing
+
+
 # --- item 2: the Key files grader -------------------------------------
 
 
