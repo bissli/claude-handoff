@@ -12,7 +12,7 @@ Invoke as::
     hq <verb> <slug> [args] [options]
 
 ``bin/hq`` is a wrapper the plugin puts on the agent's PATH; it runs
-``python3 scripts/hq.py`` with the same arguments. Or call ``main(argv)``
+``python3 bin/hq.py`` with the same arguments. Or call ``main(argv)``
 in-process. Exit 0 on success, 1 on a refusal or a
 blocking finding, 2 on bad usage or an unresolvable slug.
 
@@ -5615,11 +5615,14 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
         folder, cursor_clean, header_line, log_body,
         live, walk, standing_text_new, int(anch['cycle']))
     (folder / 'cycles').mkdir(exist_ok=True)
+    # The archive is written before HANDOFF.md is truncated, so a write
+    # that fails partway through HANDOFF.md leaves the new text whole in
+    # cycles/.
+    cycle_archive = folder / 'cycles' / f'c{anch["cycle"]:02d}.md'
+    cycle_archive.write_text(new_handoff, encoding='utf-8')
     if new_note_lines:
         _append_lines(standing_path, new_note_lines)
     handoff_path.write_text(new_handoff, encoding='utf-8')
-    cycle_archive = folder / 'cycles' / f'c{anch["cycle"]:02d}.md'
-    cycle_archive.write_text(new_handoff, encoding='utf-8')
     lb_final = ledger_path.read_bytes()
     sb_final = standing_path.read_bytes() if standing_path.exists() else b''
     handoff_sha = _sha12(new_handoff.encode())

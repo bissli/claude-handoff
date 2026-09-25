@@ -420,3 +420,41 @@ def test_root_resolves_to_the_ancestor_holding_the_handoff_dir(
         capsys.readouterr()
         assert hq.main(['list']) == 0
         assert capsys.readouterr().out.splitlines()[2].startswith(f'{_SLUG}  ')
+
+
+# --- A failed write during finish ---
+
+
+def test_finish_archives_before_it_truncates_the_handoff(
+        tmp_path, monkeypatch, capsys):
+    """A write failing partway through HANDOFF.md leaves the cursor in cycles/.
+
+    Mutation: HANDOFF.md written before cycles/cNN.md, so the failure
+    truncates the only file holding the new cursor.
+    Oracle: an injected ENOSPC after the first ten characters of the
+    HANDOFF.md write; the cursor line must survive in cycles/c01.md.
+    """
+    _, folder = _setup(tmp_path, monkeypatch)
+    _begin(_SLUG, folder)
+    handoff = folder / 'HANDOFF.md'
+    handoff.write_text(
+        handoff.read_text(encoding='utf-8').replace(
+            '## Task\n', '## Task\nRefresh the poller token.\n', 1),
+        encoding='utf-8')
+    capsys.readouterr()
+    real_write_text = pathlib.Path.write_text
+
+    def failing_write_text(self, data, *args, **kwargs):
+        if self.name == 'HANDOFF.md':
+            real_write_text(self, data[:10], *args, **kwargs)
+            raise OSError(28, 'No space left on device', str(self))
+        return real_write_text(self, data, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, 'write_text', failing_write_text)
+    rc = hq.main(['finish', _SLUG, '--log', 'first cycle done'])
+    out, _ = capsys.readouterr()
+    assert rc == 1
+    assert 'No space left on device' in out
+    assert 'Refresh the poller token.' not in handoff.read_text(encoding='utf-8')
+    archive = (folder / 'cycles' / 'c01.md').read_text(encoding='utf-8')
+    assert 'Refresh the poller token.' in archive
