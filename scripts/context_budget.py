@@ -77,9 +77,10 @@ def growth_per_call(series: list[int]) -> int:
 
     Notes
     -----
-    - The series is cut at every drop. A drop means a compaction, and
-      averaging across one reads as near-zero growth, which would silence
-      the warning exactly where it matters most.
+    - The series is cut at a compaction, the drop ``main`` tests for:
+      averaging across one reads as near-zero growth, which would
+      silence the warning exactly where it matters most. A smaller dip,
+      such as an expired cache block, stays in the run.
     - The mean is right here rather than the median: what matters is how
       fast the context fills, and one 40K tool result fills it just as
       surely as forty small ones.
@@ -87,7 +88,7 @@ def growth_per_call(series: list[int]) -> int:
     window = series[-GROWTH_WINDOW_CALLS:]
     run: list[int] = []
     for value in window:
-        if run and value < run[-1]:
+        if run and run[-1] - value > budget.POST_COMPACTION_TOKENS // 2:
             run = []
         run.append(value)
     if len(run) < 5 or run[-1] <= run[0]:

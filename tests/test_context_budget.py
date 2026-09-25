@@ -177,6 +177,34 @@ def test_growth_ignores_context_dropped_by_compaction():
     assert cb.growth_per_call(series) == 5_000
 
 
+def test_growth_keeps_a_dip_smaller_than_a_compaction():
+    """Verify a small fall in context stays in the growth run.
+
+    Mutation: cutting the run at any fall, which leaves one value after
+    the dip and throws the estimate to the fallback.
+    Oracle: hand-computed. 100,000 to 100,900 in steps of 100, then a
+    dip to 100,800: 800 over 10 intervals is 80.
+    """
+    series = [100_000 + 100 * step for step in range(10)] + [100_800]
+    assert cb.growth_per_call(series) == 80
+
+
+def test_growth_cuts_where_the_stop_hook_sees_a_compaction():
+    """Verify the growth cut and the Stop hook's compaction test agree.
+
+    Mutation: `>=` in place of `>` in growth_per_call's cut, or any
+    threshold other than half of POST_COMPACTION_TOKENS.
+    Oracle: boundary straddle from a 180,000 peak. A fall of 61,501
+    cuts, leaving five values 5,000 apart; a fall of exactly 61,500 does
+    not, so the run ends below its start and falls back.
+    """
+    peak = [170_000, 175_000, 180_000]
+    cut = peak + [118_499 + 5_000 * step for step in range(5)]
+    kept = peak + [118_500 + 5_000 * step for step in range(5)]
+    assert cb.growth_per_call(cut) == 5_000
+    assert cb.growth_per_call(kept) == budget.FALLBACK_GROWTH_PER_CALL
+
+
 def test_growth_falls_back_on_a_short_series():
     """Verify a young session uses the documented fallback, not zero.
 
