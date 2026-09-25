@@ -8,9 +8,11 @@ compacted there. One knob therefore moves every model at once.
 
 Notes
 -----
-- Cost per turn is ``context * cache_read_per_mtok * calls_per_turn``.
-  A turn deep in a session is almost entirely cache reads, so this is
-  the whole bill to within a few percent.
+- Cost per turn is ``context * cache_read_per_mtok * calls_per_turn``,
+  the cost of re-reading history. Each call also bills its new tokens
+  at the cache-write rate, and its output, and the formula leaves both
+  out. Neither grows with context, so their share falls as a session
+  runs.
 - Only the expensive models are listed. A long Sonnet or Haiku session
   costs little enough that interrupting one to talk about money would
   spend more attention than it saves, so they are left alone.

@@ -4,9 +4,10 @@ Run from the repo root:
 
     python3 docs/charts.py
 
-Writes eight files, ``docs/<chart>-{light,dark}.svg``. The README embeds
-each pair behind a ``<picture>`` element so GitHub serves the variant
-matching the reader's theme.
+Writes a light and a dark SVG per entry in ``CHARTS``, named
+``docs/<chart>-{light,dark}.svg``. The README embeds each pair behind a
+``<picture>`` element so GitHub serves the variant matching the
+reader's theme.
 
 Notes
 -----

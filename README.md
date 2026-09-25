@@ -19,8 +19,8 @@ room, that the conversation has grown expensive enough to hand off.
 
 The first command registers this repo as a plugin source (a
 "marketplace"); the second installs the hooks and the `/handoff`
-command from it. It needs `python3` on `PATH` and nothing else. The
-status line takes one manual step, described
+command from it. It needs `python3` 3.11 or later on `PATH` and nothing
+else. The status line takes one manual step, described
 [below](#status-line-optional-one-manual-step).
 
 ## The problem
