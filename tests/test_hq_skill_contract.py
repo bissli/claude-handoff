@@ -209,6 +209,23 @@ def test_the_skill_and_the_parser_name_the_same_verbs():
     assert set(verbs) <= named, set(verbs) - named
 
 
+def test_every_verb_but_help_carries_an_epilog():
+    """Each verb's --help says what the verb does, not only its usage.
+
+    Mutation: a verb registered by a bare add_parser call, so its --help
+    prints the usage line and nothing else.
+    Oracle: the argparse subparser table, help alone exempt since it
+    prints the topics itself.
+    """
+    parser = hq._build_parser()
+    sub = next(
+        a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
+    bare = [
+        name for name, sp in sub.choices.items()
+        if not sp.epilog and name != 'help']
+    assert bare == []
+
+
 def test_every_flag_named_by_either_side_is_known_to_the_other():
     """Flags in the skill exist on some hq.py verb; verb flags appear in
     the corpus.

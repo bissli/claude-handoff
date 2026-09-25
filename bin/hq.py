@@ -6772,7 +6772,24 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument('--session', help='override session id (HQ_SESSION)')
     sub = p.add_subparsers(dest='verb', required=True)
 
-    sub.add_parser('adopt').add_argument('slug')
+    _adopt_epilog = (
+        'Converts a HANDOFF.md that hq did not write into a ledger thread.\n'
+        'The file needs a conforming Written: <date> | Cycle: <N> header;\n'
+        'one without it is refused with its headings and the path of\n'
+        'reference/adoption.md, and nothing is written. The Decisions,\n'
+        'Constraints, and Dead ends sections become standing.md items; each\n'
+        'file in the folder, and each Key files bullet that names a path,\n'
+        'becomes a ledger row; the file is archived as cycles/c<N>.md, and\n'
+        'HANDOFF.md is rewritten in hq form. adopt takes no lock: begin\n'
+        'runs it on such a folder by itself, then opens the next cycle. A\n'
+        'folder that already holds ledger.tsv, or is marked done, is\n'
+        'refused.'
+    )
+    adp = sub.add_parser(
+        'adopt',
+        epilog=_adopt_epilog,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    adp.add_argument('slug')
 
     _begin_epilog = (
         'The cycle this opens is the number printed here, never the Cycle\n'
