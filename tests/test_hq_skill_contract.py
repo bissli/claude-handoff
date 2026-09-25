@@ -25,11 +25,6 @@ from bin import hq
 
 _HQ_CALL = 'hq'
 # Flags in the skill that belong to other tools, never to hq.py.
-# Verbs the agent never runs: machine-wide, slugless, and dispatched
-# before any root resolves. The skill directs the agent, so naming one
-# there would read as a step of the write path.
-_OPERATOR_VERBS = {'nudge'}
-
 _FOREIGN_FLAGS = {
     '--help', '--no-check', '--oneline', '--porcelain', '--show-toplevel'}
 # Exit-2 usage slips whose text is the whole remedy: they name the
@@ -205,21 +200,13 @@ def test_the_skill_and_the_parser_name_the_same_verbs():
     """Every hq.py verb the skill names exists, and every parser verb is named.
 
     Mutation: a verb renamed in _build_parser, a verb misspelled in the
-    skill, an agent verb added with no skill text, or an _OPERATOR_VERBS
-    entry left behind once its verb was renamed or removed.
+    skill, or a verb added with no skill text.
     Oracle: the argparse subcommand table.
-
-    Notes
-    -----
-    - An operator verb is exempt from the skill side only. It still has
-      to exist in the parser, so the exemption cannot outlive its verb.
     """
     verbs, _, _ = _parser_surface()
     named = set(re.findall(r'\bhq (\w[\w-]*)(?![\w:-])', SKILL.read_text()))
     assert named <= set(verbs), named - set(verbs)
-    assert set(verbs) - _OPERATOR_VERBS <= named,\
-        set(verbs) - _OPERATOR_VERBS - named
-    assert _OPERATOR_VERBS <= set(verbs), _OPERATOR_VERBS - set(verbs)
+    assert set(verbs) <= named, set(verbs) - named
 
 
 def test_every_flag_named_by_either_side_is_known_to_the_other():

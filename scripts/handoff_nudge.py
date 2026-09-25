@@ -25,7 +25,7 @@ Notes
   handoff written at 290K leaves a session at 295K and climbing, where
   asking again is right and ``hq begin`` opens the next cycle.
 - The hook reads the sentinel by presence alone and never writes it, so
-  ``hq nudge on`` and ``hq nudge off`` take effect at the next prompt.
+  creating or removing the file takes effect at the next prompt.
   Nothing can stick armed.
 - The hook measures context from the transcript rather than reading the
   context the budget hook stored. ``/clear`` and ``/compact`` both keep
@@ -62,9 +62,9 @@ except ImportError:
     import context_budget
     import hq
 
-# hq owns the path so the verb that writes it and the hook that reads
-# it cannot disagree.
-SENTINEL = hq.SENTINEL
+# The README names this path as the switch, so moving it silently
+# disarms every machine that created the file.
+SENTINEL = os.path.expanduser('~/.claude/.nudge-handoff')
 
 
 def open_cycle_above(start: pathlib.Path, now: str) -> bool:

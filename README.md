@@ -334,9 +334,9 @@ one moment an instruction redirects a turn without interrupting work
 already under way.
 
 ```
-hq nudge on    # arm
-hq nudge off   # disarm
-hq nudge       # report which it is
+touch ~/.claude/.nudge-handoff    # arm
+rm -f ~/.claude/.nudge-handoff    # disarm
+ls ~/.claude/.nudge-handoff       # present means armed
 ```
 
 Presence alone is the switch and it takes effect at the next prompt, so

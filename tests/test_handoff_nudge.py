@@ -15,8 +15,6 @@ import sys
 
 from scripts import context_budget, handoff_nudge
 
-from bin import hq
-
 _SESSION = 'session-nudge'
 _REPO = pathlib.Path(__file__).resolve().parent.parent
 
@@ -75,18 +73,6 @@ def _arm(tmp_path, monkeypatch, context, handoff_at, sentinel=True):
     work = tmp_path / 'work'
     work.mkdir()
     return work
-
-
-def _hq(argv):
-    """Drive hq in process and return its exit code, stdout, and stderr.
-    """
-    out, err = io.StringIO(), io.StringIO()
-    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-        try:
-            rc = hq.main(argv)
-        except SystemExit as exc:
-            rc = exc.code
-    return rc, out.getvalue(), err.getvalue()
 
 
 def _run():
@@ -331,45 +317,14 @@ def test_nudge_stays_silent_until_a_handoff_point_is_recorded(
     assert _run() == (0, ''), 'an unmeasured session has no point either'
 
 
-def test_nudge_verb_arms_disarms_and_reports_which(tmp_path, monkeypatch):
-    """Verify hq nudge writes, removes, and reports the sentinel.
+def test_nudge_arms_on_the_sentinel_path_the_readme_names(tmp_path):
+    """Verify the file the README says to create is the one the hook reads.
 
-    Mutation: off unlinking nothing, on truncating a file it should
-    leave alone, the report inverted, a repeat exiting non-zero, or the
-    explaining body dropped so the file cannot say what it is for.
-    Oracle: the file on disk after each call, read independently of the
-    line the verb prints.
-    """
-    sentinel = tmp_path / '.nudge-handoff'
-    monkeypatch.setattr(hq, 'SENTINEL', str(sentinel))
-
-    rc, out, _ = _hq(['nudge'])
-    assert (rc, sentinel.exists()) == (0, False)
-    assert 'nudge is off' in out
-
-    assert _hq(['nudge', 'on'])[0] == 0
-    body = sentinel.read_text()
-    assert 'hq nudge off' in body, 'the file must say how to disarm it'
-    assert 'nudge is on' in _hq(['nudge'])[1]
-
-    rc, out, _ = _hq(['nudge', 'on'])
-    assert (rc, 'already on' in out) == (0, True)
-    assert sentinel.read_text() == body, 'a repeat must not rewrite it'
-
-    assert _hq(['nudge', 'off'])[0] == 0
-    assert not sentinel.exists()
-    rc, out, _ = _hq(['nudge', 'off'])
-    assert (rc, 'already off' in out) == (0, True)
-
-
-def test_nudge_verb_and_hook_agree_on_the_sentinel_path(tmp_path):
-    """Verify the verb arms the very file the hook reads.
-
-    Mutation: either half holding its own copy of the path, which every
-    test that drives one side alone passes while the shipped feature
-    cannot be turned on at all.
-    Oracle: the verb and the hook run as separate processes under one
-    redirected HOME, so only a shared path makes the hook fire.
+    Mutation: SENTINEL moved off ~/.claude/.nudge-handoff, which every
+    in-process test passes because each repoints SENTINEL, while the
+    documented switch cannot turn the feature on at all.
+    Oracle: the README's path under a redirected HOME, created and
+    removed by hand while the hook runs as a separate process.
     """
     home = tmp_path / 'home'
     (home / '.claude' / 'cache' / 'claude-handoff').mkdir(parents=True)
@@ -393,15 +348,9 @@ def test_nudge_verb_and_hook_agree_on_the_sentinel_path(tmp_path):
         assert done.returncode == 0, done.stderr
         return done.stdout
 
-    def verb(*args):
-        done = subprocess.run(
-            [str(_REPO / 'bin' / 'hq'), 'nudge', *args],
-            capture_output=True, text=True,
-            env={**os.environ, 'HOME': str(home)}, timeout=60)
-        assert done.returncode == 0, done.stderr
-
+    sentinel = home / '.claude' / '.nudge-handoff'
     assert hook() == '', 'disarmed by default'
-    verb('on')
-    assert 'additionalContext' in hook(), 'hq nudge on must arm the hook'
-    verb('off')
-    assert hook() == '', 'hq nudge off must disarm the hook'
+    sentinel.touch()
+    assert 'additionalContext' in hook(), 'creating the file must arm the hook'
+    sentinel.unlink()
+    assert hook() == '', 'removing the file must disarm the hook'
