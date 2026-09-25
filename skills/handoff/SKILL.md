@@ -246,7 +246,8 @@ Run these steps in order:
    the marker alone.
 5. Run the Reviewer pass (below); each surviving finding becomes a
    `note`, a `stamp`, or a cursor edit in this cycle - return to step 2
-   for it.
+   for it. A cursor line that a surviving finding names moves out by
+   the printed rules.
 6. `hq finish <slug> --log "<one line for the Log>"`. It exits 1 on
    the first blocking line; make its move and re-run. `advisory:`
    lines never block. Then it drains Unfiled, renders the blocks, writes
@@ -288,7 +289,16 @@ the agent never grants itself the skip.
   blocks after this pass, so they are a cycle behind: a stale or
   absent sha, cycle, id, row, or label there is never a finding. Read
   a standing id the cursor cites with `hq standing <slug> <id>`, never
-  from the block.
+  from the block. Last, name each cursor line the next session does
+  not act on. A line it acts on is one it executes, checks, obeys, or
+  answers, or needs to understand one of those. Lines it does not act
+  on include history, a done Plan item, an open item's detail beyond
+  its done condition, a closed approach or superseded item, and a
+  ruling already applied or recorded in a Standing item. One finding
+  covers a run of adjacent lines of one kind: its section, its first
+  and last words, and why. Never name a line the Now step, an open
+  Plan item, or an open question depends on, or an environment fact
+  that work uses.
 
 ### Report
 

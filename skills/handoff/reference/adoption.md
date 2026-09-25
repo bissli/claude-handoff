@@ -73,10 +73,9 @@ Everything else:
   questions - and keep every fact.
 - A directive the file quotes - a reading order, a backup or worktree
   it says never to delete - becomes a `## Constraints` entry.
-- What fits nowhere, or that a resuming reader does not need first,
-  moves whole to a sibling `notes/<topic>.md`, stamped
-  `--read-before edit` when the cursor points at it - rehomed, never
-  cut. Touch no sibling file except to add.
+- What fits nowhere moves whole to a sibling `notes/<topic>.md`,
+  stamped `--read-before edit` when the cursor points at it. Touch no
+  sibling file except to add.
 
 ## 4. Continue at Write path step 1
 

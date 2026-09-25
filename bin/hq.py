@@ -393,21 +393,17 @@ Cursor rules:
 - Point, never paste: a rehomed sibling is stamped with hq stamp;
   its pointer line is generated, never typed.
 - Skip what the repo records: git history, CLAUDE.md, README content.
-- Too big for the file but worth keeping: a sibling notes/<topic>.md,
-  stamped --read-before edit when the cursor points at it; its label,
-  to 120 characters, prints in the Artifacts block while the cursor
-  names it.
+- A notes sibling is notes/<topic>.md, stamped --read-before edit
+  when the cursor points at it; its label, to 120 characters, prints
+  in the Artifacts block while the cursor names it.
 - Name where a credential lives, never its value.
 - Absolute dates. ASCII only.
 - Now is the single next action; Plan, the approved plan, is what
   follows it; neither is re-opened.
 - Now alone is spent each cycle. Every other line stays or moves
-  whole to a note body or a stamped sibling - what a resuming reader
-  does not need first moves, never cut; finish lists a line dropped
-  anyway.
-- A done Plan item, and an open item's detail beyond its done
-  condition, move whole to a stamped notes sibling; a fact true for
-  the rest of the thread becomes a constraint.
+  whole, never cut: a closed approach to a Standing item by the next
+  rule, a fact true for the rest of the thread to a constraint, and
+  the rest to a notes sibling. finish lists a line dropped anyway.
 - Every approach a cycle closes becomes one Standing item naming it:
   a ruled-out approach is a dead end whose headline carries the scope
   it was ruled out on, and a result later work builds on is a
