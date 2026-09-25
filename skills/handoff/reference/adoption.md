@@ -87,7 +87,7 @@ and prints what still needs judgment. Each line and its move:
 
 - `label: <text>` - one per seeded label; settle each with a `stamp`
   in write step 3.
-- `read_before=<x>: <n>` - counts by grade.
+- `read_before=<x>: <n>` - counts by tier.
 - `gated (n): <names>` - the rows the read block will carry.
 - `where dropped: <path> '<anchor>'` - an `s<n>` or `section <n>` the
   label cites names no heading of that file. `s1` in prose most often
@@ -126,7 +126,7 @@ section, or a stamped sibling - and settle each label with a `stamp`.
   HANDOFF.md in <folder>` (exit 1 each).
 - `hq adopt: seeded N entries in <slug>` on success - the ledger's
   row count: every walk entry but `HANDOFF.md`, `ledger.tsv`,
-  `standing.md`, `cycles/`, `.hq.lock`, and dotfiles, plus every Key
+  `standing.md`, `cycles/`, `work-dir`, and dotfiles, plus every Key
   files pointer the walk cannot see.
 
 ## The adopt manifest row and Log line

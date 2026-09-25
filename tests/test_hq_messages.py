@@ -681,7 +681,8 @@ def test_read_and_diff_refusals_print_their_documented_lines(tmp_path, monkeypat
     assert (rc, out.strip()) == (
         1,
         ('hq read: SPEC.md not on disk'
-         ' - re-point, supersede, or archive its row at the next write'))
+         ' - restore the file, or stamp --successor or --archive'
+         ' --reason at the next write'))
     rc, out, _ = _run(['diff', _SLUG, '4', '5'])
     assert (rc, out.strip()) == (
         1,

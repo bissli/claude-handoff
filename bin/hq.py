@@ -198,58 +198,37 @@ Kind inference, first match wins:
   *.py *.sql *.js *.ts *.ps1 at the folder's top level draft      edit
   anything else, a nested or outside file included     other      never
 
-read_before is a tier - when the file is loaded, and what belongs there:
-
-  grade    means                      loaded when
-  always   the contract               every resume, Read first
-  edit     read before you change it  the gate, at a write to it
-  never    on the record              on demand, hq read or hq when
+read_before is a tier (hq help write has the table); what belongs in each:
 
 - always holds spec sections and anchored notes; edit holds drafts,
   code, tests, and templates; never holds notes, evidence, reviews,
   outputs, snapshots, and superseded rows.
-- always requires an anchor: a stamp that would leave a live always
-  row with no --where is refused, new row and re-stamp alike, whatever
-  the kind, and the receipt row records it; the file's headings print
-  under the refusal, one per line. A spec needed whole is anchored at
-  its title heading, and its size prints beside it in the Read first
-  block. A file with no headings cannot be always.
-- The kind folder sets the kind of a file one level under it, whatever
-  the name but a snapshot-shaped one (*.bak, *.orig.*, *.prev.*,
-  *.pre-*, cycle<N>), which stays a snapshot; probes/, like any other
-  directory, is one probe-dir entry, stamped as a unit or recorded by
-  the rows of its files. drafts/ holds the candidate that will land,
-  gated edit; a throwaway script goes to probes/. A thread pinned
-  with hq work-dir keeps the specs, drafts, and outputs it makes in
-  that directory instead (hq work-dir --help).
+- always requires an anchor (R1 in hq help rules), so a file with
+  no headings cannot be always.
+- drafts/ holds the candidate that will land, gated edit; a
+  throwaway script goes to probes/. A thread pinned with hq work-dir
+  keeps the specs, drafts, and outputs it makes in that directory
+  instead (hq work-dir --help).
 - Outside the folder only the draft rule lapses: a SPEC*-shaped name
   or a Spec/Design first heading still infers spec; any other outside
   file infers other/never - pass --kind spec to gate it always or
-  --kind draft to gate it edit; the writer grades a note the cursor
-  points at edit when a change to it must read it first.
+  --kind draft to gate it edit.
 - When a stem (SPEC) has several members, adopt and begin gate only
   the newest spec-kind file; every older stem-mate is stamped
   superseded/never pointing at the newest.
-- --kind takes spec, draft, notes, todo, snapshot, probe-dir, or
-  other; --read-before always, edit, or never; --status
-  live, superseded, archived, or missing.
-- --kind, --read-before, --status, --where, and --label default to
-  the previous row's value; --reason carries only while kind, status,
-  and read_before all hold.
-- --successor P sets status=superseded read_before=never unless the
-  stamp says otherwise. --archive sets status=archived
-  read_before=never and requires --reason.
 - Read first block: one line per live always row with the size of
   what hq read prints - .handoff/<slug>/specs/SPEC.md:11-13
   (320 tok)  label for an anchored row, and (186 lines, 8.2k tok)
   for a whole file an older cycle left; a file that is not UTF-8
   text shows bytes, (35 KB), and a directory (N files). Tokens are
   len(text) // 4.
-- Artifacts block: a live row prints in full, no cap, when it is
-  graded always, this cycle stamped it, or the cursor names its path
-  or basename. Every other live row prints as its path alone, and one
-  closing line names hq when <slug> <path>, which prints that path's
-  rows; a folded row still gates. Rows no longer live collapse to
+- Artifacts block: a live row graded always prints its path, kind,
+  tier, and cycle, its label left to the Read first block; a live row
+  this cycle stamped, or whose path or basename the cursor names,
+  adds its label to 120 characters, +Nc - hq when for the rest. Every
+  other live row prints as its path alone, and one closing line names
+  hq when <slug> <path>, which prints that path's rows; a folded row
+  still gates. Rows no longer live collapse to
   superseded/archived/missing counts.
 - Paths in both blocks resolve from a base the block's first line
   names. The bases are the project root and a work dir pinned
@@ -264,7 +243,7 @@ read_before is a tier - when the file is loaded, and what belongs there:
   spelling a block prints is a spelling stamp takes too, and it
   keys the row the stored spelling keys.
 - Standing block: an item the cursor cites by id, or one this cycle
-  recorded, prints whole - a constraint its headline and the first
+  recorded, prints expanded - a constraint its headline and the first
   sentence of its body, a decision or dead end its headline; +Nc
   counts the characters held back. Every other item prints as
   [id] headline, no cap, and hq standing <slug> <id> prints any item
@@ -311,9 +290,7 @@ The reading steps hq open prints after its findings; each binds.
 - An item the Standing block names prints whole with
   hq standing <slug> <id>. Where the thread started, how it got
   here, or where it stands overall goes to hq arc <slug> first; the
-  agent answers from it and reads further only for a fact it lacks.
-- A later bare /handoff that writes targets this handoff: write target
-  rule 2 in the skill.""",
+  agent answers from it and reads further only for a fact it lacks.""",
     'rules': """\
 hq help rules - what the script refuses and why
 
@@ -349,17 +326,9 @@ R3  A live row with read_before in {always, edit} whose file sha
     re-stamp alone clears R3.
 W1, W2  finish and open check that ledger.tsv and standing.md are
     byte-prefix-identical to their last finished state; an edited
-    recorded line is a hard fail in finish. When a known tool caused
-    the break (a formatter, a merge), pass --acknowledge "<reason>"
-    to finish; the reason lands in the manifest.
-
-not carried  finish compares the last finished cycle's cursor against
-    the new one, standing.md, the live labels and the stamped
-    siblings, and lists each line none of them carries as an
-    advisory. It never refuses, and the manifest records the count.
-    The Now step is exempt, since the cycle completing it writes the
-    next one. hq open <slug> --not-carried lists every such line
-    before finish and writes nothing.""",
+    recorded line blocks finish. When a known tool caused the break
+    (a formatter, a merge), pass --acknowledge "<reason>" to finish;
+    the reason lands in the manifest.""",
     'stale-path': """\
 hq help stale-path - a folder path under a former directory
 
@@ -393,6 +362,8 @@ Cursor rules:
 - Point, never paste: a rehomed sibling is stamped with hq stamp;
   its pointer line is generated, never typed.
 - Skip what the repo records: git history, CLAUDE.md, README content.
+- Environment carries the background tasks still running and any
+  second repo this session changed (path, branch, sha).
 - A notes sibling is notes/<topic>.md, stamped --read-before edit
   when the cursor points at it; its label, to 120 characters, prints
   in the Artifacts block while the cursor names it.
@@ -426,19 +397,18 @@ hq arc:
 - A check writes check: <n> findings applied - <what they changed>.
 
 Ledger tiers - read_before is a tier, and stamp seeds it from the
-kind: a spec seeds always, a draft edit, all else never. Of several
-SPEC* stem-mates only the newest is gated.
+kind: a spec seeds always, a draft edit, all else never.
 
-  tier     read                     when
+  tier     means                    loaded when
   always   the contract             every resume
   edit     before a change to it    the gate, at a write to it
-  never    on demand                hq read, hq when
+  never    on the record            on demand: hq read, hq when
 
 - always requires an anchor: a stamp that would leave a live always
   row with no --where is refused and the file's headings print under
   the refusal; a spec needed whole is anchored at its title heading.
-  A whole file is never eager: a note or a source file the cursor
-  points at is edit or never.
+  A whole file cannot be always: a notes file the cursor points at
+  is edit, a source file edit or never.
 - stamp accepts a wrong anchor, which shows only as SPEC.md:? in the
   read block - check the heading first; every --where form is in
   hq help anchors.
@@ -450,24 +420,22 @@ Rules the script enforces (hq help rules has each in full):
 
 - R1 A spec row keeps always and a draft row edit or always -
   inferred, stored, or by --kind; both keep live and their kind,
-  unless --successor names a live file on disk other than itself, or
-  --archive --reason is given. A path that has ever been spec or
-  draft stays gated: its way back to live is that tier.
+  unless --successor names another file on disk, or --archive
+  --reason is given. A path that has ever been spec or draft stays
+  gated: its way back to live is that tier.
 - R2 A refused stamp still appends a receipt row, reason set to
   'refused: <why>'; it clears nothing.
 - R3 A live row graded always or edit whose file sha moved blocks
   finish; a re-stamp alone clears it.
-- W1, W2 An edited recorded line in ledger.tsv or standing.md is a
-  hard fail in finish; when a known tool caused it (a formatter, a
-  merge), pass --acknowledge "<reason>" to finish.
+- W1, W2 An edited recorded line in ledger.tsv or standing.md blocks
+  finish; when a known tool caused it (a formatter, a merge), pass
+  --acknowledge "<reason>" to finish.
 
 Standing items:
 
-- note takes a kind - decision, constraint, dead-end - a one-line
-  --headline, and the body as the last argument.
-- supersede takes two ids of one kind, old then new, and echoes the
-  item it drops from the block; a ruling inside that text which
-  still holds takes one more hq note under a new id.
+- supersede echoes the item it drops from the block; a ruling
+  inside that text which still holds takes one more hq note under
+  a new id.
 
 Unfiled - items settled this session with no note call go under
 ## Unfiled, above the first <!-- hq: marker, as typed bullets, one
@@ -481,8 +449,8 @@ per item:
 - A bullet with no bold span takes its first sentence as the
   headline (a one- or two-word sentence, 'Cycle 26.', is a label and
   the headline runs on).
-- finish drains the section into standing.md; an untyped bullet is a
-  hard fail that writes nothing.
+- finish drains the section into standing.md; an untyped bullet
+  blocks finish.
 - Omit the section when every item went through note.
 
 A plan that lives in a todo file - work often has a ledger of its
@@ -543,8 +511,8 @@ def anchors(folder: pathlib.Path, argv: argparse.Namespace) -> dict:
     Notes
     -----
     - Precedence: ``HQ_CYCLE``, ``HQ_NOW``, and ``HQ_HOST`` each override
-      the git/socket/default they fall back to; ``--session`` overrides
-      ``HQ_SESSION`` the same way.
+      the manifest cycle, the clock, and the hostname they fall back to;
+      ``--session`` overrides ``HQ_SESSION`` the same way.
     - ``HQ_GIT=0`` disables git calls; branch and sha become ``'-'``.
     - cycle is last manifest row's cycle + 1, or 1 with no manifest rows.
     - A cycle or timestamp that does not parse exits before any verb runs:
@@ -6188,7 +6156,8 @@ def _verb_read(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     if not file_path.exists():
         print(
             f'hq read: {path} not on disk'
-            ' - re-point, supersede, or archive its row at the next write')
+            ' - restore the file, or stamp --successor or --archive'
+            ' --reason at the next write')
         return 1
     file_text = file_path.read_text(encoding='utf-8', errors='replace')
     file_lines = file_text.splitlines()
@@ -6816,19 +6785,19 @@ def _build_parser() -> argparse.ArgumentParser:
     """Return the top-level argument parser for every verb.
     """
     _top_epilog = (
-        'Every verb but list and help takes the slug first. A slug resolves\n'
-        'to an exact folder name under .handoff/, else a unique prefix of\n'
-        'one.\n'
+        'Every verb but list, help, and nudge takes the slug first. A slug\n'
+        'resolves to an exact folder name under .handoff/, else a unique\n'
+        'prefix of one.\n'
         'Two flags before the verb - --root DIR, --session ID - override\n'
         'the HQ_ROOT and HQ_SESSION environment values the script\n'
         'otherwise reads; a session never needs them. HQ_CYCLE, HQ_NOW,\n'
-        'and HQ_HOST override their own git/socket/default fallbacks the\n'
-        'same way, from the environment alone. A ~ in --root or HQ_ROOT\n'
-        'is expanded.\n'
+        'and HQ_HOST override the cycle, clock, and hostname the same way,\n'
+        'from the environment alone. A ~ in --root or HQ_ROOT is expanded.\n'
         'Exit 0 is done; 1 is a refusal or a blocking finding, and nothing is\n'
         'written except that a refused stamp appends its receipt row; 2 is a\n'
         'usage error. All output is stdout, one fact per line.\n'
-        'Reference: hq help anchors | kinds | rules | stale-path.'
+        'Reference: hq help write | read | anchors | kinds | rules |\n'
+        'stale-path.'
     )
     p = argparse.ArgumentParser(
         prog='hq',
@@ -6862,12 +6831,13 @@ def _build_parser() -> argparse.ArgumentParser:
         'A relative token is tried against the folder, then the project root,\n'
         'then a pinned work dir, and stores the form it resolves to; a token\n'
         'none of the three holds exits 2. The cwd and home are never\n'
-        'searched. An outside .py/.sql/\n'
-        '.js/.ts/.ps1 infers other/never: pass --kind draft to gate it at edit.\n'
+        'searched. An outside .py/.sql/.js/.ts/.ps1 infers other/never: pass\n'
+        '--kind draft to gate it at edit.\n'
         'A live always row needs --where: a stamp that would leave one with\n'
         "no anchor is refused and prints the file's headings.\n"
         '--kind, --read-before, --status, --where, and --label default to the\n'
         "previous row's value; omit them on a re-stamp to carry them forward.\n"
+        '--reason carries only while kind, status, and read_before all hold.\n'
         'A label shorter than its comparand, or missing one of its backticked\n'
         'tokens or s<n> references, draws an advisory on the stamp that wrote\n'
         'it; the row stands. The comparand is the last label an earlier cycle\n'
@@ -6877,8 +6847,9 @@ def _build_parser() -> argparse.ArgumentParser:
         'A stamp that gives --where and lets --label carry forward draws a\n'
         'third advisory where the label names an s<n> section the new spans\n'
         'do not cover.\n'
-        '--successor P sets status=superseded read_before=never; --archive\n'
-        'sets status=archived read_before=never and requires --reason.\n'
+        '--successor P sets status=superseded read_before=never unless the\n'
+        'stamp says otherwise; --archive sets status=archived\n'
+        'read_before=never and requires --reason.\n'
         '--batch reads one stamp per stdin line, the same\n'
         'arguments minus the slug, split like a shell line.\n'
         'See hq help kinds (inference and fields), hq help anchors (--where\n'
@@ -6909,11 +6880,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
     _note_epilog = (
         'Kinds are decision, constraint, dead-end. Each item prints the id it\n'
-        'was given. --headline is required and\n'
-        'one line; the body follows it as the last argument. --batch reads\n'
-        'one note per stdin line: <kind> --headline "<h>" <body>, the body\n'
-        'taken verbatim to the end of the line, quotes and apostrophes\n'
-        'included; a body wrapped whole in one pair of quotes loses the pair.'
+        'was given. --headline is required and one line; the body follows it\n'
+        'as the last argument. --batch reads one note per stdin line: <kind>\n'
+        '--headline "<h>" <body>, the body taken verbatim to the end of the\n'
+        'line, quotes and apostrophes included; a body wrapped whole in one\n'
+        'pair of quotes loses the pair.'
     )
     # The kind slot carries no choices: the batch marker '-' lands
     # here on 3.13 and later, and _verb_note names an unknown kind.
@@ -6942,22 +6913,19 @@ def _build_parser() -> argparse.ArgumentParser:
 
     _finish_epilog = (
         '--log is the one line the Log keeps for this cycle and its whole\n'
-        'entry in hq arc: what the cycle did to the task - what shipped,\n'
-        'what a measurement found, what was decided - with the name,\n'
-        'version, or figure a reader can check. A standing id is spelled\n'
-        'out; a bare id reads as nothing. A cycle that only repaired the\n'
-        'record says which fact it restored; a check writes check: <n>\n'
-        'findings applied - <what they changed>. --acknowledge\n'
-        '"<reason>" turns a W1 or W2 witness break into an acknowledged line\n'
-        'and records the break and the reason in the manifest.\n'
+        'entry in hq arc; hq help write says what it holds, and a check\n'
+        'writes check: <n> findings applied - <what they changed>.\n'
+        '--acknowledge "<reason>" turns a W1 or W2 witness break into an\n'
+        'acknowledged line and records the break and the reason in the\n'
+        'manifest.\n'
         'The cursor lines from the last finished cycle that nothing now\n'
         'carries print as an advisory, and the manifest records their\n'
-        'count; they never block the write. hq open <slug> --not-carried\n'
-        'lists every such line before finish.\n'
+        'count; they never block the write, and the Now step is exempt.\n'
+        'hq open <slug> --not-carried lists every such line before finish.\n'
         'After the size line the print carries +N tok since cNN, this\n'
         "cycle's payload against the last one the manifest recorded: a\n"
-        'level cut shows here being erased, cycle by cycle, while a\n'
-        'session can still act on it. It is absent on the first cycle.'
+        'fall shows content being erased, cycle by cycle, while a session\n'
+        'can still act on it. It is absent on the first cycle.'
     )
     fin = sub.add_parser(
         'finish',
@@ -6968,18 +6936,17 @@ def _build_parser() -> argparse.ArgumentParser:
     fin.add_argument('--acknowledge')
 
     _done_epilog = (
-        'The finish line of the whole thread, not of one cycle: finish ends\n'
-        'a cycle and the thread goes on, done ends the thread. hq list stops\n'
-        'showing the folder and hq begin refuses it; every read verb still\n'
-        'answers, and nothing is deleted. The mark is one file, .hq.done in\n'
-        'the folder, holding the slug, the time, the last finished cycle,\n'
-        'and the reason.\n'
+        'finish ends a cycle and the thread goes on; done ends the thread.\n'
+        'hq list stops showing the folder and hq begin refuses it; every\n'
+        'read verb still answers, and nothing is deleted. The mark is one\n'
+        'file, .hq.done in the folder, holding the slug, the time, the\n'
+        'last finished cycle, and the reason.\n'
         '--reason "<line>" records why; whitespace in it collapses to single\n'
         'spaces. --undo removes the mark and the thread runs on. done\n'
         'refuses a folder whose cycle is still open; finish it first.\n'
         'A second done leaves the first mark and prints its date, so the\n'
-        'finish date survives a repeat; change the reason by --undo and a\n'
-        'fresh done. hq list --done lists the marked folders.'
+        'first done date survives a repeat; change the reason by --undo and\n'
+        'a fresh done. hq list --done lists the marked folders.'
     )
     dn = sub.add_parser(
         'done',
@@ -7060,7 +7027,8 @@ def _build_parser() -> argparse.ArgumentParser:
     df.add_argument('--full', action='store_true')
 
     _arc_epilog = (
-        'The whole thread in one read: where it began, one History line\n'
+        'The whole thread in one read: the cycle range and dates, Began as\n'
+        "where the first cycle's Task differs, Task, one History line\n"
         "per finished cycle - c<N> <written>  <that cycle's --log> - then\n"
         'Now, the open questions, and the open Plan items of HANDOFF.md,\n'
         'each by its first sentence. A thread adoption began prints its\n'
@@ -7106,11 +7074,11 @@ def _build_parser() -> argparse.ArgumentParser:
         'd21 in c5]. Past one hop the id form adds the chain itself:\n'
         '[superseded by d21 in c5 - d18 -> d20 -> d21]. An id not in\n'
         'standing.md prints hq standing: <id> not in standing.md and exits 1.\n'
-        '--grep PATTERN keeps the items whose headline or\n'
-        'body matches the pattern, case-insensitively, and exits 2 when the\n'
-        'pattern is not a regular expression; --kind constraint|decision|\n'
-        'dead-end keeps one kind; --in-cycle N keeps the items recorded in\n'
-        'cycle N. The three compose, and a named id outranks all of them.'
+        '--grep PATTERN keeps the items whose headline or body matches the\n'
+        'pattern, case-insensitively, and exits 2 when the pattern is not a\n'
+        'regular expression; --kind constraint|decision|dead-end keeps one\n'
+        'kind; --in-cycle N keeps the items recorded in cycle N. The three\n'
+        'compose, and a named id outranks all of them.'
     )
     st = sub.add_parser(
         'standing',
@@ -7130,8 +7098,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "alone, '-' when the Plan has no checkbox item; a file with no\n"
         "conforming header shows '-' for the date and the cycle; an\n"
         "unreadable file shows '-  -  -  unreadable: <reason>'. Ties in the\n"
-        'same second list A to Z by slug. A bare list\n'
-        'shows every one; list 5 the five most recent.\n'
+        'same second list A to Z by slug. A bare list shows every one;\n'
+        'list 5 the five most recent.\n'
         'A folder marked by hq done is left out, and a closing line counts\n'
         'them: --done lists those folders instead, the open ones left out,\n'
         'and prints no count line. A count caps whichever set is shown.'
@@ -7151,8 +7119,8 @@ def _build_parser() -> argparse.ArgumentParser:
         'checks it - already on disk, not the root, not under .handoff/,\n'
         'not under the system temp directory unless the root itself is;\n'
         'inside the root or out - and writes it to the pin, root-relative\n'
-        'under the root, else by ~ or absolutely;\n'
-        'a refused token writes nothing (exit 1). --clear removes the pin.\n'
+        'under the root, else by ~ or absolutely; a refused token writes\n'
+        'nothing (exit 1). --clear removes the pin.\n'
         "Pin only when the thread's spec and experiments already live in a\n"
         'project directory, judged at the first begin: the specs, drafts,\n'
         'and outputs the thread makes then go there, stamped by their ~ or\n'
@@ -7338,8 +7306,7 @@ def main(argv: list[str]) -> int:
             if topic is None:
                 for key, body in HELP_TOPICS.items():
                     lines = body.splitlines()
-                    first_line = next(
-                        (l for l in lines[1:] if l.strip()), '')
+                    first_line = lines[0].split(' - ', 1)[1]
                     print(f'hq help {key}: {first_line}')
                 return 0
             if topic not in HELP_TOPICS:
