@@ -20,24 +20,195 @@ from itertools import starmap
 import budget  # noqa: E402  (path must be set before this import resolves)
 import statusline as sl  # noqa: E402  (same)
 
+# A cycle climbing 10,000 tokens a call from a 70,000 floor, on Opus 5.5
+# at the 1-hour write price with nothing written on the first call: the
+# handoff point is 514,765 and the escalation point 690,765.
+CLIMB = [70_000 + 10_000 * step for step in range(90)]
 
-def test_every_model_is_held_to_the_same_cost_per_turn():
-    """Verify targets are derived from price, not set per model by hand.
 
-    Mutation: hard-coding a token target per model, which is how a
-    costlier model ends up with the same room and quietly costs more.
-    Oracle: differential - on the tiers whose cost parity clears the
-    compaction cycle floor, each derived target must reproduce the
-    declared dollar budget when run back through the cost formula, and
-    the costlier of the two must be given the smaller target.
+def test_the_handoff_point_reproduces_the_worked_values():
+    """Verify H* = C0 + sqrt(2 g A) on the three worked cycles.
+
+    Mutation: any dropped or rescaled term of A - the resume sum S0, the
+    handoff write's w (C0 + W/2), or the m (Fw + C0 - F + W) cache
+    writes - or the factor 2 under the root.
+    Oracle: hand-computed from the formula with F 62,000, Fw 50,000,
+    g 2,300, w 17.6, W 40,480, m 40. At C0 80,000 and S0 700,000,
+    A = 700,000 + 17.6 * 100,240 + 40 * 108,480 = 6,803,424 and
+    sqrt(4,600 A) = 176,906.05, so H* = 256,906; likewise 376,934 at
+    C0 150,000 with S0 1,060,000, and 456,614 at C0 200,000 with S0
+    1,300,000.
     """
-    slow = 1_200
-    for tier in ('fable-5-1', 'opus-5-5'):
-        target = budget.target_tokens(tier, slow)
-        assert abs(budget.cost_per_turn(target, tier)
-                   - budget.COST_PER_TURN_TARGET) < 0.02
-    assert (budget.target_tokens('fable-5-1', slow)
-            < budget.target_tokens('opus-5-5', slow))
+    assert budget.handoff_write_tokens(2_300) == 40_480
+    assert budget.write_read_ratio('opus-5-5', True) == 40
+    for resume_context, resume_sum, point in ((80_000, 700_000, 256_906),
+                                              (150_000, 1_060_000, 376_934),
+                                              (200_000, 1_300_000, 456_614)):
+        cycle = budget.Cycle(floor=62_000, floor_written=50_000,
+                             resume_context=resume_context,
+                             resume_sum=resume_sum, one_hour=True)
+        assert budget.handoff_point(cycle, 2_300, 'opus-5-5') == point
+
+
+def test_a_longer_resume_earns_a_longer_cycle():
+    """Verify H* and the work room past the resume both rise with C0.
+
+    Mutation: anchoring H* at the floor F instead of the resume end C0,
+    so every resume token comes out of the work room - the micro-cycle
+    defect, where each handoff's longer resume shortens the next cycle.
+    Oracle: monotonicity - with F, Fw, S0, g, and m held fixed, both
+    H* and H* - C0 must strictly increase across rising C0, since A
+    rises by w + m per resume token.
+    """
+    points = []
+    for resume_context in (62_000, 80_000, 150_000, 200_000, 300_000):
+        cycle = budget.Cycle(floor=62_000, floor_written=50_000,
+                             resume_context=resume_context,
+                             resume_sum=700_000, one_hour=True)
+        points.append((resume_context,
+                       budget.handoff_point(cycle, 2_300, 'opus-5-5')))
+    assert [point for _, point in points] == sorted(
+        {point for _, point in points})
+    rooms = [point - resume_context for resume_context, point in points]
+    assert rooms == sorted(set(rooms))
+
+
+def test_the_cache_ttl_picks_the_write_price_ratio(tmp_path):
+    """Verify m is the published write price over the read price, by TTL.
+
+    Mutation: swapping the 1-hour and 5-minute multipliers, pricing a
+    write off the base input price rather than the tier's read
+    multiplier, or reading the TTL from the wrong breakdown key.
+    Oracle: the pricing page's per-MTok rows - Opus 5.5 writes at $5
+    (5m) and $8 (1h) against a $0.20 read, Fable 5.1 at $12.50 and $20
+    against $0.25, Opus 5 at $6.25 and $10 against $0.50, Sonnet 5 at
+    $2.50 and $4 against $0.20; and a transcript whose writes are
+    1-hour must read as one_hour, a 5-minute one must not.
+    """
+    for tier, five_minute, one_hour, read in (
+            ('opus-5-5', 5.00, 8.00, 0.20),
+            ('fable-5-1', 12.50, 20.00, 0.25),
+            ('fable', 12.50, 20.00, 1.00),
+            ('opus', 6.25, 10.00, 0.50),
+            ('sonnet-5', 2.50, 4.00, 0.20),
+            ('sonnet', 3.75, 6.00, 0.30)):
+        assert abs(budget.write_read_ratio(tier, False) - five_minute / read) \
+            < 1e-9
+        assert abs(budget.write_read_ratio(tier, True) - one_hour / read) \
+            < 1e-9
+    path = tmp_path / 's.jsonl'
+    for ttl, expected in (('1h', True), ('5m', False)):
+        records = []
+        for index, value in enumerate(CLIMB[:6]):
+            records.extend(_call(index, value, written=10_000, ttl=ttl))
+        path.write_text('\n'.join(json.dumps(r) for r in records))
+        assert cb.read_transcript(str(path))[3].one_hour is expected
+
+
+def test_the_resume_ends_at_the_first_call_that_does_other_work(tmp_path):
+    """Verify j0 is the first call after hq open that is not a handoff read.
+
+    Mutation: ending the resume at the first hq read or at the call
+    after hq open; counting a sidechain record, whose Edit ends the
+    resume early and whose context reads as a compaction; or taking a
+    call's tool uses from its first record only, which hides the Edit
+    written in the second.
+    Oracle: hand-built transcript - F 62,000 with 50,000 written, hq
+    open behind --root and --session flags, a Read, hq read and hq
+    standing, a sed of a .handoff path, then a call whose second record
+    is an Edit. C0 is that call's 84,000 and S0 is 62,000 + 64,000 +
+    70,000 + 78,000 + 84,000 = 358,000.
+    """
+    records = (
+        _call(0, 62_000, [('Skill', {'skill': 'handoff'})], written=50_000)
+        + _call(1, 64_000, [_bash('cd /w && hq --root /w --session s1 '
+                                  'open auth-token')])
+        + _call(2, 70_000, [('Read', {
+            'file_path': '/w/.handoff/auth-token/HANDOFF.md'})])
+        + _call(3, 78_000, [_bash('hq read auth-token specs/plan.md'),
+                            _bash('hq standing auth-token')])
+        + _call('side', 300_000, [('Edit', {'file_path': '/w/a.py'})],
+                sidechain=True)
+        + _call(4, 84_000, [_bash('sed -n 1,40p .handoff/auth-token/x.md'),
+                            ('Edit', {'file_path': '/w/src/app.py'})])
+        + _call(5, 90_000, [_bash('pytest -q')])
+        + _call(6, 96_000, [_bash('hq read auth-token specs/plan.md')]))
+    path = tmp_path / 's.jsonl'
+    path.write_text('\n'.join(json.dumps(r) for r in records))
+    context, _, _, cycle = cb.read_transcript(str(path))
+    assert context == 96_000
+    assert cycle == budget.Cycle(floor=62_000, floor_written=50_000,
+                                 resume_context=84_000, resume_sum=358_000,
+                                 one_hour=True)
+
+
+def test_a_compaction_restarts_the_floor_and_the_resume(tmp_path):
+    """Verify the cycle after a compaction is measured from its own start.
+
+    Mutation: scanning the whole transcript as one cycle, so the floor
+    and the resume stay those of the first cycle; or carrying the first
+    cycle's hq open across the drop.
+    Oracle: hand-built transcripts. A first cycle opens a handoff and
+    climbs to 300,000, then drops to 150,000 with 120,000 written. With
+    no open after the drop, C0 = S0 = F = 150,000; with an open at the
+    second call, C0 is the Edit's 170,000 and S0 is 150,000 + 152,000 +
+    160,000 + 170,000 = 632,000.
+    """
+    first = (_call(0, 62_000, written=50_000)
+             + _call(1, 64_000, [_bash('hq open auth-token')])
+             + _call(2, 70_000, [('Read', {
+                 'file_path': '.handoff/auth-token/HANDOFF.md'})])
+             + _call(3, 90_000, [('Edit', {'file_path': 'a.py'})])
+             + _call(4, 300_000, [_bash('pytest -q')]))
+    plain = (_call(5, 150_000, written=120_000)
+             + _call(6, 155_000, [('Edit', {'file_path': 'a.py'})])
+             + _call(7, 160_000, [_bash('pytest -q')]))
+    opened = (_call(5, 150_000, written=120_000)
+              + _call(6, 152_000, [_bash('hq open auth-token')])
+              + _call(7, 160_000, [_bash('hq arc auth-token')])
+              + _call(8, 170_000, [('Edit', {'file_path': 'a.py'})]))
+    path = tmp_path / 's.jsonl'
+    path.write_text('\n'.join(json.dumps(r) for r in first + plain))
+    assert cb.read_transcript(str(path))[3] == budget.Cycle(
+        floor=150_000, floor_written=120_000, resume_context=150_000,
+        resume_sum=150_000, one_hour=True)
+    path.write_text('\n'.join(json.dumps(r) for r in first + opened))
+    assert cb.read_transcript(str(path))[3] == budget.Cycle(
+        floor=150_000, floor_written=120_000, resume_context=170_000,
+        resume_sum=632_000, one_hour=True)
+
+
+def test_the_resume_covers_ls_grep_cd_and_a_persisted_read(tmp_path):
+    """Verify each resume shape the marker must recognize keeps j0 open.
+
+    Mutation: dropping any one shape from the resume test - an ls of
+    .handoff/, a grep or wc of a HANDOFF file, a cd into .handoff/...
+    with a relative path, or a Read of a persisted tool-results file -
+    which would end the resume at that call instead of the pytest
+    after it.
+    Oracle: hand-built j0 - the pytest call is the first whose tool use
+    is not a resume shape, so C0 is its 110,000 and S0 is the six
+    calls up to and including it: 62,000 + 64,000 + 70,000 + 78,000 +
+    86,000 + 94,000 + 102,000 + 110,000 = 666,000.
+    """
+    records = (
+        _call(0, 62_000, written=50_000)
+        + _call(1, 64_000, [_bash('hq open auth-token')])
+        + _call(2, 70_000, [_bash('ls .handoff/auth-token/')])
+        + _call(3, 78_000, [_bash('grep -c "##" .handoff/auth-token/'
+                                  'HANDOFF.md')])
+        + _call(4, 86_000, [_bash('wc -l HANDOFF.md')])
+        + _call(5, 94_000, [_bash('cd .handoff/auth-token && '
+                                  'cat notes/x.md')])
+        + _call(6, 102_000, [('Read', {
+            'file_path': '/tmp/scratch/tool-results/abc.txt'})])
+        + _call(7, 110_000, [_bash('pytest -q')]))
+    path = tmp_path / 's.jsonl'
+    path.write_text('\n'.join(json.dumps(r) for r in records))
+    _, _, _, cycle = cb.read_transcript(str(path))
+    assert cycle == budget.Cycle(floor=62_000, floor_written=50_000,
+                                 resume_context=110_000, resume_sum=666_000,
+                                 one_hour=True)
 
 
 def test_a_generation_priced_on_its_own_is_not_read_as_its_family():
@@ -70,7 +241,7 @@ def test_a_cheap_model_is_left_alone(monkeypatch, capsys, tmp_path):
     which is what makes a plugin nag about a session whose whole cost is
     a few cents and train the user to ignore it; or Sonnet dropped from
     the price table, which silences a session billed at Opus 5.5's rate.
-    Oracle: a spy on stdout - the same 600K transcript prints on opus
+    Oracle: a spy on stdout - the same climb to 520K prints on opus
     and sonnet and prints nothing on haiku.
     """
     monkeypatch.setattr(cb, 'STATE_DIR', str(tmp_path / 'state'))
@@ -78,14 +249,9 @@ def test_a_cheap_model_is_left_alone(monkeypatch, capsys, tmp_path):
 
     def run(model, session):
         path = tmp_path / f'{session}.jsonl'
-        path.write_text(json.dumps({
-            'type': 'assistant',
-            'message': {
-                'id': 'm1', 'role': 'assistant', 'model': model,
-                'usage': {'cache_read_input_tokens': 600_000,
-                          'cache_creation_input_tokens': 0, 'input_tokens': 0},
-                },
-            }))
+        path.write_text('\n'.join(
+            json.dumps(_record(index, value, model=model))
+            for index, value in enumerate(CLIMB[:46])))
         payload = {'session_id': session, 'transcript_path': str(path)}
         monkeypatch.setattr(sys, 'stdin', _Stdin(json.dumps(payload)))
         cb.main()
@@ -96,74 +262,27 @@ def test_a_cheap_model_is_left_alone(monkeypatch, capsys, tmp_path):
     assert run('claude-haiku-4-5', 'b') == ''
 
 
-def test_the_over_band_holds_the_dollar_limit_and_the_order():
-    """Verify over-budget means the dollar limit and never undercuts the
-    target.
-
-    Mutation: restoring over = target * (limit / target ratio), which on
-    a fast-growing fable session moves "overpriced" from $2.20 to $5 a
-    turn because the cycle floor inflates the target it scales; or
-    dropping the max() clamp, which puts the loudest band below the
-    budget one.
-    Oracle: the declared dollar limit run back through the cost formula
-    where cost decides, and the target itself where the cycle floor has
-    passed the limit.
-    """
-    for tier in budget.CACHE_READ_PER_MTOK:
-        seeded = budget.target_tokens(tier)
-        over = budget.over_budget_tokens(tier, seeded)
-        if budget.tokens_for_cost(budget.COST_PER_TURN_LIMIT, tier) > seeded:
-            assert abs(budget.cost_per_turn(over, tier)
-                       - budget.COST_PER_TURN_LIMIT) < 0.02
-        else:
-            assert over == seeded
-        for per_call in (1_200, 1_900, 2_500, 6_300, 10_000):
-            target = budget.target_tokens(tier, per_call)
-            assert budget.over_budget_tokens(tier, target) >= target
-    assert budget.over_budget_tokens('fable', 400_200) == 400_200
-
-
-def test_the_over_band_prices_a_turn_in_dollars_not_in_tokens():
-    """Verify the loudest band names what a turn costs, not a ratio of
-    two token counts.
-
-    Mutation: printing context/target in the band-2 message. It reads
-    1.2x at the very point the turn costs 1.4x the target, so the number
-    that decides whether to keep going is understated by a fifth.
-    Oracle: hand-computed - fable crosses the over band at 250,000
-    tokens, where a turn costs $2.20, which is 3.55x the $0.62 target,
-    while the same context against fable's 206,600 target is 1.21x.
-    """
-    target = budget.target_tokens('fable')
-    assert target == 206_600
-    band, message = cb.compose(250_000, 'fable', 1_900, target,
-                               cb.latched_handoff(target, 1_900, 0))
-    assert band == 2
-    assert '$2.20' in message
-    assert '3.5x' in message
-    assert '1.2x' not in message
-
-
 def test_the_countdown_rounds_up_so_it_never_sticks():
     """Verify turns-left counts by ceiling, not floor-with-a-floor.
 
     Mutation: restoring max(1, int(...)), which shows "in 1" from 1.9
     turns of room all the way to the threshold - two turns reading the
     same - and overstates sub-turn room as a full turn.
-    Oracle: hand-computed at 1,900 tokens a call on opus - 23,408 tokens
-    of room to the 290,000 handoff point is 1.4 turns, which must read
-    "handoff in 2", and 50,000 to the 350,000 target is 2.99 turns,
-    "About 3".
+    Oracle: hand-computed at 1,900 tokens a call on opus with no state,
+    where the point is priced for a fresh 69,000 cycle at the 1-hour
+    write price: A = 69,000 + 17.6 * 85,720 + 40 * 102,440 = 5,675,272,
+    so H* = 69,000 + sqrt(3,800 A) = 215,854. From 171,000, 44,854
+    tokens of room is 2.7 turns of 16,720, which must read
+    "handoff in 3".
     """
     line = re.sub(r'\x1b\[[0-9;]*m', '', sl.render({
         'session_id': 'none',
         'model': {'id': 'claude-opus-5-5', 'display_name': 'Opus 5'},
         'workspace': {'current_dir': '/x/proj'},
-        'context_window': {'total_input_tokens': 266_592},
+        'context_window': {'total_input_tokens': 171_000},
         }))
-    assert 'handoff in 2' in line
-    _, message = cb.compose(300_000, 'opus-5-5', 1_900, 350_000, 290_000)
-    assert 'About 3 turns' in message
+    assert line.startswith('171K/215K')
+    assert 'handoff in 3' in line
 
 
 def test_growth_ignores_context_dropped_by_compaction():
@@ -220,108 +339,75 @@ def test_growth_falls_back_on_a_short_series():
     assert cb.growth_per_call([]) == budget.FALLBACK_GROWTH_PER_CALL
 
 
-def test_reserve_holds_a_floor_for_a_slow_session():
-    """Verify a barely-growing session still gets room to hand off.
+def test_band_one_sits_a_handoff_write_past_band_zero(monkeypatch, capsys,
+                                                      tmp_path):
+    """Verify band 0 fires at H*, band 1 at H* + W, and only band 1 rings.
 
-    Mutation: dropping the MIN_RESERVE_TOKENS floor, so a session growing
-    100 tokens a call reserves ~4K and the warning arrives with no room
-    left to write anything.
-    Oracle: hand-computed - 2 turns * 8.8 calls * 100 * 1.5 = 2,640,
-    which is below the floor and must be lifted to it. The floor holds
-    on a small target too, where a quarter of the budget is less than
-    the floor itself.
+    Mutation: the escalation point set at H* + g instead of H* + w g, a
+    flipped comparison in compose, or the desktop notification raised
+    on band 0 too.
+    Oracle: hand-computed on the 10,000-a-call climb - H* is 514,765
+    and W = 2 turns * 8.8 calls * 10,000 = 176,000, so the escalation
+    point is 690,765; the compose calls straddle both by one token.
     """
-    assert budget.reserve_tokens(350_000, 100) == budget.MIN_RESERVE_TOKENS
-    assert budget.reserve_tokens(206_600, 100) == budget.MIN_RESERVE_TOKENS
+    monkeypatch.setattr(cb, 'STATE_DIR', str(tmp_path / 'state'))
+    path = tmp_path / 's.jsonl'
 
+    def run(upto):
+        path.write_text('\n'.join(json.dumps(_record(index, value))
+                                  for index, value in enumerate(CLIMB[:upto])))
+        payload = {'session_id': 'W', 'transcript_path': str(path)}
+        monkeypatch.setattr(sys, 'stdin', _Stdin(json.dumps(payload)))
+        cb.main()
+        out = capsys.readouterr().out.strip()
+        with open(tmp_path / 'state' / 'W.json') as handle:
+            return json.loads(out) if out else {}, json.load(handle)
 
-def test_reserve_is_capped_so_it_cannot_swallow_the_session():
-    """Verify a fast-growing session cannot reserve the whole budget.
-
-    Mutation: removing the MAX_RESERVE_FRACTION ceiling. A session
-    adding 20K a call then reserves everything the post-compaction
-    clamp allows, 227,000 of a 350,000 target, and is warned at 123,000
-    - the first turn of every cycle, forever.
-    Oracle: hand-computed - the cap is a quarter of 350,000, and holds
-    at every rate past the one that saturates it.
-    """
-    for per_call in (6_000, 20_000, 100_000):
-        assert budget.reserve_tokens(350_000, per_call) == 87_500
-
-
-def test_bands_fire_in_order_and_not_before_the_handoff_point():
-    """Verify each band starts exactly where the arithmetic says it does.
-
-    Mutation: a flipped comparison in compose, or the handoff band
-    keyed off the target instead of target-minus-reserve, either of
-    which shifts every warning by a full reserve.
-    Oracle: hand-computed at 1,900 tokens/call - the reserve is
-    2 * 1,900 * 8.8 * 1.5 = 50,160, below the 60,000 floor and lifted to
-    it, so handoff starts at 290,000, the target at 350,000, and
-    over-budget at 500,000.
-    """
-    per_call = 1_900
-    assert budget.reserve_tokens(350_000, per_call) == 60_000
-    assert cb.compose(289_999, 'opus-5-5', per_call, 350_000, 290_000)[0] == -1
-    assert cb.compose(290_000, 'opus-5-5', per_call, 350_000, 290_000)[0] == 0
-    assert cb.compose(349_999, 'opus-5-5', per_call, 350_000, 290_000)[0] == 0
-    assert cb.compose(350_000, 'opus-5-5', per_call, 350_000, 290_000)[0] == 1
-    assert cb.compose(499_999, 'opus-5-5', per_call, 350_000, 290_000)[0] == 1
-    assert cb.compose(500_000, 'opus-5-5', per_call, 350_000, 290_000)[0] == 2
-
-
-def test_handoff_warning_arrives_earlier_when_the_session_fills_faster():
-    """Verify the warning point tracks growth instead of a fixed number.
-
-    Mutation: replacing the measured per-call growth with a constant, the
-    whole point of the design - a session reading large files would then
-    be warned at the same token count as a chat and blow past the target
-    mid-handoff.
-    Oracle: differential at a context of 270,000 - the slow rate puts
-    the point at 290,000 and stays silent, the fast rate puts it at
-    262,500 and is already warning.
-    """
-    slow = cb.compose(270_000, 'opus-5-5', 1_900, 350_000,
-                      cb.latched_handoff(350_000, 1_900, 0))
-    fast = cb.compose(270_000, 'opus-5-5', 6_000, 350_000,
-                      cb.latched_handoff(350_000, 6_000, 0))
-    assert slow[0] == -1
-    assert fast[0] == 0
+    announced, stored = run(46)
+    assert (stored['handoff'], stored['escalate']) == (514_765, 690_765)
+    assert 'terminalSequence' not in announced
+    announced, stored = run(64)
+    assert stored['band'] == 1
+    assert 'terminalSequence' in announced
+    assert cb.compose(514_764, 10_000, 514_765, 690_765)[0] == -1
+    assert cb.compose(514_765, 10_000, 514_765, 690_765)[0] == 0
+    assert cb.compose(690_764, 10_000, 514_765, 690_765)[0] == 0
+    assert cb.compose(690_765, 10_000, 514_765, 690_765)[0] == 1
 
 
 def test_message_names_the_numbers_the_reader_has_to_act_on():
-    """Verify the warning text carries context, target, and turns left.
+    """Verify the warning text carries context, handoff point, and growth.
 
     Mutation: a message that says only "context is large", which gives
-    the reader nothing to decide with.
-    Oracle: the hand-computed strings for a 300K context on a 350K
-    target growing 16,720 tokens a turn.
+    the reader nothing to decide with, or one that prints the
+    escalation point in place of the handoff point.
+    Oracle: the hand-computed strings for a 460K context on a 450,810
+    point growing 88,000 tokens a turn.
     """
-    _, message = cb.compose(300_000, 'opus-5-5', 1_900, 350_000, 290_000)
-    assert '300K' in message
-    assert '350K' in message
-    assert 'handoff' in message
-    assert '16K a turn' in message
+    _, message = cb.compose(460_000, 10_000, 450_810, 626_810)
+    assert '460K' in message
+    assert '450K handoff point' in message
+    assert '626K' not in message
+    assert '88K a turn' in message
 
 
 def test_the_warning_names_the_skill_the_plugin_ships():
     """Verify every warning band names the bundled handoff skill.
 
     Mutation: renaming skills/handoff/, or rewording a band so the
-    warning names a command that no longer exists - band 2 included,
-    since a floor-inflated target skips band 1 and band 2 is then the
-    only message carrying the exit. The word boundary is what makes a
-    rename to a longer name (handoff2) fail rather than pass on the
-    prefix.
+    warning names a command that no longer exists. The word boundary is
+    what makes a rename to a longer name (handoff2) fail rather than
+    pass on the prefix.
     Oracle: the skill's own frontmatter name on disk, matched against
-    the text of all three bands.
+    the text of both bands.
     """
     skill = os.path.join(HERE, '..', 'skills', 'handoff', 'SKILL.md')
     with open(skill) as handle:
         front = handle.read().split('---\n', 2)[1]
     name = re.search(r'^name:\s*(\S+)', front, re.M).group(1)
-    for context in (300_000, 360_000, 600_000):
-        _, message = cb.compose(context, 'opus-5-5', 1_900, 350_000, 290_000)
+    for context in (460_000, 700_000):
+        band, message = cb.compose(context, 10_000, 450_810, 626_810)
+        assert band >= 0
         assert re.search(rf'/{name}\b', message)
 
 
@@ -354,7 +440,7 @@ def test_repeated_stream_snapshots_do_not_inflate_the_series(tmp_path):
                     },
                 } for snapshot in range(3))
     path.write_text('\n'.join(json.dumps(r) for r in records))
-    context, model, per_call = cb.read_transcript(str(path))
+    context, model, per_call, _ = cb.read_transcript(str(path))
     assert context == 150_000
     assert model == 'claude-opus-5-5'
     assert per_call == 10_000
@@ -374,6 +460,33 @@ def _record(index, value, model='claude-opus-5-5', nested=False, flag=False):
     if flag:
         record['isApiErrorMessage'] = True
     return record
+
+
+def _call(index, value, tools=(), written=0, ttl=None, sidechain=False):
+    """Build the records of one call, one tool_use block per record.
+
+    Claude Code writes each content block of a response as its own
+    record under the shared message id, each carrying the same usage.
+    """
+    usage = {'cache_read_input_tokens': value - written,
+             'cache_creation_input_tokens': written, 'input_tokens': 0}
+    if ttl:
+        usage['cache_creation'] = {
+            'ephemeral_1h_input_tokens': written if ttl == '1h' else 0,
+            'ephemeral_5m_input_tokens': written if ttl == '5m' else 0,
+            }
+    blocks = [{'type': 'tool_use', 'name': name, 'input': given}
+              for name, given in tools] or [{'type': 'text', 'text': '.'}]
+    return [{'type': 'assistant', 'isSidechain': sidechain,
+             'message': {'id': f'c{index}', 'role': 'assistant',
+                         'model': 'claude-opus-5-5', 'usage': usage,
+                         'content': [block]}} for block in blocks]
+
+
+def _bash(command):
+    """Name a Bash tool use running `command`.
+    """
+    return 'Bash', {'command': command}
 
 
 def test_the_measured_rate_ignores_a_record_the_api_never_billed(tmp_path):
@@ -397,7 +510,7 @@ def test_the_measured_rate_ignores_a_record_the_api_never_billed(tmp_path):
 
     def read(records):
         path.write_text('\n'.join(json.dumps(r) for r in records))
-        return cb.read_transcript(str(path))
+        return cb.read_transcript(str(path))[:3]
 
     assert read(clean) == (118_000, 'claude-opus-5-5', 2_000)
     for position in range(len(clean) + 1):
@@ -424,7 +537,7 @@ def test_a_call_billed_one_level_down_still_counts(tmp_path):
 
     def read(records):
         path.write_text('\n'.join(json.dumps(r) for r in records))
-        return cb.read_transcript(str(path))
+        return cb.read_transcript(str(path))[:3]
 
     flat = list(starmap(_record, enumerate(climb)))
     nested = [_record(index, value, model='claude-fable-5', nested=True)
@@ -442,9 +555,11 @@ def test_a_missing_or_unreadable_transcript_stays_silent(tmp_path):
     Oracle: the documented zero-context return, which main() treats as
     nothing to say.
     """
-    context, model, per_call = cb.read_transcript(str(tmp_path / 'nope.jsonl'))
+    context, model, per_call, cycle = cb.read_transcript(
+        str(tmp_path / 'nope.jsonl'))
     assert context == 0
     assert per_call == budget.FALLBACK_GROWTH_PER_CALL
+    assert cycle is None
 
 
 def test_subagent_turns_are_never_announced(monkeypatch, capsys, tmp_path):
@@ -457,14 +572,8 @@ def test_subagent_turns_are_never_announced(monkeypatch, capsys, tmp_path):
     subagent payload with the identical transcript does not.
     """
     path = tmp_path / 's.jsonl'
-    path.write_text(json.dumps({
-        'type': 'assistant',
-        'message': {
-            'id': 'm1', 'role': 'assistant', 'model': 'claude-opus-5-5',
-            'usage': {'cache_read_input_tokens': 600_000,
-                      'cache_creation_input_tokens': 0, 'input_tokens': 0},
-            },
-        }))
+    path.write_text('\n'.join(json.dumps(_record(index, value))
+                              for index, value in enumerate(CLIMB[:46])))
     monkeypatch.setattr(cb, 'STATE_DIR', str(tmp_path / 'state'))
 
     payload = {'session_id': 'main-1', 'transcript_path': str(path)}
@@ -487,83 +596,68 @@ def test_a_band_is_announced_once_and_rearmed_by_a_compaction(monkeypatch,
     Mutation: writing the state unconditionally without comparing, which
     silences everything, or never writing it, which re-warns every turn
     until the user disables the hook.
-    Oracle: a spy on stdout across three runs - warn, silence, and warn
-    again once a compaction has dropped the context and it climbs back.
+    Oracle: a spy on stdout across four runs - warn at 520K, silence at
+    530K, silence at the 120K a compaction drops to, and warn again at
+    590K, past the new cycle's 585,205 point.
     """
     state = tmp_path / 'state'
     monkeypatch.setattr(cb, 'STATE_DIR', str(state))
     path = tmp_path / 's.jsonl'
+    after = [120_000 + 10_000 * step for step in range(50)]
 
-    def write(context):
-        path.write_text(json.dumps({
-            'type': 'assistant',
-            'message': {
-                'id': f'm{context}', 'role': 'assistant',
-                'model': 'claude-opus-5-5',
-                'usage': {'cache_read_input_tokens': context,
-                          'cache_creation_input_tokens': 0, 'input_tokens': 0},
-                },
-            }))
-
-    def run():
+    def run(series):
+        path.write_text('\n'.join(json.dumps(_record(index, value))
+                                  for index, value in enumerate(series)))
         payload = {'session_id': 'S', 'transcript_path': str(path)}
         monkeypatch.setattr(sys, 'stdin', _Stdin(json.dumps(payload)))
         cb.main()
         return capsys.readouterr().out.strip()
 
-    write(300_000)
-    assert 'handoff' in run()
-    write(305_000)
-    assert run() == ''
-    write(120_000)
-    assert run() == ''
-    write(300_000)
-    assert 'handoff' in run()
+    assert 'handoff' in run(CLIMB[:46])
+    assert run(CLIMB[:47]) == ''
+    assert run(CLIMB[:47] + after[:1]) == ''
+    assert 'handoff' in run(CLIMB[:47] + after)
 
 
-def test_a_state_file_without_the_latch_cannot_re_announce_a_band(monkeypatch,
-                                                                  capsys,
-                                                                  tmp_path):
-    """Verify the one unlatched turn on upgrade does not re-warn.
+def test_a_state_file_in_the_old_format_loads_and_keeps_its_band(
+        monkeypatch, capsys, tmp_path):
+    """Verify a session in flight across the upgrade neither crashes nor
+    re-warns.
 
-    Mutation: storing the freshly computed band unconditionally. A file
-    written before the handoff point was latched carries no such key, so
-    that turn re-derives the point freely and it can land above the
-    context - the band computes as -1, erases the memory of the warning
-    already given, and the same band fires a second time when the
-    context climbs back.
-    Oracle: a spy on stdout across the two turns after a legacy file -
-    at 276,000 the re-derived point is 290,000 and nothing is said, and
-    at 291,000, back over that point, nothing may be said either.
+    Mutation: reading a key this version writes by subscript, which
+    raises KeyError on a file written before it existed; reading the
+    old 'target' slot as the handoff point; or storing the freshly
+    computed band unconditionally.
+    Oracle: a spy on stdout and the rewritten file across two turns
+    after an old file holding band 0, a 350,000 target, and a 264,205
+    handoff point - nothing is said at 280K or at 420K, short of the
+    440,205 escalation point, the old point stays latched because band
+    0 was already announced, and the file comes back in the new shape.
     """
     state = tmp_path / 'state'
     state.mkdir()
     (state / 'U.json').write_text(json.dumps({
         'band': 0, 'growth_per_call': 3_000, 'target': 350_000,
-        'context': 275_000,
+        'handoff': 264_205, 'context': 275_000,
         }))
     monkeypatch.setattr(cb, 'STATE_DIR', str(state))
     path = tmp_path / 's.jsonl'
 
-    def run(contexts):
-        records = [{
-            'type': 'assistant',
-            'message': {
-                'id': f'm{value}', 'role': 'assistant',
-                'model': 'claude-opus-5-5',
-                'usage': {'cache_read_input_tokens': value,
-                          'cache_creation_input_tokens': 0,
-                          'input_tokens': 0},
-                },
-            } for value in contexts]
-        path.write_text('\n'.join(json.dumps(r) for r in records))
+    def run(upto):
+        path.write_text('\n'.join(json.dumps(_record(index, value))
+                                  for index, value in enumerate(CLIMB[:upto])))
         payload = {'session_id': 'U', 'transcript_path': str(path)}
         monkeypatch.setattr(sys, 'stdin', _Stdin(json.dumps(payload)))
         cb.main()
         return capsys.readouterr().out.strip()
 
-    assert run([266_500, 268_400, 270_300, 272_200, 274_100, 276_000]) == ''
-    assert run([285_000, 286_500, 288_000, 289_500, 291_000]) == ''
+    assert run(22) == ''
+    assert run(36) == ''
+    stored = json.loads((state / 'U.json').read_text())
+    assert set(stored) == {'band', 'growth_per_call', 'handoff', 'escalate',
+                           'context'}
+    assert stored['handoff'] == 264_205
+    assert stored['band'] == 0
 
 
 def test_the_hook_and_the_gauge_never_name_a_different_threshold(monkeypatch,
@@ -573,67 +667,77 @@ def test_the_hook_and_the_gauge_never_name_a_different_threshold(monkeypatch,
 
     Mutation: re-deriving the handoff point in compose, or in
     session_state, rather than reading the latched one. The two
-    surfaces then disagree wherever the rate has moved since the latch
-    was set - the bar reads "handoff now" for turns on end while the
-    hook says nothing, which is the one thing the status line promises
-    cannot happen.
+    surfaces then disagree wherever the measurements have moved since
+    the latch was set - the bar reads "handoff now" for turns on end
+    while the hook says nothing, which is the one thing the status line
+    promises cannot happen.
     Oracle: differential across two surfaces - the rendered line is
     amber or red on exactly the turns whose stored band is 0 or more,
-    on a burst that latches the point at 264,205 followed by a
-    slowdown that would re-derive it further out.
+    on a climb that crosses the point and then rewrites its cache at
+    the 1-hour TTL, which would re-derive the point further out.
     """
     monkeypatch.setattr(cb, 'STATE_DIR', str(tmp_path / 'state'))
     monkeypatch.setattr(sl, 'STATE_DIR', str(tmp_path / 'state'))
     path = tmp_path / 's.jsonl'
-    burst = [240_000 + 6_000 * step for step in range(6)]
-    series = burst + [burst[-1] + 100 * step for step in range(1, 11)]
+    records = list(starmap(_record, enumerate(CLIMB[:40])))
+    for step in range(1, 11):
+        records.extend(_call(f'r{step}', CLIMB[39] + 100 * step,
+                             written=100_000, ttl='1h'))
+    ids = list(dict.fromkeys(r['message']['id'] for r in records))
 
     seen = set()
-    for upto in range(1, len(series) + 1):
-        path.write_text('\n'.join(json.dumps(_record(index, value))
-                                  for index, value in enumerate(series[:upto])))
+    for upto in range(30, len(ids) + 1):
+        keep = set(ids[:upto])
+        path.write_text('\n'.join(json.dumps(r) for r in records
+                                  if r['message']['id'] in keep))
         payload = {'session_id': 'A', 'transcript_path': str(path)}
         monkeypatch.setattr(sys, 'stdin', _Stdin(json.dumps(payload)))
         cb.main()
         capsys.readouterr()
         with open(tmp_path / 'state' / 'A.json') as handle:
-            band = json.load(handle)['band']
+            stored = json.load(handle)
         line = re.sub(r'\x1b\[[0-9;]*m', '', sl.render({
             'session_id': 'A',
             'model': {'id': 'claude-opus-5-5', 'display_name': 'Opus 5'},
             'workspace': {'current_dir': '/x/proj'},
-            'context_window': {'total_input_tokens': series[upto - 1]},
+            'context_window': {'total_input_tokens': stored['context']},
             }))
         warning = 'handoff now' in line or 'over' in line
-        assert warning == (band >= 0), (series[upto - 1], band, line)
+        assert warning == (stored['band'] >= 0), (stored, line)
         seen.add(warning)
     assert seen == {False, True}
 
 
-def test_no_threshold_rises_while_the_context_is_still_climbing(monkeypatch,
-                                                                capsys,
-                                                                tmp_path):
+def test_no_threshold_rises_once_a_warning_is_given(monkeypatch, capsys,
+                                                    tmp_path):
     """Verify a dip that is not a compaction releases neither latch.
 
     Mutation: testing `context < last_context` for the compaction that
-    releases the latches, with no size to it. Billed context falls
-    without a compaction - a cached block expiring, a tool result
-    dropped - and a dip of a few hundred tokens then hands the session
-    a fresh target, a fresh handoff point, and a rearmed band, which is
-    the walking-backwards this latch exists to stop.
+    releases the latches, with no size to it; or dropping the latch.
+    Billed context falls without a compaction - a cached block
+    expiring, a tool result dropped - and a dip of a few hundred tokens
+    then hands the session a fresh handoff point further out and a
+    rearmed band, which is the walking-backwards this latch exists to
+    stop.
     Oracle: monotonicity of the state file against its own previous
-    turn - across a burst, a 1,000-token dip, and more climbing, no
-    stored threshold may rise and no stored band may fall.
+    turn - from the warning at 520K, across an hq open and read that
+    lengthen the resume and would raise the raw point to 1,490,745, a
+    1,000-token dip, and more climbing, no stored threshold may rise
+    and no stored band may fall.
     """
     monkeypatch.setattr(cb, 'STATE_DIR', str(tmp_path / 'state'))
     path = tmp_path / 's.jsonl'
-    series = [232_000, 238_000, 244_000, 250_000, 256_000, 262_000,
-              265_000, 264_000, 266_000, 268_000]
-
+    records = list(starmap(_record, enumerate(CLIMB[:46])))
+    tail = ((None, 0, []),
+            ('t0', 520_100, [_bash('hq open auth-token')]),
+            ('t1', 519_100, []),
+            ('t2', 521_100, [_bash('hq read auth-token x.md')]),
+            ('t3', 522_100, []))
     stored = []
-    for upto in range(1, len(series) + 1):
-        path.write_text('\n'.join(json.dumps(_record(index, value))
-                                  for index, value in enumerate(series[:upto])))
+    for identifier, value, tools in tail:
+        if identifier:
+            records.extend(_call(identifier, value, tools))
+        path.write_text('\n'.join(json.dumps(r) for r in records))
         payload = {'session_id': 'M', 'transcript_path': str(path)}
         monkeypatch.setattr(sys, 'stdin', _Stdin(json.dumps(payload)))
         cb.main()
@@ -641,46 +745,54 @@ def test_no_threshold_rises_while_the_context_is_still_climbing(monkeypatch,
         with open(tmp_path / 'state' / 'M.json') as handle:
             stored.append(json.load(handle))
 
-    assert [row['target'] for row in stored] == \
-        sorted((row['target'] for row in stored), reverse=True)
-    assert [row['handoff'] for row in stored] == \
-        sorted((row['handoff'] for row in stored), reverse=True)
-    assert [row['band'] for row in stored] == sorted(row['band'] for row in stored)
-    assert stored[-1]['handoff'] == 264_205
+    _, _, per_call, cycle = cb.read_transcript(str(path))
+    assert budget.handoff_point(cycle, per_call, 'opus-5-5') == 1_490_745
+    assert all(row['band'] == 0 for row in stored)
+    assert [row['handoff'] for row in stored] == [514_765] * len(tail)
+    escalations = [row['escalate'] for row in stored]
+    assert escalations[0] == 690_765
+    assert escalations == sorted(escalations, reverse=True)
 
 
-def test_the_handoff_point_falls_within_a_session_and_never_rises():
-    """Verify a slowdown cannot walk the handoff point back outward.
+def test_a_young_cycle_is_not_pinned_to_its_fallback_rate(monkeypatch,
+                                                          capsys, tmp_path):
+    """Verify the point follows the live rate until band 0 is announced.
 
-    Mutation: max() in place of min() in latched_handoff, or dropping
-    the latch and re-deriving the point from the rate measured this
-    turn. Latching the target alone leaves the reserve free to shrink,
-    which moves the point the gauge counts down to.
-    Oracle: hand-computed - 3,000 a call puts the point at 270,800, and
-    a fall back to 1,900, which on its own justifies 290,000, must not
-    be granted; a rise to 6,000 must still pull it down to 262,500.
+    Mutation: latching from the first turn rather than from the first
+    warning, so the fallback rate of a cycle's first few calls - or any
+    quiet stretch before the warning - holds the point for the rest of
+    the cycle.
+    Oracle: hand-computed on the 70,000 floor - three calls measure no
+    rate yet, so the 1,900 fallback puts the point at 175,587; seven
+    more calls measure 10,000 a call and must move it out to 514,765.
     """
-    assert cb.latched_handoff(350_000, 3_000, 0) == 270_800
-    assert cb.latched_handoff(350_000, 1_900, 0) == 290_000
-    assert cb.latched_handoff(350_000, 1_900, 270_800) == 270_800
-    assert cb.latched_handoff(350_000, 6_000, 270_800) == 262_500
+    monkeypatch.setattr(cb, 'STATE_DIR', str(tmp_path / 'state'))
+    path = tmp_path / 's.jsonl'
+    points = []
+    for upto in (3, 10):
+        path.write_text('\n'.join(json.dumps(_record(index, value))
+                                  for index, value in enumerate(CLIMB[:upto])))
+        payload = {'session_id': 'Y', 'transcript_path': str(path)}
+        monkeypatch.setattr(sys, 'stdin', _Stdin(json.dumps(payload)))
+        cb.main()
+        assert capsys.readouterr().out.strip() == ''
+        with open(tmp_path / 'state' / 'Y.json') as handle:
+            points.append(json.load(handle)['handoff'])
+    assert points == [175_587, 514_765]
 
 
-def test_a_fast_session_is_not_told_to_hand_off_at_half_the_gauge():
-    """Verify the warning cannot arrive before three quarters of the budget.
+def test_the_latch_holds_a_threshold_down_and_never_up():
+    """Verify a latched threshold may fall and may never rise.
 
-    Mutation: MAX_RESERVE_FRACTION back at a half. Every session past
-    3,315 tokens a call saturates the reserve, and at a half that put
-    the warning beside a half-filled bar - a broken gauge, whatever the
-    arithmetic behind it says.
-    Oracle: hand-computed against the bar itself - on a 350,000 target
-    the saturated point is 262,500, which fills seven of the ten cells;
-    at a half it was 175,000 and five.
+    Mutation: max() in place of min() in latched, or treating a stored
+    0 as a latch in force, which pins every new session at zero.
+    Oracle: hand-computed - with no latch the point passes through, and
+    against a latch of 400,000 a point of 450,810 is held at 400,000
+    while one of 300,000 is taken.
     """
-    for per_call in (5_000, 20_000, 100_000):
-        point = cb.latched_handoff(350_000, per_call, 0)
-        assert point == 262_500
-        assert int(point / 350_000 * sl.BAR_CELLS) == 7
+    assert cb.latched(450_810, 0) == 450_810
+    assert cb.latched(450_810, 400_000) == 400_000
+    assert cb.latched(300_000, 400_000) == 300_000
 
 
 def test_the_gauge_never_hands_back_room_it_has_withdrawn(monkeypatch,
@@ -689,29 +801,20 @@ def test_the_gauge_never_hands_back_room_it_has_withdrawn(monkeypatch,
     """Verify the status line does not undo a handoff warning next turn.
 
     Mutation: re-deriving the handoff point in render, or in compose,
-    from the live growth rate. A burst warns, the rate falls back, and
-    the line returns to green with turns to spare - contradicting a
-    warning the user has already been given and acted on.
-    Oracle: a spy on the rendered line across two turns - a 6,000-a-call
-    burst reaching 275,000 crosses the 262,500 point and must read
-    amber, and a slowdown to 1,900 a call at 276,000, which on its own
-    would put the point at 290,000, must not read green again.
+    from this turn's measurements. The warning is given, a cache
+    rewrite moves the unlatched point outward, and the line returns to
+    green with turns to spare - contradicting a warning the user has
+    already been given and acted on.
+    Oracle: a spy on the rendered line across two turns - the climb
+    reaching 520K crosses the 514,765 point and must read amber, and a
+    cache rewrite at the 1-hour TTL at 520,100, which on its own would
+    put the point at 505,790, must not read green again.
     """
     monkeypatch.setattr(cb, 'STATE_DIR', str(tmp_path / 'state'))
     monkeypatch.setattr(sl, 'STATE_DIR', str(tmp_path / 'state'))
     path = tmp_path / 's.jsonl'
 
-    def run(contexts):
-        records = [{
-            'type': 'assistant',
-            'message': {
-                'id': f'm{index}', 'role': 'assistant',
-                'model': 'claude-opus-5-5',
-                'usage': {'cache_read_input_tokens': value,
-                          'cache_creation_input_tokens': 0,
-                          'input_tokens': 0},
-                },
-            } for index, value in enumerate(contexts)]
+    def run(records, context):
         path.write_text('\n'.join(json.dumps(r) for r in records))
         payload = {'session_id': 'L', 'transcript_path': str(path)}
         monkeypatch.setattr(sys, 'stdin', _Stdin(json.dumps(payload)))
@@ -721,13 +824,13 @@ def test_the_gauge_never_hands_back_room_it_has_withdrawn(monkeypatch,
             'session_id': 'L',
             'model': {'id': 'claude-opus-5-5', 'display_name': 'Opus 5'},
             'workspace': {'current_dir': '/x/proj'},
-            'context_window': {'total_input_tokens': contexts[-1]},
+            'context_window': {'total_input_tokens': context},
             }))
 
-    burst = run([245_000, 251_000, 257_000, 263_000, 269_000, 275_000])
-    assert 'handoff now' in burst
-    calm = run([266_500, 268_400, 270_300, 272_200, 274_100, 276_000])
-    assert 'handoff now' in calm
+    records = list(starmap(_record, enumerate(CLIMB[:46])))
+    assert 'handoff now' in run(records, 520_000)
+    rewrite = _call('r', 520_100, written=200_000, ttl='1h')
+    assert 'handoff now' in run(records + rewrite, 520_100)
 
 
 def test_a_barely_growing_session_never_reads_as_zero_growth():
@@ -739,102 +842,9 @@ def test_a_barely_growing_session_never_reads_as_zero_growth():
     Oracle: hand-computed - 100 tokens a call is 880 a turn, under the
     1K floor, so the message must carry "<1K a turn".
     """
-    _, message = cb.compose(300_000, 'opus-5-5', 100, 350_000, 290_000)
+    _, message = cb.compose(300_000, 100, 290_000, 400_000)
     assert '<1K a turn' in message
     assert ' 0K a turn' not in message
-
-
-def test_the_target_falls_within_a_session_and_never_rises():
-    """Verify the latch is one-directional and released only by a drop.
-
-    Mutation: max() in place of min() in latched_target, or seeding an
-    empty latch from the measured rate rather than the fallback - either
-    lets the target rise mid-session, which is what walks the gauge
-    backwards from over-budget to "handoff now".
-    Oracle: hand-computed - fable's fallback seed is 206,600, and at
-    900 tokens a call the cycle floor is 123,000 + 4.4 * 900 = 162,600,
-    so a quiet stretch pulls the latch down there; a 6,000-per-call
-    burst, which on its own justifies 123,000 + 44 * 6,000 = 387,000,
-    must still read 162,600.
-    """
-    assert budget.target_tokens('fable', 6_000) == 387_000
-    assert cb.latched_target('fable', 6_000, 0) == 206_600
-    assert cb.latched_target('fable', 900, 206_600) == 162_600
-    assert cb.latched_target('fable', 6_000, 162_600) == 162_600
-    # A file written before the latch existed holds a target it would
-    # never grant now, so the seed clamps that on the way in.
-    assert cb.latched_target('fable', 6_000, 563_000) == 206_600
-
-
-def test_a_growth_burst_never_widens_the_budget(monkeypatch, capsys,
-                                                tmp_path):
-    """Verify a session already past its budget is not handed more room.
-
-    Mutation: deriving the target in compose or in render from the rate
-    measured this turn - the shipped defect. A fable session that starts
-    reading large files lifts its measured rate from 900 to 4,537 a
-    call, the cycle floor lifts the target from 162,600 to 322,628 with
-    it, and a context shown as over budget one turn reads "handoff now"
-    with room to spare the next.
-    Oracle: differential against the defect - replaying a quiet climb
-    followed by a 30,000-a-call burst, the stored target must never
-    exceed the one before it, the status line must never leave red once
-    it has entered it, and the over band must still fire. At the burst
-    the unlatched target would be 322,628, which renders amber at a
-    context of 206,300 and pushes the over boundary out to 546,720, past
-    every context the session reaches.
-    """
-    monkeypatch.setattr(cb, 'STATE_DIR', str(tmp_path / 'state'))
-    monkeypatch.setattr(sl, 'STATE_DIR', str(tmp_path / 'state'))
-    path = tmp_path / 's.jsonl'
-    series = [170_000, 170_900, 171_800, 172_700, 173_600, 174_500,
-              175_400, 176_300, 206_300, 236_300, 266_300]
-
-    def run(upto):
-        records = [{
-            'type': 'assistant',
-            'message': {
-                'id': f'm{index}', 'role': 'assistant',
-                'model': 'claude-fable-5',
-                'usage': {'cache_read_input_tokens': value,
-                          'cache_creation_input_tokens': 0,
-                          'input_tokens': 0},
-                },
-            } for index, value in enumerate(series[:upto])]
-        path.write_text('\n'.join(json.dumps(r) for r in records))
-        payload = {'session_id': 'B', 'transcript_path': str(path)}
-        monkeypatch.setattr(sys, 'stdin', _Stdin(json.dumps(payload)))
-        cb.main()
-        capsys.readouterr()
-        with open(tmp_path / 'state' / 'B.json') as handle:
-            stored = json.load(handle)['target']
-        line = re.sub(r'\x1b\[[0-9;]*m', '', sl.render({
-            'session_id': 'B',
-            'model': {'id': 'claude-fable-5', 'display_name': 'Fable 5'},
-            'workspace': {'current_dir': '/x/proj'},
-            'context_window': {'total_input_tokens': series[upto - 1]},
-            }))
-        return stored, line
-
-    targets, lines = [], []
-    for upto in range(1, len(series) + 1):
-        stored, line = run(upto)
-        targets.append(stored)
-        lines.append(line)
-    assert budget.target_tokens('fable', 4_537) == 322_628
-    assert targets == sorted(targets, reverse=True)
-    assert targets[-1] == 162_600
-    entered = next(index for index, line in enumerate(lines) if 'over' in line)
-    assert all('over' in line for line in lines[entered:])
-    assert '1.3x over' in lines[8]
-    with open(tmp_path / 'state' / 'B.json') as handle:
-        assert json.load(handle)['band'] == 2
-
-    # A compaction is the one thing that releases the latch, and it
-    # reseeds rather than jumping to whatever the burst justified.
-    series.append(120_000)
-    stored, _ = run(len(series))
-    assert stored == budget.target_tokens('fable')
 
 
 class _Stdin:
@@ -848,81 +858,14 @@ class _Stdin:
         return self.text
 
 
-def test_an_expensive_model_gets_a_workable_compaction_cycle():
-    """Verify the target a session is seeded with clears where a
-    compaction lands, by real turns.
+def test_the_gauge_stays_readable_past_the_escalation_point():
+    """Verify two different sizes past band 1 do not render identically.
 
-    Mutation: deriving the target from cost alone. Fable's cost-parity
-    target is 70K while a compaction lands at 123K, so every fable
-    session would be seeded below the point it restarts at.
-    Oracle: hand-computed - at the 1,900-per-call fallback the cycle
-    floor is 123,000 + 5 * 1,900 * 8.8 = 206,600, which beats fable's
-    cost parity of 70,455, and every tier must clear MIN_CYCLE_TURNS.
-    """
-    assert budget.target_tokens('fable') == 206_600
-    assert budget.tokens_for_cost(budget.COST_PER_TURN_TARGET, 'fable') \
-        == 70_455
-    per_turn = budget.FALLBACK_GROWTH_PER_CALL * budget.CALLS_PER_TURN
-    for tier in budget.CACHE_READ_PER_MTOK:
-        seeded = cb.latched_target(tier, budget.FALLBACK_GROWTH_PER_CALL, 0)
-        assert seeded == budget.target_tokens(tier)
-        cycle = (seeded - budget.POST_COMPACTION_TOKENS) / per_turn
-        assert cycle >= budget.MIN_CYCLE_TURNS - 0.01
-
-
-def test_a_fast_session_is_told_how_little_a_compaction_buys():
-    """Verify the budget message counts the cycle at the live rate.
-
-    Mutation: computing the cycle from FALLBACK_GROWTH_PER_CALL, or from
-    the target's own floor, which promises five more turns to a session
-    that will get two. The latched target no longer moves with growth,
-    so this sentence is the only place a fast session learns its cycle
-    has collapsed.
-    Oracle: hand-computed - fable 5.1 is held to 281,818, a compaction
-    lands at 123,000, and at 10,000 tokens a call a turn eats 88,000,
-    so the cycle is 158,818 / 88,000 = 1.8 turns.
-    """
-    target = budget.target_tokens('fable-5-1')
-    band, message = cb.compose(target, 'fable-5-1', 10_000, target,
-                               cb.latched_handoff(target, 10_000, 0))
-    assert band == 1
-    assert 'about 2 more turns' in message
-
-
-def test_the_warning_never_lands_below_where_a_compaction_restarts():
-    """Verify the handoff point stays above the post-compaction floor.
-
-    Mutation: leaving the reserve unclamped. On an expensive model the
-    reserve exceeds the gap between the target and where a compaction
-    lands, putting the warning below the restart point - so it fires on
-    the first turn of every cycle and the user learns to ignore it.
-    Oracle: differential across rates - every target the code can adopt,
-    minus its reserve, must clear POST_COMPACTION_TOKENS, which holds
-    because no derived target falls below the cycle floor; and on a
-    floor-set target run against a faster rate the clamp is what holds
-    the warning at the restart point rather than the ceiling.
-    """
-    for tier in budget.CACHE_READ_PER_MTOK:
-        for per_call in (1_200, 1_900, 2_500, 4_000, 8_000):
-            assert (budget.target_tokens(tier, per_call)
-                    >= budget.cycle_floor_tokens(per_call))
-            for target in (budget.target_tokens(tier, per_call),
-                           cb.latched_target(tier, per_call, 0)):
-                handoff = target - budget.reserve_tokens(target, per_call)
-                assert handoff >= budget.POST_COMPACTION_TOKENS
-    floored = budget.cycle_floor_tokens(1_200)
-    assert budget.reserve_tokens(floored, 8_000) == \
-        floored - budget.POST_COMPACTION_TOKENS
-
-
-def test_the_gauge_stays_readable_past_the_budget():
-    """Verify two different over-budget sizes do not render identically.
-
-    Mutation: keeping the bar past the budget. It clamps to full, so
-    1.1x and 3x print the same glyph - and past the budget is exactly
-    where the reader needs to tell them apart.
-    Oracle: differential - the same session at 452K and at 700K must
-    produce different text.
+    Mutation: keeping the bar past the escalation point. It clamps to
+    full, so 2.3x and 3.6x print the same glyph - and past it is
+    exactly where the reader needs to tell them apart.
+    Oracle: hand-computed against the no-state point of 215,854 - 452K
+    is 2.1x and 700K is 3.2x, both past the 249,294 escalation point.
     """
     def line(context):
         return sl.render({
@@ -933,19 +876,19 @@ def test_the_gauge_stays_readable_past_the_budget():
             })
 
     assert line(452_000) != line(700_000)
-    assert '1.3x over' in line(452_000)
-    assert '2.0x over' in line(700_000)
+    assert '2.1x over' in line(452_000)
+    assert '3.2x over' in line(700_000)
 
 
 def test_the_gauge_marks_its_cost_as_an_estimate():
-    """Verify the gauge hedges the figure every Stop band already hedges.
+    """Verify the gauge hedges its cost figure as an estimate.
 
     Mutation: dropping the ~ from the cost field, leaving a bare
     two-decimal figure that reads as the price of the next turn rather
     than as an estimate of cached-context re-reading, which is all the
     model covers.
-    Oracle: differential across the two surfaces - the rendered field
-    against the Stop band's own wording at the same context and tier.
+    Oracle: hand-computed - 0.517M tokens at $0.20 per million over 8.8
+    calls is $0.91, and the field must carry the tilde.
     """
     visible = re.sub(r'\x1b\[[0-9;]*m', '', sl.render({
         'session_id': 'none',
@@ -954,10 +897,6 @@ def test_the_gauge_marks_its_cost_as_an_estimate():
         'context_window': {'total_input_tokens': 517_000},
         }))
     assert '~$0.91/t' in visible
-    target = budget.target_tokens('opus-5-5')
-    _, message = cb.compose(517_000, 'opus-5-5', 2_160, target,
-                            cb.latched_handoff(target, 2_160, 0))
-    assert 'about $0.91 a turn' in message
 
 
 def test_the_decision_numbers_survive_a_narrow_pane():
@@ -967,14 +906,15 @@ def test_the_decision_numbers_survive_a_narrow_pane():
     lines do. A pane is cut from the right, so the two fields that carry
     the decision are the ones lost.
     Oracle: hand-checked - the visible line with color stripped must
-    start with the size and fit a narrow split.
+    start with the size against the 215,854 no-state point and fit a
+    narrow split.
     """
     visible = re.sub(r'\x1b\[[0-9;]*m', '', sl.render({
         'session_id': 'none',
         'model': {'id': 'claude-opus-5-5', 'display_name': 'Opus 5'},
         'workspace': {'current_dir': '/x/myproject'},
-        'context_window': {'total_input_tokens': 248_000},
+        'context_window': {'total_input_tokens': 150_000},
         }))
-    assert visible.startswith('248K/352K')
+    assert visible.startswith('150K/215K')
     assert 'handoff in' in visible.split('$')[0]
     assert len(visible) <= 64

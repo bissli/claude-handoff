@@ -1,32 +1,27 @@
 """Shared budget arithmetic for the Stop hook and the status line.
 
-The budget is set in dollars per user turn, not in tokens. Each model's
-token target is derived from it and from that model's price, which is the
-only way the targets stay honest: a model billing at twice the rate
-reaches the same cost per turn at half the context, and should be
-compacted there. One knob therefore moves every model at once.
+The budget is a cost rule. A session should hand off where the cost per
+call of work is lowest: staying longer re-reads a growing context on
+every call, and leaving pays a cycle's fixed overhead again. The point
+between the two follows from the cycle's own measurements and from a
+ratio of two prices, never from a dollar figure.
 
 Notes
 -----
-- Cost per turn is ``context * cache_read_per_mtok * calls_per_turn``,
-  the cost of re-reading history. Each call also bills its new tokens
-  at the cache-write rate, and its output, and the formula leaves both
-  out. Neither grows with context, so their share falls as a session
-  runs.
-- Haiku is not listed: its 200K window holds a turn well under the
-  target, so a warning would spend more attention than it saves.
+- Haiku is not listed: its 200K window holds a session well under any
+  point worth announcing, so a warning would spend more attention than
+  it saves.
 """
 
-# Dollars per user turn. Everything else follows from this.
-COST_PER_TURN_TARGET = 0.62
-COST_PER_TURN_LIMIT = 0.88
+import math
+from dataclasses import dataclass
 
 # Notes:
 # - Keys match as substrings of the model id, most specific first, so
 #   a generation priced on its own is found before its family.
 # - The cache-read price is stored, not the base price and the
 #   multiplier against it, because that multiplier varies by model:
-#   0.05 on Opus 5.5 and 0.025 on Fable 5.1 against 0.1 elsewhere.
+#   see CACHE_READ_MULTIPLIER.
 CACHE_READ_PER_MTOK = {
     'fable-5-1': 0.25,
     'fable': 1.00,
@@ -36,25 +31,32 @@ CACHE_READ_PER_MTOK = {
     'sonnet': 0.30,
     }
 
+# Cache-read price as a fraction of the base input price, per tier.
+CACHE_READ_MULTIPLIER = {
+    'fable-5-1': 0.025,
+    'fable': 0.1,
+    'opus-5-5': 0.05,
+    'opus': 0.1,
+    'sonnet-5': 0.1,
+    'sonnet': 0.1,
+    }
+
+# Cache-write price as a multiple of the base input price, by TTL. Every
+# model shares these two.
+CACHE_WRITE_MULTIPLIER_5M = 1.25
+CACHE_WRITE_MULTIPLIER_1H = 2.0
+
+# Claude Code writes its cache blocks at the 1-hour TTL. Both the Stop
+# hook and the status line price a cycle with no TTL breakdown at this
+# default rather than at the cheaper 5-minute one.
+DEFAULT_ONE_HOUR = True
+
 # Assistant calls per user turn, measured across 604 compaction cycles.
 CALLS_PER_TURN = 8.8
 
-# Turns the handoff costs this session. A handoff write measures 17.5
-# assistant calls, which is two turns at the rate above. Reading it back
-# happens in a fresh session, so it is charged to that one, not to this.
+# Turns a handoff write takes. Reading it back happens in a fresh
+# session, so it is charged to that one, not to this.
 HANDOFF_TURNS = 2
-
-# Growth is a recent average, so one heavy turn during the handoff can
-# outrun it. This buys that slack.
-HANDOFF_MARGIN = 1.5
-
-# The warning is useless if it fires on a young session and useless if it
-# leaves no room, so the reserve is held between these two bounds. The
-# ceiling is a quarter, which is what puts the earliest possible warning
-# at three quarters of the gauge: a fast session used to reserve half
-# the budget and be told to hand off beside a half-filled bar.
-MIN_RESERVE_TOKENS = 60_000
-MAX_RESERVE_FRACTION = 0.25
 
 # Billed context on the first call after a compaction: the system prompt,
 # tools, and instruction files all return, along with the summary.
@@ -69,10 +71,35 @@ FRESH_SESSION_TOKENS = 69_000
 # Used until a session has enough history to measure its own rate.
 FALLBACK_GROWTH_PER_CALL = 1_900
 
-# Turns a compaction cycle has to be worth: HANDOFF_TURNS to get out of
-# the session, and three more to do something with the room that buys
-# back.
-MIN_CYCLE_TURNS = HANDOFF_TURNS + 3
+
+@dataclass(frozen=True)
+class Cycle:
+    """The measurements of one cycle that its handoff point is priced from.
+
+    A cycle runs from a session's first call, or from the first call
+    after a compaction, to the handoff that ends it.
+
+    Attributes
+    ----------
+    floor : int
+        Billed context of the cycle's first call, F, in tokens.
+    floor_written : int
+        Cache-creation tokens of that first call, F_w.
+    resume_context : int
+        Billed context of the resume-end call j0, C0. Equals ``floor``
+        when the cycle opened no handoff.
+    resume_sum : int
+        Billed context summed over the calls up to and including j0, S0.
+    one_hour : bool
+        True when the cycle's cache writes use the 1-hour TTL, False for
+        the 5-minute one.
+    """
+
+    floor: int
+    floor_written: int
+    resume_context: int
+    resume_sum: int
+    one_hour: bool
 
 
 def model_tier(model: str) -> str | None:
@@ -116,149 +143,88 @@ def cost_per_turn(context: int, tier: str) -> float:
             * CALLS_PER_TURN)
 
 
-def tokens_for_cost(budget: float, tier: str) -> int:
-    """Context size at which a turn costs a given number of dollars.
+def write_read_ratio(tier: str, one_hour: bool) -> float:
+    """Price of writing a token to the cache over the price of reading it.
 
     Parameters
     ----------
-    budget : float
-        Dollars per user turn.
     tier : str
         Price tier from :func:`model_tier`.
+    one_hour : bool
+        True for the 1-hour TTL, False for the 5-minute one.
 
     Returns
     -------
-    int
-        Billed context in tokens.
-
-    Notes
-    -----
-    - Rounded, not truncated. The division lands a hair under a round
-      number often enough that truncating shifts a threshold down by one
-      token, which is invisible in use and maddening in a test.
+    float
+        The ratio m, the same whatever the base input price.
     """
-    per_token = CACHE_READ_PER_MTOK[tier] * CALLS_PER_TURN / 1e6
-    return round(budget / per_token)
+    write = CACHE_WRITE_MULTIPLIER_1H if one_hour else CACHE_WRITE_MULTIPLIER_5M
+    return write / CACHE_READ_MULTIPLIER[tier]
 
 
-def cycle_floor_tokens(per_call: int) -> int:
-    """Lowest target a repeatedly-compacted session can actually work to.
+def handoff_write_tokens(per_call: int) -> int:
+    """Tokens a handoff write adds to the context, W.
 
     Parameters
     ----------
     per_call : int
-        Estimated tokens added per assistant call.
+        Estimated tokens added per assistant call, g.
 
     Returns
     -------
     int
-        Context size that leaves ``MIN_CYCLE_TURNS`` of room above where a
-        compaction lands.
+        ``W = w * g``, where ``w = HANDOFF_TURNS * CALLS_PER_TURN`` is the
+        write's length in calls, rounded to a token.
     """
-    return POST_COMPACTION_TOKENS + int(MIN_CYCLE_TURNS * per_call
-                                        * CALLS_PER_TURN)
+    return round(HANDOFF_TURNS * CALLS_PER_TURN * per_call)
 
 
-def target_tokens(tier: str, per_call: int = FALLBACK_GROWTH_PER_CALL) -> int:
-    """Context size a session should be compacted at.
+def handoff_point(cycle: Cycle, per_call: int, tier: str) -> int:
+    """Context at which a handoff minimizes the cycle's cost per work call.
 
     Parameters
     ----------
-    tier : str
-        Price tier from :func:`model_tier`.
-    per_call : int, default FALLBACK_GROWTH_PER_CALL
-        Estimated tokens added per assistant call.
-
-    Returns
-    -------
-    int
-        Billed context in tokens.
-
-    Notes
-    -----
-    - The larger of what cost wants and what the compaction cycle allows.
-      Cost alone puts an expensive model's target near where a compaction
-      lands, and a target below that point is not a target at all: the
-      session re-enters it the moment it restarts, so the warning fires
-      every turn and means nothing.
-    - Raising the target above cost parity is a real admission. On an
-      expensive model a session you must keep compacting simply costs
-      more per turn than a cheap one, and the honest move is to say by
-      how much rather than to set a threshold nobody can hold.
-    - This is what the growth rate justifies right now, not what the
-      session is held to. The rate is re-measured every turn and swings
-      by a factor of three, so a caller tracking one session latches
-      this figure downward rather than following it up.
-    """
-    return max(tokens_for_cost(COST_PER_TURN_TARGET, tier),
-               cycle_floor_tokens(per_call))
-
-
-def over_budget_tokens(tier: str, target: int) -> int:
-    """Context size past which a turn is plainly overpriced.
-
-    Parameters
-    ----------
-    tier : str
-        Price tier from :func:`model_tier`.
-    target : int
-        The compaction target in force for this session, in tokens.
-
-    Returns
-    -------
-    int
-        Billed context in tokens.
-
-    Notes
-    -----
-    - The boundary sits where a turn costs COST_PER_TURN_LIMIT, or at
-      the target when the cycle floor has pushed that past the limit.
-    - Never below the target it is handed, so the over band cannot fire
-      before the budget band.
-    """
-    # Notes:
-    # - The limit is a dollar figure, so the boundary comes from price
-    #   alone - scaling the target instead lets the cycle floor push
-    #   "overpriced" to $5 a turn on a fast-growing session.
-    # - Taking the target rather than a growth rate is what lets a
-    #   caller pass the latched one. Deriving it here from the live
-    #   rate would move the boundary under a target that no longer
-    #   moves.
-    return max(tokens_for_cost(COST_PER_TURN_LIMIT, tier), target)
-
-
-def reserve_tokens(target: int, per_call: int) -> int:
-    """Room to hold back so a handoff still fits before the target.
-
-    Parameters
-    ----------
-    target : int
-        The compaction target for this model, in tokens.
+    cycle : Cycle
+        The current cycle's floor, resume, and cache TTL.
     per_call : int
-        Estimated tokens added per assistant call.
+        Estimated tokens added per assistant call, g.
+    tier : str
+        Price tier from :func:`model_tier`.
 
     Returns
     -------
     int
-        Tokens reserved below the target, bounded by
-        ``MIN_RESERVE_TOKENS`` and ``MAX_RESERVE_FRACTION``.
+        The handoff point H* in billed tokens, rounded to a token.
 
     Notes
     -----
-    - ``MAX_RESERVE_FRACTION`` is the guarantee that the warning cannot
-      arrive before ``1 - MAX_RESERVE_FRACTION`` of the budget is spent,
-      however fast the session grows. Without it the reserve saturates
-      on any session reading large files, and every one of them is told
-      to hand off at the same point regardless of its rate.
-    - On a small target that ceiling falls below the floor, and the
-      floor is what wins: a fraction of a small budget is not enough
-      room to write anything, and a bound meant to keep the warning
-      legible must not quietly delete the bound meant to keep it
-      useful.
+    - Costs are counted in read-token-calls: every call bills its whole
+      context at the cache-read price, and every new token bills once
+      more at m times that price for its cache write::
+
+          w  = HANDOFF_TURNS * CALLS_PER_TURN
+          W  = w * g
+          m  = write_read_ratio(tier, cycle.one_hour)
+          A  = S0 + w * (C0 + W/2) + m * (Fw + C0 - F + W)
+          H* = C0 + sqrt(2 * g * A)
+
+    - A is what a cycle pays whatever its length: the resume, the
+      handoff write re-reading the context, and the cache writes of the
+      floor, the resume, and the handoff. T work calls add a growth tax
+      of ``g * T**2 / 2``, so the cost per work call is
+      ``C0 + w*g + g*T/2 + A/T``, lowest at ``T* = sqrt(2 * A / g)``,
+      where the context has reached H*.
+    - The price itself cancels, so only the ratio m moves the point.
+    - H* rises with C0: a longer resume earns a longer cycle to spread
+      its cost over.
+    - Output tokens are left out of A, which places the point early
+      rather than late.
     """
-    raw = int(HANDOFF_TURNS * per_call * CALLS_PER_TURN * HANDOFF_MARGIN)
-    ceiling = max(int(target * MAX_RESERVE_FRACTION), MIN_RESERVE_TOKENS)
-    reserve = min(ceiling, max(MIN_RESERVE_TOKENS, raw))
-    # A reserve deep enough to put the warning below where a compaction
-    # lands would fire on the first turn of every cycle, forever.
-    return min(reserve, max(0, target - POST_COMPACTION_TOKENS))
+    calls_to_write = HANDOFF_TURNS * CALLS_PER_TURN
+    written = handoff_write_tokens(per_call)
+    ratio = write_read_ratio(tier, cycle.one_hour)
+    overhead = (cycle.resume_sum
+                + calls_to_write * (cycle.resume_context + written / 2)
+                + ratio * (cycle.floor_written + cycle.resume_context
+                           - cycle.floor + written))
+    return round(cycle.resume_context + math.sqrt(2 * per_call * overhead))

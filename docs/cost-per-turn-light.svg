@@ -21,19 +21,8 @@
 <text x="507.2" y="334" fill="#898781" font-size="11" text-anchor="middle">800K</text>
 <text x="620" y="334" fill="#898781" font-size="11" text-anchor="middle">1M</text>
 <text x="338" y="354" fill="#898781" font-size="11" text-anchor="middle">context (tokens)</text>
-<line x1="56" y1="252.5" x2="620" y2="252.5" stroke="#898781" stroke-width="1.2" stroke-dasharray="5 4"/>
-<text x="60" y="246.5" fill="#898781" font-size="10.5" text-anchor="start">$0.62 target</text>
-<line x1="56" y1="225.9" x2="620" y2="225.9" stroke="#898781" stroke-width="1.2" stroke-dasharray="5 4"/>
-<text x="60" y="219.9" fill="#898781" font-size="10.5" text-anchor="start">$0.88 over budget</text>
 <polyline points="56,316 620,90.7" fill="none" stroke="#eb6834" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
 <polyline points="56,316 620,135.8" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-<circle cx="215" cy="252.5" r="4.5" fill="#eb6834" stroke="#ffffff" stroke-width="2"/>
-<text x="215" y="270.5" fill="#898781" font-size="10.5" text-anchor="middle">282K</text>
-<circle cx="281.6" cy="225.9" r="4.5" fill="#eb6834" stroke="#ffffff" stroke-width="2"/>
-<text x="281.6" y="243.9" fill="#898781" font-size="10.5" text-anchor="middle">400K</text>
-<circle cx="254.5" cy="252.5" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
-<text x="254.5" y="270.5" fill="#898781" font-size="10.5" text-anchor="middle">352K</text>
-<circle cx="338" cy="225.9" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
 <text x="632" y="94.7" fill="#52514e" font-size="11.5" text-anchor="start">Fable 5.1</text>
 <text x="690" y="94.7" fill="#0b0b0b" font-size="12" text-anchor="start" font-weight="600">$2.20</text>
 <text x="632" y="139.8" fill="#52514e" font-size="11.5" text-anchor="start">Opus 5.5</text>

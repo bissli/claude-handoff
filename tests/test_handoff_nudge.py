@@ -124,7 +124,7 @@ def test_nudge_fires_at_the_point_and_stays_silent_one_token_below(
     """Verify the threshold is inclusive and nothing fires below it.
 
     Mutation: >= narrowed to > at the context test, < widened to <=, or
-    the handoff point read from the target slot of load_state's tuple.
+    the handoff point read from the escalation slot of load_state's tuple.
     Oracle: two transcripts straddling the stored handoff point by one
     token, with the emitted text naming both figures in thousands.
     """

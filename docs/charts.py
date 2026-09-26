@@ -357,24 +357,13 @@ def chart_cost_per_turn(t: Theme) -> str:
     body.append(text_el((x0 + x1) / 2, y1 + 38, 'context (tokens)', t.muted,
                         anchor='middle'))
 
-    for dollars, label in ((0.62, '$0.62 target'), (0.88, '$0.88 over budget')):
-        body.extend((line_el(x0, sy(dollars), x1, sy(dollars), t.muted, 1.2, dash='5 4'), text_el(x0 + 4, sy(dollars) - 6, label, t.muted, 10.5)))
+    body.extend((series_el([(sx(0), sy(0)), (sx(1000), sy(2.2))], t.orange),
+                 series_el([(sx(0), sy(0)), (sx(1000), sy(1.76))], t.blue)))
 
-    body.extend((series_el([(sx(0), sy(0)), (sx(1000), sy(2.2))], t.orange), series_el([(sx(0), sy(0)), (sx(1000), sy(1.76))], t.blue)))
-
-    crossings = (
-        (282, 0.62, t.orange, '282K'),
-        (400, 0.88, t.orange, '400K'),
-        (352, 0.62, t.blue, '352K'),
-        (500, 0.88, t.blue, ''),
-        )
-    for tokens_k, dollars, color, label in crossings:
-        body.append(dot_el(sx(tokens_k), sy(dollars), color, t.surface))
-        if label:
-            body.append(text_el(sx(tokens_k), sy(dollars) + 18, label, t.muted,
-                                10.5, anchor='middle'))
-
-    body.extend((text_el(x1 + 12, sy(2.2) + 4, 'Fable 5.1', t.secondary, 11.5), text_el(x1 + 70, sy(2.2) + 4, '$2.20', t.primary, 12, weight='600'), text_el(x1 + 12, sy(1.76) + 4, 'Opus 5.5', t.secondary, 11.5), text_el(x1 + 70, sy(1.76) + 4, '$1.76', t.primary, 12, weight='600')))
+    body.extend((text_el(x1 + 12, sy(2.2) + 4, 'Fable 5.1', t.secondary, 11.5),
+                 text_el(x1 + 70, sy(2.2) + 4, '$2.20', t.primary, 12, weight='600'),
+                 text_el(x1 + 12, sy(1.76) + 4, 'Opus 5.5', t.secondary, 11.5),
+                 text_el(x1 + 70, sy(1.76) + 4, '$1.76', t.primary, 12, weight='600')))
     return svg_doc(360, body)
 
 

@@ -117,7 +117,7 @@ def main() -> int:
             return 0
         session = str(payload.get('session_id') or 'unknown').replace('/', '_')
         state_path = os.path.join(context_budget.STATE_DIR, f'{session}.json')
-        handoff_at = context_budget.load_state(state_path)[3]
+        handoff_at = context_budget.load_state(state_path)[2]
         if not handoff_at:
             return 0
         context = context_budget.read_transcript(

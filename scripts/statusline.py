@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Status line showing the live context budget and what a turn now costs.
+"""Status line showing the live handoff point and what a turn now costs.
 
 Claude Code hands this command a JSON payload on stdin whose
 ``context_window.total_input_tokens`` is the billed context of the last
@@ -8,15 +8,16 @@ number cost tracks, since every call re-reads the whole conversation.
 
 The line reads::
 
-    262K/350K [=======---] handoff in 2  $1.15/t  opus myproject
+    248K/256K [=========-] handoff in 1  ~$0.44/t opus-5-5 proj
 
 and, once the session is on a handoff thread, names it after the
 directory::
 
-    262K/350K [=======---] handoff in 2  $1.15/t  opus myproject:auth-token
+    248K/256K [=========-] handoff in 1  ~$0.44/t opus-5-5 proj:auth-token
 
-and turns amber when it is time to write a handoff, red once the budget
-is behind you, so the moment to hand off is visible several turns out.
+and turns amber at the handoff point, red once a handoff begun there
+would have finished, so the moment to hand off is visible several turns
+out.
 
 Notes
 -----
@@ -40,9 +41,10 @@ Notes
 - The slug comes from a one-line file ``hq`` writes when a session
   enters a thread, for the reason the thresholds come from the hook's
   state file: the line repaints continuously and reads no transcript.
-- Over budget the bar is replaced by the multiplier, not filled in. A
-  saturated bar reads the same at 1.1x as at 3x, which is exactly the
-  range where the reader needs to tell them apart.
+- Past the escalation point the bar is replaced by the multiple of the
+  handoff point, not filled in. A saturated bar reads the same at 1.2x
+  as at 3x, which is exactly the range where the reader needs to tell
+  them apart.
 """
 
 import json
@@ -82,33 +84,39 @@ def session_state(session: str, tier: str) -> tuple[int, int, int]:
     Returns
     -------
     tuple[int, int, int]
-        Estimated tokens added per assistant call, the compaction target
-        in tokens, and the context size at which to say hand off.
+        Estimated tokens added per assistant call, the handoff point, and
+        the escalation point, both in tokens.
 
     Notes
     -----
-    - Before the first Stop there is no state, so all three fall back to
-      what the fallback growth rate justifies. The hook latches both
-      thresholds down from those same figures, so the gauge can only
-      ever tighten as state appears - it never jumps outward.
-    - A threshold from an older state file is clamped to those figures
-      too. The latches were added after some files were written, and
-      those hold values they would never grant now.
+    - Before the first Stop there is no state, so the handoff point is
+      priced for a fresh cycle that opened no handoff, at the fallback
+      growth rate and the 5-minute write price. The first Stop replaces
+      it with the cycle's own measurements.
+    - A file without an escalation point takes the handoff point plus
+      one handoff write's growth, the figure the hook latches first.
     """
     safe = session.replace('/', '_')
-    per_call, target, handoff = budget.FALLBACK_GROWTH_PER_CALL, 0, 0
+    per_call, handoff, escalate = budget.FALLBACK_GROWTH_PER_CALL, 0, 0
     try:
         with open(os.path.join(STATE_DIR, f'{safe}.json')) as handle:
             state = json.load(handle)
         per_call = max(1, int(state['growth_per_call']))
-        target = int(state.get('target') or 0)
         handoff = int(state.get('handoff') or 0)
+        escalate = int(state.get('escalate') or 0)
     except (OSError, ValueError, KeyError, TypeError):
         pass
-    seed = budget.target_tokens(tier)
-    target = min(target, seed) if target > 0 else seed
-    point = target - budget.reserve_tokens(target, per_call)
-    return per_call, target, min(handoff, point) if handoff > 0 else point
+    if handoff <= 0:
+        fresh = budget.Cycle(
+            floor=budget.FRESH_SESSION_TOKENS,
+            floor_written=budget.FRESH_SESSION_TOKENS,
+            resume_context=budget.FRESH_SESSION_TOKENS,
+            resume_sum=budget.FRESH_SESSION_TOKENS,
+            one_hour=budget.DEFAULT_ONE_HOUR)
+        handoff = budget.handoff_point(fresh, per_call, tier)
+    if escalate <= 0:
+        escalate = handoff + budget.handoff_write_tokens(per_call)
+    return per_call, handoff, escalate
 
 
 def session_thread(session: str) -> str:
@@ -175,19 +183,21 @@ def render(payload: dict[str, Any]) -> str:
     tier = budget.model_tier(str(model.get('id') or ''))
     if tier is None:
         return plain
-    per_call, target, handoff_at = session_state(session, tier)
+    per_call, handoff_at, escalate_at = session_state(session, tier)
     per_turn = per_call * budget.CALLS_PER_TURN
 
     cost = budget.cost_per_turn(context, tier)
-    size = f'{context // 1000}K/{target // 1000}K'
+    size = f'{context // 1000}K/{handoff_at // 1000}K'
     tail = f'{DIM}~${cost:.2f}/t {tier} {where}{RESET}'
 
-    if context >= target:
-        # No bar past the budget: it would read the same at 1.1x as at
-        # 3x, and telling those apart is the whole job from here on.
-        return f'{RED}{size}  {context / target:.1f}x over{RESET}  {tail}'
+    if context >= escalate_at:
+        # No bar past the escalation point: it would read the same at
+        # 1.2x as at 3x, and telling those apart is the whole job from
+        # here on.
+        return (f'{RED}{size}  {context / handoff_at:.1f}x over{RESET}'
+                f'  {tail}')
 
-    filled = int(context / target * BAR_CELLS)
+    filled = min(int(context / handoff_at * BAR_CELLS), BAR_CELLS)
     bar = BAR_FILL * filled + BAR_TRACK * (BAR_CELLS - filled)
     if context >= handoff_at:
         color, note = YELLOW, 'handoff now'

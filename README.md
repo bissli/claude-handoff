@@ -4,10 +4,10 @@ A Claude Code plugin that tells you, in session and while there is still
 room, that the conversation has grown expensive enough to hand off.
 
 ```
-248K/350K [=======---] handoff in 3  $1.09/t  opus myproject
-310K/350K [========--] handoff now   $1.36/t  opus myproject
-452K/350K  1.3x over                 $1.99/t  opus myproject
-248K/350K [=======---] handoff in 3  $1.09/t  opus myproject:auth-token
+218K/256K [========--] handoff in 2  ~$0.38/t opus-5-5 myproject
+262K/256K [==========] handoff now  ~$0.46/t opus-5-5 myproject
+310K/256K  1.2x over  ~$0.55/t opus-5-5 myproject
+218K/256K [========--] handoff in 2  ~$0.38/t opus-5-5 myproject:auth-token
 ```
 
 ## Install
@@ -62,18 +62,18 @@ and the climb is still there:
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/cost-per-turn-dark.svg">
   <img alt="Cost of one turn against context, at cache-read prices.
-Fable 5.1 crosses the $0.62 target at 282K tokens and $0.88 at 400K.
-Opus 5.5 crosses $0.62 at 352K and $0.88 at 500K."
+Both lines climb straight from zero: Fable 5.1 reaches $2.20 a turn at
+1M tokens, Opus 5.5 reaches $1.76."
 src="docs/cost-per-turn-light.svg">
 </picture>
 
-So the plugin holds a dollar line, not a token line: **$0.62 a turn** as
-the target and **$0.88 a turn** as over budget. Each model's token
-thresholds fall out of its own price, which is why Fable 5.1's gauge
-fills a quarter faster than Opus 5.5's. (A model priced at the older
-cache-read rate cannot reach $0.62 a turn above the point a compaction
-restarts at, so its target is the compaction cycle's floor instead.
-[The budget knob](#the-budget-knob) has the arithmetic.)
+So the plugin warns where a cycle's cost per call of work is lowest,
+not at a fixed dollar or token line. Carrying on re-reads a growing
+context on every call. Handing off pays a cycle's fixed overhead again:
+the resume, the write, and the cache writes of the floor. The point
+between the two moves with the resume, the growth rate, and the price
+of a cache write against a read. [The handoff point](#the-handoff-point)
+has the arithmetic.
 
 Every figure below already includes the cache discount. The bill being
 discussed is the discounted one.
@@ -81,38 +81,37 @@ discussed is the discounted one.
 ## What a turn costs, point by point
 
 One turn costs `context x cache-read rate x 8.8 calls`. The tables show
-that cost at each context size, the multiple of that model's own target
-cost, and what the same turn would have cost without the cache.
+that cost at each context size and what the same turn would have cost
+without the cache. Neither model holds a fixed dollar line: [the
+handoff point](#the-handoff-point) moves with the session's own resume
+and growth rate, not with a row in this table.
 
-**Opus 5.5** - cache read $0.20 per million tokens, target $0.62 at
-352K:
+**Opus 5.5** - cache read $0.20 per million tokens:
 
-| context           | one turn | vs target | without cache | cache saved |
-| ----------------- | --------: | ---------: | -------------: | -----------: |
-| 100K              | $0.18    | 0.3x      | $3.52         | $3.34       |
-| 200K              | $0.35    | 0.6x      | $7.04         | $6.69       |
-| **352K** - target | $0.62    | 1.0x      | $12.39        | $11.77      |
-| 400K              | $0.70    | 1.1x      | $14.08        | $13.38      |
-| **500K** - over   | $0.88    | 1.4x      | $17.60        | $16.72      |
-| 700K              | $1.23    | 2.0x      | $24.64        | $23.41      |
-| 1M                | $1.76    | 2.8x      | $35.20        | $33.44      |
+| context | one turn | without cache | cache saved |
+| ------- | --------: | -------------: | -----------: |
+| 100K    | $0.18    | $3.52         | $3.34       |
+| 200K    | $0.35    | $7.04         | $6.69       |
+| 400K    | $0.70    | $14.08        | $13.38      |
+| 500K    | $0.88    | $17.60        | $16.72      |
+| 700K    | $1.23    | $24.64        | $23.41      |
+| 1M      | $1.76    | $35.20        | $33.44      |
 
-**Fable 5.1** - cache read $0.25 per million tokens, target $0.62 at
-282K:
+**Fable 5.1** - cache read $0.25 per million tokens:
 
-| context           | one turn | vs target | without cache | cache saved |
-| ----------------- | --------: | ---------: | -------------: | -----------: |
-| 100K              | $0.22    | 0.4x      | $8.80         | $8.58       |
-| **282K** - target | $0.62    | 1.0x      | $24.82        | $24.20      |
-| **400K** - over   | $0.88    | 1.4x      | $35.20        | $34.32      |
-| 500K              | $1.10    | 1.8x      | $44.00        | $42.90      |
-| 700K              | $1.54    | 2.5x      | $61.60        | $60.06      |
-| 1M                | $2.20    | 3.5x      | $88.00        | $85.80      |
+| context | one turn | without cache | cache saved |
+| ------- | --------: | -------------: | -----------: |
+| 100K    | $0.22    | $8.80         | $8.58       |
+| 282K    | $0.62    | $24.82        | $24.20      |
+| 400K    | $0.88    | $35.20        | $34.32      |
+| 500K    | $1.10    | $44.00        | $42.90      |
+| 700K    | $1.54    | $61.60        | $60.06      |
+| 1M      | $2.20    | $88.00        | $85.80      |
 
-Read the Fable 5.1 row you are sitting at: a session parked at 500K pays
-$1.10 for every further turn - 1.8x what it would pay at its target -
-and the cache is already saving it $42.90 a turn. Both columns grow
-together, because both are the same line at different prices.
+Read the Fable 5.1 row at 500K: a session parked there pays $1.10 for
+every further turn, and the cache is already saving it $42.90 a turn.
+Both columns grow together, because both are the same line at
+different prices.
 
 ## What a whole session costs
 
@@ -276,47 +275,102 @@ current.
 
 ## What you see
 
-At the end of a turn, once as each line is crossed - approaching the
-target, at it, over budget:
+At the end of a turn, once as each line is crossed - the handoff point,
+then one handoff write past it:
 
-> Context 293K of a 352K budget, growing 19K a turn. About 4 turns of
-> room left - a good point to run /handoff.
+> Context 262K, at the 256K handoff point for this cycle, growing 20K a
+> turn - a good point to run /handoff.
 
-> Context 362K, at the 352K budget. Run /handoff, then run it again in a
-> fresh session to read it back: that restarts near 69K plus the file,
-> against 123K for /compact. Compact instead only to carry the tail of
-> this conversation, which buys about 12 more turns.
+> Context 300K, 43K past the 256K handoff point, where a handoff begun
+> there would have finished. Every further turn raises the cost of each
+> call of work. Run /handoff.
 
-> Context 517K, about $0.91 a turn - 1.5x the $0.62 target. Every
-> further turn pays to re-read history you are not using. Run /handoff.
+The second also raises a desktop notification.
 
-The last two also raise a desktop notification.
+## The handoff point
 
-## The budget knob
+The warning sits at the context where a cycle's cost per call of work
+is lowest. A cycle runs from a session's first call, or from the first
+call after a compaction, to the handoff that ends it. Every call bills
+its whole context at the cache-read price, and every new token bills
+once more, at m times that price, when it is written to the cache.
+Counted in those read-token units:
 
-One knob, `COST_PER_TURN_TARGET` in `scripts/budget.py`, in dollars per
-turn. Each model's token thresholds are derived from it:
+```
+F   billed context of the cycle's first call
+Fw  tokens that first call writes to the cache
+C0  billed context at the resume end, call j0
+S0  billed context summed over the calls up to and including j0
+g   tokens added per call, measured from the transcript
+w   calls a handoff write takes: 2 turns x 8.8 = 17.6
+W   tokens the write adds: w x g
+m   cache-write price / cache-read price
 
-| model     | target  | over budget | $/turn at target |
-| --------- | ------- | ----------- | ---------------- |
-| Opus 5.5  | 352,273 | 500,000     | $0.62            |
-| Fable 5.1 | 281,818 | 400,000     | $0.62            |
-| Sonnet 5  | 352,273 | 500,000     | $0.62            |
+A  = S0 + w x (C0 + W/2) + m x (Fw + C0 - F + W)
+H* = C0 + sqrt(2 x g x A)
+```
 
-Cost parity puts every current model clear of the compaction cycle's
-floor, so each sits on its dollar line. A model billed at the older
-cache-read rate does not: an Opus 5 turn costs $0.62 at 140,909 tokens,
-below the 206,600 a five-turn compaction cycle needs, so its target is
-that floor and a turn there costs $0.91. The gap is the real price of
-staying on a model priced at the older rate, stated rather than hidden.
-A quiet session pulls the target down toward whichever of the two
-binds; it is latched per session and never rises.
+A is what a cycle pays whatever its length: the resume, the handoff
+write re-reading the context, and the cache writes of the floor, the
+resume, and the handoff. T calls of work re-read `g x T^2 / 2` tokens
+on top of C0, so one call of work costs `C0 + w x g + g x T / 2 + A / T`.
+That is lowest at `T = sqrt(2 x A / g)`, where the context reaches H*.
+The dollar price cancels, and only the ratio m remains.
 
-Over budget stays a dollar figure ($0.88) and is never scaled up with
-the target, so a heavy session cannot march the loudest warning out to
-$5 a turn. Haiku is absent: its 200K context window holds a turn well
-under the target, so a warning would cost more attention than it
-saves.
+The resume starts at the cycle's first `hq open`, with `--root` or
+`--session` allowed ahead of the verb. It runs through every following
+call whose tool uses are all a Read of any path, a Skill or ToolSearch
+call, or a Bash command naming `.handoff`, `HANDOFF`, or an hq read verb
+(`open`, `read`, `standing`, `artifacts`, `when`, `arc`, `list`, `help`).
+j0 is the first call after those, the first to use any other tool or
+none. A cycle with no `hq open` has j0 at its first call, so C0 and S0
+are both F.
+
+m comes from the model and the cache TTL. A write costs 1.25 times the
+base input price at the 5-minute TTL and 2 times at the 1-hour TTL, on
+every model. The TTL is the one that carried more of the cycle's cache
+writes in each call's `usage.cache_creation` breakdown, and the 1-hour
+one Claude Code itself writes at when no call carries a breakdown.
+
+| model                                 | cache read  | m, 5-minute | m, 1-hour |
+| ------------------------------------- | ----------- | -----------: | ---------: |
+| Opus 5.5                              | 0.05x input | 25          | 40        |
+| Fable 5.1                             | 0.025x      | 50          | 80        |
+| Opus 5, Fable 5, Sonnet 5, Sonnet 4.6 | 0.1x        | 12.5        | 20        |
+
+Worked values on Opus 5.5 at the 1-hour TTL, with F 62,000, Fw 50,000,
+and g 2,300, so W is 40,480 and m is 40:
+
+| C0      | S0        | A          | H*      |
+| ------- | --------- | ---------- | ------- |
+| 80,000  | 700,000   | 6,803,424  | 256,906 |
+| 150,000 | 1,060,000 | 11,195,424 | 376,934 |
+| 200,000 | 1,300,000 | 14,315,424 | 456,614 |
+
+What moves the point:
+
+- A longer resume moves it out, and the room past it, H* - C0, grows
+  too: each resume token adds w + m to A directly, plus one more
+  through its own weight in S0, the sum that already counts it once
+  as the resume-end call's own context. A fixed warning point would
+  instead take every resume token out of the work room, so each
+  handoff's larger resume would shorten the next cycle.
+- Faster growth moves it out in tokens and in by calls: the room grows
+  as the square root of g, and the count of work calls falls as one
+  over that root.
+- A dearer cache write moves it out, through m: the 1-hour TTL writes
+  at 1.6 times the 5-minute price.
+- The dollar price of a model never moves it.
+
+Band 1 sits W past the handoff point, where a handoff begun at band 0
+would have finished. Output tokens are left out of A, which places the
+point early rather than late. Once band 0 has fired, both points are
+latched for the rest of the cycle: either may fall, and neither rises,
+because context only grows and a point that moved outward would walk
+the gauge backwards. Before band 0 fires, the point follows the
+measured rate both ways, so the fallback rate of a cycle's first calls
+cannot pin it low. A compaction releases both latches. Haiku has no
+entry in the price table, so the hook says nothing on a Haiku session.
 
 ## Pushing the agent to hand off (optional)
 
@@ -351,11 +405,11 @@ handoff point and inside an open cycle.
 
 Anthropic list prices (September 2026), per million tokens:
 
-| model     | input  | cache read | cache write | output |
-| --------- | ------: | ----------: | -----------: | ------: |
-| Opus 5.5  | $4.00  | $0.20      | $5.00       | $20.00 |
-| Fable 5.1 | $10.00 | $0.25      | $12.50      | $50.00 |
-| Sonnet 5  | $2.00  | $0.20      | $2.50       | $10.00 |
+| model     | input  | cache read | 5-minute write | 1-hour write | output |
+| --------- | ------: | ----------: | --------------: | ------------: | ------: |
+| Opus 5.5  | $4.00  | $0.20      | $5.00          | $8.00        | $20.00 |
+| Fable 5.1 | $10.00 | $0.25      | $12.50         | $20.00       | $50.00 |
+| Sonnet 5  | $2.00  | $0.20      | $2.50          | $4.00        | $10.00 |
 
 A cache read is a multiple of the input price, and the multiple is not
 the same everywhere: 0.05 on Opus 5.5 and 0.025 on Fable 5.1, against
@@ -363,7 +417,7 @@ the 0.1 Sonnet 5 and every earlier model charge. The plugin stores the product, 
 a model matched to its family rather than its own generation is priced
 at up to two and a half times what it bills.
 
-The plugin's cost model:
+The cost of one turn, which the status line prints beside the gauge:
 
 ```
 one turn = context x cache-read price x calls per turn
@@ -373,24 +427,13 @@ one turn = context x cache-read price x calls per turn
 Worked examples:
 
 ```
-Opus 5.5  at 352K:  0.352 x $0.20 x 8.8 = $0.62 a turn
+Opus 5.5  at 400K:  0.400 x $0.20 x 8.8 = $0.70 a turn
 Fable 5.1 at 400K:  0.400 x $0.25 x 8.8 = $0.88 a turn
 ```
 
-And inverted, to set the thresholds:
-
-```
-target tokens = budget / (cache-read $/M x 8.8 / 1M)
-Opus 5.5:  $0.62 / ($0.20 x 8.8 / 1M) = 352,273
-Fable 5.1: $0.88 / ($0.25 x 8.8 / 1M) = 400,000  (over-budget line)
-```
-
-Two costs are deliberately left out. Writing a turn's new tokens into
-the cache (~17K at 1.25x input) and the output tokens themselves are
-both real, but neither grows with context - they add a roughly flat
-fraction of a dollar to every turn regardless of size. Deep in a session,
-cache reads are nearly the whole bill, and they are the only part that
-climbs, so they are the part the thresholds track.
+That figure leaves out cache writes and output. The handoff point
+takes cache writes in through m and leaves output out; [The handoff
+point](#the-handoff-point) gives the formula.
 
 The defaults, measured from a month of the author's usage - sessions
 with different tool habits will measure differently, which is why the
@@ -411,10 +454,11 @@ hook re-measures growth per session:
 | context        | everything re-sent with every call: system prompt, tools, conversation                                           |
 | billed context | `cache_read + cache_creation + uncached_input` on the last call                                                  |
 | cache read     | a re-sent token served from the prompt cache, at 5% of input price on Opus 5.5, 2.5% on Fable 5.1, 10% elsewhere |
-| cache write    | a new token added to the cache, at 125% of input price                                                           |
-| target         | context where a turn costs $0.62, lifted where the compaction cycle needs more; the gauge's 100%                 |
-| over budget    | context where a turn costs $0.88; never scaled up                                                                |
-| reserve        | room held below the target so the handoff itself still fits                                                      |
+| cache write    | a new token added to the cache, at 125% of input price for the 5-minute TTL, 200% for the 1-hour TTL             |
+| cycle          | a session's calls from its first, or from a compaction, to the handoff that ends it                              |
+| resume         | a cycle's calls from `hq open` through its last handoff read; ends at j0                                         |
+| handoff point  | context where a cycle's cost per call of work is lowest, H*; the gauge's 100% and band 0                         |
+| escalation     | one handoff write's growth past the handoff point, where a handoff begun there would finish; band 1              |
 | floor          | what a session is billed before any conversation: ~69K                                                           |
 | handoff        | write state to a file, start fresh; restarts at floor + file                                                     |
 | compaction     | `/compact`; summarizes in place and restarts near 123K                                                           |
@@ -426,14 +470,14 @@ hook re-measures growth per session:
   reminders and tool results, and the series has no such ambiguity. The
   series is cut at every compaction so the drop never reads as negative
   growth.
-- The warning sits a reserve below the target: two turns of growth at
-  the measured rate plus half again for slack, floored at 60,000 tokens
-  so a quiet session still gets room to write, and capped at a quarter
-  of the budget - or that same floor, where the floor is larger - so a
-  fast session is never warned beside a half-filled bar.
-- The target and warning point latch downward per session; only a
-  compaction releases them. The countdowns still track the live rate -
-  "two turns left" is meant to react - but the thresholds hold still.
+- The warning sits at the handoff point, priced from the cycle's floor,
+  its resume, its growth rate, and its cache TTL, and band 1 sits one
+  handoff write past it.
+- Once band 0 has fired, both points latch downward; only a compaction
+  releases them. The countdowns still track the live rate - "two turns
+  left" is meant to react - but the thresholds hold still.
+- Sidechain records are skipped: they carry a subagent's context, not
+  the session's.
 - A compaction is a drop that frees at least half of what a compaction
   restarts at; smaller dips (an expired cache block, a tool result
   leaving the window) do not reset the growth measurement.
@@ -463,9 +507,9 @@ version is in the path, so the glob keeps the line working across an
 upgrade, and `sort -V` keeps 0.10.0 ahead of 0.9.0. Running the plugin
 from a git clone instead? Point the command at
 `/path/to/clone/scripts/statusline.py`. The status line reads the growth rate
-and target from a file the hook writes each turn, so the two never
-disagree; without the hook it falls back to a default rate and still
-works. The directory it names is the one Claude Code started in, so a
+and both points from a file the hook writes each turn, so the two never
+disagree; without the hook it prices a fresh cycle at a default rate and
+still works. The directory it names is the one Claude Code started in, so a
 `cd` deeper in the tree - into the handoff folder itself, say - leaves
 the field alone. Once the session enters a handoff thread - `hq
 adopt`, `hq begin`, or `hq open`, each counted only when it succeeds -
