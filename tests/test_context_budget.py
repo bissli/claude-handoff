@@ -110,9 +110,9 @@ def test_the_resume_ends_at_the_first_call_that_does_other_work(tmp_path):
 
     Mutation: ending the resume at the first hq read or at the call
     after hq open; counting a sidechain record, whose Edit ends the
-    resume early and whose context reads as a compaction; or taking a
-    call's tool uses from its first record only, which hides the Edit
-    written in the second.
+    resume early and whose context reads as a restart in place; or
+    taking a call's tool uses from its first record only, which hides
+    the Edit written in the second.
     Oracle: hand-built transcript - F 62,000 with 50,000 written, hq
     open behind --root and --session flags, a Read, hq read and hq
     standing, a sed of a .handoff path, then a call whose second record
@@ -142,8 +142,8 @@ def test_the_resume_ends_at_the_first_call_that_does_other_work(tmp_path):
                                  one_hour=True)
 
 
-def test_a_compaction_restarts_the_floor_and_the_resume(tmp_path):
-    """Verify the cycle after a compaction is measured from its own start.
+def test_a_restart_in_place_restarts_the_floor_and_the_resume(tmp_path):
+    """Verify the cycle after a restart in place starts its own measure.
 
     Mutation: scanning the whole transcript as one cycle, so the floor
     and the resume stay those of the first cycle; or carrying the first
@@ -285,12 +285,13 @@ def test_the_countdown_rounds_up_so_it_never_sticks():
     assert 'handoff in 3' in line
 
 
-def test_growth_ignores_context_dropped_by_compaction():
-    """Verify a compaction drop restarts the growth run, not flattens it.
+def test_growth_ignores_context_dropped_by_a_restart_in_place():
+    """Verify a restart-in-place drop restarts the growth run, not
+    flattens it.
 
     Mutation: dropping the `run = []` reset in growth_per_call, so the
-    window spans the compaction.
-    Oracle: hand-computed. The post-compaction run climbs 20K over five
+    window spans the drop.
+    Oracle: hand-computed. The post-restart run climbs 20K over five
     steps, so growth is 5,000; spanning the drop would give (60-100)/9,
     which is negative and would silently fall back.
     """
@@ -299,7 +300,7 @@ def test_growth_ignores_context_dropped_by_compaction():
     assert cb.growth_per_call(series) == 5_000
 
 
-def test_growth_keeps_a_dip_smaller_than_a_compaction():
+def test_growth_keeps_a_dip_smaller_than_a_restart_in_place():
     """Verify a small fall in context stays in the growth run.
 
     Mutation: cutting the run at any fall, which leaves one value after
@@ -311,11 +312,12 @@ def test_growth_keeps_a_dip_smaller_than_a_compaction():
     assert cb.growth_per_call(series) == 80
 
 
-def test_growth_cuts_where_the_stop_hook_sees_a_compaction():
-    """Verify the growth cut and the Stop hook's compaction test agree.
+def test_growth_cuts_where_the_stop_hook_sees_a_restart_in_place():
+    """Verify the growth cut and the Stop hook's restart-in-place test
+    agree.
 
     Mutation: `>=` in place of `>` in growth_per_call's cut, or any
-    threshold other than half of POST_COMPACTION_TOKENS.
+    threshold other than half of RESTART_IN_PLACE_TOKENS.
     Oracle: boundary straddle from a 180,000 peak. A fall of 61,501
     cuts, leaving five values 5,000 apart; a fall of exactly 61,500 does
     not, so the run ends below its start and falls back.
@@ -493,10 +495,10 @@ def test_the_measured_rate_ignores_a_record_the_api_never_billed(tmp_path):
     """Verify an unbilled record changes nothing, wherever it lands.
 
     Mutation: dropping the billed test; or keying it off
-    isApiErrorMessage, a flag two thirds of real unbilled records do not
-    carry; or off the placeholder model id, which reads a record's label
-    rather than what it billed. Such a record enters the series as a
-    context of zero, which is indistinguishable from a compaction - the
+    isApiErrorMessage, a flag a real unbilled record need not carry; or
+    off the placeholder model id, which reads a record's label rather
+    than what it billed. Such a record enters the series as a context
+    of zero, which is indistinguishable from a restart in place - the
     growth run restarts there and counts the whole conversation as
     growth since.
     Oracle: invariance under insertion - splicing the record at every
@@ -526,8 +528,8 @@ def test_a_call_billed_one_level_down_still_counts(tmp_path):
     Mutation: concluding a record billed nothing from its top-level
     counts alone. Real records put the counts in either place, and the
     top level reads as all zeros on some of them, so the context they
-    carry - 484,173 tokens on the one that prompted this - is thrown
-    away and the growth run restarts at a phantom compaction.
+    carry is thrown away and the growth run restarts at a phantom
+    restart in place.
     Oracle: differential - the same climb written both ways must
     measure the same, and only a record with the counts in neither
     place may be dropped.
@@ -563,11 +565,11 @@ def test_a_missing_or_unreadable_transcript_stays_silent(tmp_path):
 
 
 def test_subagent_turns_are_never_announced(monkeypatch, capsys, tmp_path):
-    """Verify a subagent's own context never raises a compaction warning.
+    """Verify a subagent's own context never raises a budget warning.
 
-    Mutation: dropping the agent_id guard in main. A subagent cannot
-    compact and its context dies with it, so every delegated call would
-    fire a warning the user can do nothing about.
+    Mutation: dropping the agent_id guard in main. A subagent never
+    restarts in place and its context dies with it, so every delegated
+    call would fire a warning the user can do nothing about.
     Oracle: a spy on stdout - the main-thread payload prints, the
     subagent payload with the identical transcript does not.
     """
@@ -588,17 +590,16 @@ def test_subagent_turns_are_never_announced(monkeypatch, capsys, tmp_path):
     assert capsys.readouterr().out.strip() == ''
 
 
-def test_a_band_is_announced_once_and_rearmed_by_a_compaction(monkeypatch,
-                                                              capsys,
-                                                              tmp_path):
+def test_a_band_is_announced_once_and_rearmed_by_a_restart_in_place(
+        monkeypatch, capsys, tmp_path):
     """Verify the warning fires on entry, stays quiet, then fires again.
 
     Mutation: writing the state unconditionally without comparing, which
     silences everything, or never writing it, which re-warns every turn
     until the user disables the hook.
     Oracle: a spy on stdout across four runs - warn at 520K, silence at
-    530K, silence at the 120K a compaction drops to, and warn again at
-    590K, past the new cycle's 585,205 point.
+    530K, silence at the 120K a restart in place drops to, and warn
+    again at 590K, past the new cycle's 585,205 point.
     """
     state = tmp_path / 'state'
     monkeypatch.setattr(cb, 'STATE_DIR', str(state))
@@ -710,14 +711,15 @@ def test_the_hook_and_the_gauge_never_name_a_different_threshold(monkeypatch,
 
 def test_no_threshold_rises_once_a_warning_is_given(monkeypatch, capsys,
                                                     tmp_path):
-    """Verify a dip that is not a compaction releases neither latch.
+    """Verify a dip that is not a restart in place releases neither
+    latch.
 
-    Mutation: testing `context < last_context` for the compaction that
-    releases the latches, with no size to it; or dropping the latch.
-    Billed context falls without a compaction - a cached block
-    expiring, a tool result dropped - and a dip of a few hundred tokens
-    then hands the session a fresh handoff point further out and a
-    rearmed band, which is the walking-backwards this latch exists to
+    Mutation: testing `context < last_context` for the restart in place
+    that releases the latches, with no size to it; or dropping the
+    latch. Billed context falls without a restart in place - a cached
+    block expiring, a tool result dropped - and a dip of a few hundred
+    tokens then hands the session a fresh handoff point further out and
+    a rearmed band, which is the walking-backwards this latch exists to
     stop.
     Oracle: monotonicity of the state file against its own previous
     turn - from the warning at 520K, across an hq open and read that

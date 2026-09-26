@@ -21,7 +21,7 @@ Notes
   same file and may fall, never rise. Context only grows, so a
   threshold that moves outward after a warning walks the gauge
   backwards, and the point rises with the measured growth rate, which
-  swings when a session starts reading large files. A compaction
+  swings when a session starts reading large files. A restart in place
   releases both.
 - Growth is measured from the context series itself, not by counting
   turns. Transcripts interleave real user prompts with injected system
@@ -29,11 +29,12 @@ Notes
   separates them; the context series has no such ambiguity.
 - Only records that billed something are points on that series. A failed
   call is written as an assistant record too, and reading its zeroed
-  usage as a context of zero is indistinguishable from a compaction.
+  usage as a context of zero is indistinguishable from a restart in
+  place.
 - Sidechain records are skipped everywhere. They carry a subagent's
   context, not this session's.
-- A subagent carries its own short-lived context and never compacts, so
-  the hook exits silently when ``agent_id`` is present.
+- A subagent carries its own short-lived context and never restarts in
+  place, so the hook exits silently when ``agent_id`` is present.
 """
 
 import json
@@ -115,8 +116,8 @@ def growth_per_call(series: list[int]) -> int:
 
     Notes
     -----
-    - The series is cut at a compaction, the drop ``main`` tests for:
-      averaging across one reads as near-zero growth, which would
+    - The series is cut at a restart in place, the drop ``main`` tests
+      for: averaging across one reads as near-zero growth, which would
       silence the warning exactly where it matters most. A smaller dip,
       such as an expired cache block, stays in the run.
     - The mean is right here rather than the median: what matters is how
@@ -126,7 +127,7 @@ def growth_per_call(series: list[int]) -> int:
     window = series[-GROWTH_WINDOW_CALLS:]
     run: list[int] = []
     for value in window:
-        if run and run[-1] - value > budget.POST_COMPACTION_TOKENS // 2:
+        if run and run[-1] - value > budget.RESTART_IN_PLACE_TOKENS // 2:
             run = []
         run.append(value)
     if len(run) < 5 or run[-1] <= run[0]:
@@ -147,8 +148,8 @@ def read_transcript(path: str) -> tuple[int, str, int, budget.Cycle | None]:
     tuple[int, str, int, budget.Cycle or None]
         Billed context of the last assistant call, that call's model id,
         the estimated tokens added per call, and the measurements of the
-        cycle since the last compaction. Context is 0 and the cycle None
-        when the transcript holds no usage record yet.
+        cycle since the last restart in place. Context is 0 and the
+        cycle None when the transcript holds no usage record yet.
 
     Notes
     -----
@@ -166,7 +167,7 @@ def read_transcript(path: str) -> tuple[int, str, int, budget.Cycle | None]:
       puts them at the top level or under ``iterations``, a failed one
       has neither.
     - The cycle starts at the last drop ``main`` would read as a
-      compaction. Its resume ends at j0, the first call after the
+      restart in place. Its resume ends at j0, the first call after the
       cycle's first ``hq open`` whose tool uses are not all a Read, a
       Skill or ToolSearch call, or a Bash command naming ``.handoff``,
       ``HANDOFF``, or an hq read verb. A cycle with no ``hq open`` has
@@ -211,9 +212,9 @@ def read_transcript(path: str) -> tuple[int, str, int, budget.Cycle | None]:
                           + (counts.get('cache_creation_input_tokens') or 0)
                           + (counts.get('input_tokens') or 0))
             # A record that billed nothing is a failed call, not a
-            # smaller context. Left in the series it reads as a
-            # compaction, and the run that restarts after it counts the
-            # whole conversation as growth since zero - which triples
+            # smaller context. Left in the series it reads as a restart
+            # in place, and the run that restarts after it counts the
+            # whole conversation as growth since zero - which inflates
             # the measured rate for the rest of the session.
             if billed <= 0:
                 continue
@@ -239,7 +240,7 @@ def read_transcript(path: str) -> tuple[int, str, int, budget.Cycle | None]:
     series = [call.billed for call in calls]
     start = 0
     for index in range(1, len(series)):
-        if series[index - 1] - series[index] > budget.POST_COMPACTION_TOKENS // 2:
+        if series[index - 1] - series[index] > budget.RESTART_IN_PLACE_TOKENS // 2:
             start = index
     cycle = calls[start:]
 
@@ -439,21 +440,20 @@ def main() -> int:
     announced, last_context, handoff_held, escalate_held = load_state(
         state_path)
     # Notes:
-    # - A compaction is the one event that resets a session: it rearms
-    #   the bands and releases both latches, so the cycle that follows
-    #   is measured on its own terms. Everything here turns on telling
-    #   one from a dip, which is why the test is a size and not just a
-    #   fall.
-    # - Billed context does fall without a compaction - a cached block
-    #   expiring, a tool result dropped from the window. Across 301
-    #   real drops the smallest true compaction freed 72,591 tokens and
-    #   the largest dip 59,611, so half of where a compaction restarts
-    #   separates them with room on both sides.
-    compacted = last_context - context > budget.POST_COMPACTION_TOKENS // 2
+    # - A restart in place is the one event that resets a session: it
+    #   rearms the bands and releases both latches, so the cycle that
+    #   follows is measured on its own terms. Everything here turns on
+    #   telling one from a dip, which is why the test is a size and not
+    #   just a fall.
+    # - Billed context does fall without a restart in place - a cached
+    #   block expiring, a tool result dropped from the window - so half
+    #   of the restart-in-place drop is the size that separates the two,
+    #   with room on both sides.
+    restarted = last_context - context > budget.RESTART_IN_PLACE_TOKENS // 2
     # The latches hold only once band 0 has been announced. Before that
     # the point follows the live rate both ways, so a quiet stretch
     # early in a cycle cannot pin it low for the rest of the cycle.
-    held = not compacted and announced >= 0
+    held = not restarted and announced >= 0
     handoff_at = latched(
         budget.handoff_point(cycle, per_call, tier),
         handoff_held if held else 0)
@@ -464,7 +464,7 @@ def main() -> int:
     # The stored band falls only when the context itself fell, never
     # because slowing growth lifted a threshold past the current
     # context, which would re-fire a band already announced.
-    kept = band if compacted else max(band, announced)
+    kept = band if restarted else max(band, announced)
     store_state(state_path, kept, per_call, handoff_at, escalate_at, context)
     if band <= announced or band < 0:
         return 0

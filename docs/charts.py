@@ -269,40 +269,6 @@ def column_el(x: float, y_top: float, w: float, h: float, fill: str,
             f'L {fmt(x + w)} {fmt(y_top + h)} Z" fill="{fill}"/>')
 
 
-def hbar_el(x: float, y: float, w: float, h: float, fill: str,
-            opacity: float = 1.0) -> str:
-    """One horizontal bar, square at the baseline, rounded at the tip.
-
-    Parameters
-    ----------
-    x : float
-        Baseline edge in pixels.
-    y : float
-        Top edge in pixels.
-    w : float
-        Bar length.
-    h : float
-        Bar thickness; callers keep it under 24px.
-    fill : str
-        Fill color.
-    opacity : float, default 1.0
-        Fill opacity; de-emphasis bars use 0.55 so a long gray bar
-        does not read as a heavy block.
-
-    Returns
-    -------
-    str
-        Serialized ``<path>`` element.
-    """
-    r = min(4.0, h / 2)
-    faded = f' fill-opacity="{fmt(opacity)}"' if opacity < 1 else ''
-    return (f'<path d="M {fmt(x)} {fmt(y)} L {fmt(x + w - r)} {fmt(y)} '
-            f'Q {fmt(x + w)} {fmt(y)} {fmt(x + w)} {fmt(y + r)} '
-            f'L {fmt(x + w)} {fmt(y + h - r)} '
-            f'Q {fmt(x + w)} {fmt(y + h)} {fmt(x + w - r)} {fmt(y + h)} '
-            f'L {fmt(x)} {fmt(y + h)} Z" fill="{fill}"{faded}/>')
-
-
 def svg_doc(height: int, body: list[str]) -> str:
     """Wrap chart elements in a standalone SVG document.
 
@@ -525,38 +491,11 @@ def chart_session_cost(t: Theme) -> str:
     return svg_doc(340, body)
 
 
-def chart_restarts(t: Theme) -> str:
-    """Where each exit lands: billed context on the first call after.
-    """
-    label_x, bar_x = 162.0, 170.0
-    px_per_k = 520 / 123
-    rows = (
-        ('new session', 69, t.gray),
-        ('handoff restart', 72, t.blue),
-        ('compact restart', 123, t.gray),
-        )
-
-    body = [
-        text_el(56, 24, 'Where each exit restarts you', t.primary, 13.5,
-                weight='600'),
-        text_el(56, 42, 'billed context on the first call after', t.muted,
-                11.5),
-        ]
-    y = 60.0
-    for label, tokens_k, color in rows:
-        w = tokens_k * px_per_k
-        body.extend((text_el(label_x, y + 14, label, t.secondary, 12, anchor='end'), hbar_el(bar_x, y, w, 20, color, opacity=0.55 if color == t.gray else 1.0), text_el(bar_x + w + 8, y + 14, f'{tokens_k}K', t.primary, 12, weight='600')))
-        y += 38
-    body.append(line_el(bar_x, 56, bar_x, y - 14, t.axis))
-    return svg_doc(180, body)
-
-
 CHARTS = {
     'cost-per-turn': chart_cost_per_turn,
     'cache-discount': chart_cache_discount,
     'resend': chart_resend,
     'session-cost': chart_session_cost,
-    'restarts': chart_restarts,
     }
 
 if __name__ == '__main__':

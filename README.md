@@ -148,26 +148,11 @@ for the other.
 The warnings point at `/handoff`, a command the plugin installs. It
 writes the session's state - plan, key files with line anchors, settled
 decisions, dead ends - to `.handoff/<task-name>/HANDOFF.md`, the folder
-named after the task, and a fresh session reads it back and resumes.
-The alternative exit, `/compact`, summarizes the conversation in place.
-They restart at very different sizes:
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/restarts-dark.svg">
-  <img alt="Billed context on the first call after each exit: a new
-session starts at 69K, a handoff restart at 72K, a compact restart at
-123K."
-src="docs/restarts-light.svg">
-</picture>
-
-Compaction cannot touch the ~69K floor - the system prompt, tool
-schemas, and instruction files are re-sent in full either way - so it
-compresses only the conversation, the part that was already smallest,
-and its summary plus preserved tail land the restart near 123K. A
+named after the task, and a fresh session reads it back and resumes. A
 handoff file is 2-5K, exact rather than summarized, and starts a
-session that carries nothing else. Compact still earns its place
-mid-task, when the preserved tail - the messages a session was part-way
-through - is worth paying for.
+session that carries nothing else beyond the ~69K floor - the system
+prompt, tool schemas, and instruction files every session re-sends in
+full.
 
 Using it:
 
@@ -247,7 +232,7 @@ session chose.)
 - Every line `hq` prints that calls for a move names it, and
   `hq help <topic>` (anchors, kinds, read, rules, stale-path, write) and
   `hq <verb> --help` carry the reference detail the skill file points
-  at, so the skill stays short enough to survive a compaction whole.
+  at, so the skill stays short enough to survive a re-attach whole.
 - `/handoff when`, `diff`, `artifacts`, and `standing` query the
   ledger: one path's history by any spelling of the path, the cursor
   change between two cycles by section, every live artifact, every
@@ -291,10 +276,10 @@ The second also raises a desktop notification.
 
 The warning sits at the context where a cycle's cost per call of work
 is lowest. A cycle runs from a session's first call, or from the first
-call after a compaction, to the handoff that ends it. Every call bills
-its whole context at the cache-read price, and every new token bills
-once more, at m times that price, when it is written to the cache.
-Counted in those read-token units:
+call after a restart in place, to the handoff that ends it. Every call
+bills its whole context at the cache-read price, and every new token
+bills once more, at m times that price, when it is written to the
+cache. Counted in those read-token units:
 
 ```
 F   billed context of the cycle's first call
@@ -369,8 +354,9 @@ latched for the rest of the cycle: either may fall, and neither rises,
 because context only grows and a point that moved outward would walk
 the gauge backwards. Before band 0 fires, the point follows the
 measured rate both ways, so the fallback rate of a cycle's first calls
-cannot pin it low. A compaction releases both latches. Haiku has no
-entry in the price table, so the hook says nothing on a Haiku session.
+cannot pin it low. A restart in place releases both latches. Haiku has
+no entry in the price table, so the hook says nothing on a Haiku
+session.
 
 ## Pushing the agent to hand off (optional)
 
@@ -397,9 +383,9 @@ Presence alone is the switch and it takes effect at the next prompt, so
 nothing sticks armed. The hook ignores the contents, which leaves room
 for a line recording what the file is for. The nudge keeps no state of
 its own. It measures the context from the transcript rather than
-trusting the figure the Stop hook stored, because `/clear` and
-`/compact` leave that figure behind them, and it stays silent below the
-handoff point and inside an open cycle.
+trusting the figure the Stop hook stored, because `/clear` leaves that
+figure behind it, and it stays silent below the handoff point and
+inside an open cycle.
 
 ## The math
 
@@ -443,48 +429,48 @@ hook re-measures growth per session:
 - **1,900** tokens of growth per call (~17K a turn) until a session has
   history enough to measure its own rate
 - **69,000** billed tokens for a fresh session, **123,000** after a
-  compaction
+  restart in place
 
 ## Glossary
 
-| term           | meaning                                                                                                          |
-| -------------- | ---------------------------------------------------------------------------------------------------------------- |
-| turn           | one prompt from you plus everything Claude does before waiting again                                             |
-| call           | one API request; each tool use is one, ~9 per turn                                                               |
-| context        | everything re-sent with every call: system prompt, tools, conversation                                           |
-| billed context | `cache_read + cache_creation + uncached_input` on the last call                                                  |
-| cache read     | a re-sent token served from the prompt cache, at 5% of input price on Opus 5.5, 2.5% on Fable 5.1, 10% elsewhere |
-| cache write    | a new token added to the cache, at 125% of input price for the 5-minute TTL, 200% for the 1-hour TTL             |
-| cycle          | a session's calls from its first, or from a compaction, to the handoff that ends it                              |
-| resume         | a cycle's calls from `hq open` through its last handoff read; ends at j0                                         |
-| handoff point  | context where a cycle's cost per call of work is lowest, H*; the gauge's 100% and band 0                         |
-| escalation     | one handoff write's growth past the handoff point, where a handoff begun there would finish; band 1              |
-| floor          | what a session is billed before any conversation: ~69K                                                           |
-| handoff        | write state to a file, start fresh; restarts at floor + file                                                     |
-| compaction     | `/compact`; summarizes in place and restarts near 123K                                                           |
+| term             | meaning                                                                                                                  |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| turn             | one prompt from you plus everything Claude does before waiting again                                                     |
+| call             | one API request; each tool use is one, ~9 per turn                                                                       |
+| context          | everything re-sent with every call: system prompt, tools, conversation                                                   |
+| billed context   | `cache_read + cache_creation + uncached_input` on the last call                                                          |
+| cache read       | a re-sent token served from the prompt cache, at 5% of input price on Opus 5.5, 2.5% on Fable 5.1, 10% elsewhere         |
+| cache write      | a new token added to the cache, at 125% of input price for the 5-minute TTL, 200% for the 1-hour TTL                     |
+| cycle            | a session's calls from its first, or from a restart in place, to the handoff that ends it                                |
+| resume           | a cycle's calls from `hq open` through its last handoff read; ends at j0                                                 |
+| handoff point    | context where a cycle's cost per call of work is lowest, H*; the gauge's 100% and band 0                                 |
+| escalation       | one handoff write's growth past the handoff point, where a handoff begun there would finish; band 1                      |
+| floor            | what a session is billed before any conversation: ~69K                                                                   |
+| handoff          | write state to a file, start fresh; restarts at floor + file                                                             |
+| restart in place | a big drop in billed context inside one session - a `/clear` - that rearms growth measurement and the latched thresholds |
 
 ## How it decides
 
 - Growth is measured from the billed-context series itself, not by
   counting turns - transcripts interleave prompts with injected
   reminders and tool results, and the series has no such ambiguity. The
-  series is cut at every compaction so the drop never reads as negative
-  growth.
+  series is cut at every restart in place so the drop never reads as
+  negative growth.
 - The warning sits at the handoff point, priced from the cycle's floor,
   its resume, its growth rate, and its cache TTL, and band 1 sits one
   handoff write past it.
-- Once band 0 has fired, both points latch downward; only a compaction
-  releases them. The countdowns still track the live rate - "two turns
-  left" is meant to react - but the thresholds hold still.
+- Once band 0 has fired, both points latch downward; only a restart in
+  place releases them. The countdowns still track the live rate - "two
+  turns left" is meant to react - but the thresholds hold still.
 - Sidechain records are skipped: they carry a subagent's context, not
   the session's.
-- A compaction is a drop that frees at least half of what a compaction
-  restarts at; smaller dips (an expired cache block, a tool result
-  leaving the window) do not reset the growth measurement.
+- A restart in place is a drop that frees at least half of what one
+  restarts a session at; smaller dips (an expired cache block, a tool
+  result leaving the window) do not reset the growth measurement.
 - A failed API call is written to the transcript with a zeroed usage
   block; it is skipped, not read as a context of zero.
-- Subagents are skipped: their context is short-lived and cannot
-  compact, so a warning there gives you nothing to act on.
+- Subagents are skipped: their context is short-lived and never
+  restarts in place, so a warning there gives you nothing to act on.
 
 ## Status line (optional, one manual step)
 

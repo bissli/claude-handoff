@@ -166,8 +166,8 @@ def test_nudge_measures_context_live_rather_than_from_stored_state(
     """Verify a cleared session is judged on its transcript, not memory.
 
     Mutation: context taken from load_state instead of read_transcript,
-    which /clear and /compact leave at its pre-clear figure while the
-    session id and state file survive.
+    which /clear leaves at its pre-clear figure while the session id
+    and state file survive.
     Oracle: a state file whose stored context is far past the point and
     a transcript that is not - the state file's figure would fire.
     """

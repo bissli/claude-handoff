@@ -51,17 +51,18 @@ CACHE_WRITE_MULTIPLIER_1H = 2.0
 # default rather than at the cheaper 5-minute one.
 DEFAULT_ONE_HOUR = True
 
-# Assistant calls per user turn, measured across 604 compaction cycles.
+# Assistant calls per user turn, measured across many restart-in-place
+# cycles.
 CALLS_PER_TURN = 8.8
 
 # Turns a handoff write takes. Reading it back happens in a fresh
 # session, so it is charged to that one, not to this.
 HANDOFF_TURNS = 2
 
-# Billed context on the first call after a compaction: the system prompt,
-# tools, and instruction files all return, along with the summary.
-# Measured median across 299 compactions.
-POST_COMPACTION_TOKENS = 123_000
+# Billed context on the first call after a restart in place: the system
+# prompt, tools, and instruction files all return, along with whatever
+# the platform's own reset carries forward.
+RESTART_IN_PLACE_TOKENS = 123_000
 
 # Billed context on the first call of a brand new session: the same
 # instruction and tool floor, with no summary and no preserved tail.
@@ -77,7 +78,7 @@ class Cycle:
     """The measurements of one cycle that its handoff point is priced from.
 
     A cycle runs from a session's first call, or from the first call
-    after a compaction, to the handoff that ends it.
+    after a restart in place, to the handoff that ends it.
 
     Attributes
     ----------

@@ -28,9 +28,9 @@ Notes
   creating or removing the file takes effect at the next prompt.
   Nothing can stick armed.
 - The hook measures context from the transcript rather than reading the
-  context the budget hook stored. ``/clear`` and ``/compact`` both keep
-  the session id and leave that stored figure behind them, so a
-  remembered context asks a conversation holding nothing to hand off.
+  context the budget hook stored. ``/clear`` keeps the session id and
+  leaves that stored figure behind it, so a remembered context asks a
+  conversation holding nothing to hand off.
   The handoff point itself is latched per session and does not go
   stale, so it still comes from the stored state.
 - A folder holding a live .hq.lock is inside an open cycle, so the

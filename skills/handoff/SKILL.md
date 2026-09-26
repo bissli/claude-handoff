@@ -3,7 +3,7 @@ name: handoff
 description: >-
   Write or read a session handoff under .handoff/ - the exit the
   context-budget warnings point at. Use near the budget or to resume a
-  prior session; replaces /compact.
+  prior session.
 allowed-tools: Bash(hq *)
 ---
 
