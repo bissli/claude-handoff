@@ -303,6 +303,7 @@ R1  A row whose inferred kind is spec or draft, or whose stored or
       refused: R1: <kind> status must stay live without --successor or --archive
       refused: R1: <kind> kind must stay spec or draft without --successor or --archive
       refused: R1: successor <path> is <status>, not live
+      refused: R1: successor <path> is not another file on disk
     A live always row needs an anchor, whatever its kind: a stamp
     that would leave where at '-' is refused, new row and re-stamp
     alike, and the file's headings print under the line:
@@ -2994,6 +2995,53 @@ def _stored_path(
         return str(candidate), candidate, 'abs'
 
 
+def _stamp_path(
+    folder: pathlib.Path,
+    token: str,
+    rows: list[Row],
+) -> tuple[str, pathlib.Path, str]:
+    """Resolve a stamp token - the path or ``--successor`` - to its key.
+
+    Parameters
+    ----------
+    folder : pathlib.Path
+        Handoff folder whose ledger holds ``rows``.
+    token : str
+        The token as typed: folder-relative, root-relative, pin-relative,
+        or by ``~`` or absolutely; backticks are stripped.
+    rows : list[Row]
+        Every ledger row; a spelling whose key has a row counts as held.
+
+    Returns
+    -------
+    tuple[str, pathlib.Path, str]
+        The stored path, the path on disk, and the base, as
+        ``_stored_path`` returns them.
+
+    Notes
+    -----
+    - A spelling is held where its file exists or its key has a row.
+      The folder spelling wins when held, then each of
+      ``_search_bases`` in order; a token no base holds keeps the
+      folder spelling.
+    - A ``/`` or ``~`` token is never searched.
+    - A token the root or the work dir holds prints
+      ``hq stamp: <token> -> <key> (root)`` or ``(work dir)``.
+    """
+    stored, path_obj, base = _stored_path(folder, token)
+    clean = token.strip('`')
+    if (path_obj.exists() or clean.startswith(('/', '~'))
+            or any(row['path'] == stored for row in rows)):
+        return stored, path_obj, base
+    for idx, base_dir in enumerate(_search_bases(folder)):
+        cand_path, cand_obj, cand_base = _stored_path(folder, str(base_dir / clean))
+        if cand_obj.exists() or any(row['path'] == cand_path for row in rows):
+            base_name = 'root' if idx == 0 else 'work dir'
+            print(f'hq stamp: {clean} -> {cand_path} ({base_name})')
+            return cand_path, cand_obj, cand_base
+    return stored, path_obj, base
+
+
 def _folder_state(
     folder: pathlib.Path,
 ) -> tuple[list, list, dict, dict, list, bytes, bytes]:
@@ -4616,7 +4664,7 @@ def _do_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
       a pinned work dir, and the row stores the form it resolves to -
       folder-relative with base ``folder``, else ``~`` or absolute with
       base ``abs`` - so one file keeps one ledger key whichever
-      spelling stamps it.
+      spelling stamps it. ``--successor`` resolves the same way.
     - A refusal appends a receipt row; a successful stamp appends the
       row.
     - A row that would sit live at ``always`` with no ``--where`` is
@@ -4652,27 +4700,13 @@ def _do_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
     ledger_path = folder / 'ledger.tsv'
     rows = _read_tsv(ledger_path, LEDGER_FIELDS)
     live = latest_rows(rows)
-    clean = path.strip('`')
-    stored_path, path_obj, base = _stored_path(folder, path)
-    never_stamped = all(row['path'] != stored_path for row in rows)
     # A rendered block prints a repo file root- or work-dir-relative,
     # and the hq when command it prints beside it takes that spelling,
-    # so the write verb resolves it against the same bases. The rung is
-    # ungated by --status and --successor: a row retired by the printed
+    # so the write verb resolves it against the same bases. The search
+    # is ungated by --status and --successor: a row retired by the printed
     # path must retire the row the absolute path opened, not a twin.
-    if not (path_obj.exists() or not never_stamped
-            or clean.startswith(('/', '~'))):
-        for idx, base_dir in enumerate(_search_bases(folder)):
-            cand_path, cand_obj, cand_base = _stored_path(
-                folder, str(base_dir / clean))
-            if not (cand_obj.exists()
-                    or any(row['path'] == cand_path for row in rows)):
-                continue
-            base_name = 'root' if idx == 0 else 'work dir'
-            print(f'hq stamp: {clean} -> {cand_path} ({base_name})')
-            stored_path, path_obj, base = cand_path, cand_obj, cand_base
-            never_stamped = all(row['path'] != stored_path for row in rows)
-            break
+    stored_path, path_obj, base = _stamp_path(folder, path, rows)
+    never_stamped = all(row['path'] != stored_path for row in rows)
     prev = live.get(stored_path, {})
     # Notes:
     # - An abs path not on disk is a file on another host or one still
@@ -4737,7 +4771,7 @@ def _do_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
             (k for k in declared if k in {'spec', 'draft'}), gate_kind)
     successor_given = getattr(argv, 'successor', None)
     successor = (
-        _stored_path(folder, successor_given)[0] if successor_given
+        _stamp_path(folder, successor_given, rows)[0] if successor_given
         else prev.get('successor', '-') or '-')
     successor_path = _successor_path(folder, successor)
     # Notes:
@@ -4819,6 +4853,10 @@ def _do_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
             'lines': n_lines, 'reason': reason, 'label': label,
             }
         r1_result = check_r1(new_row, gate_kind, successor_on_disk)
+        # R1 passes every row whose successor is on disk, so a stamp
+        # that gave one and was refused was refused for that successor.
+        if r1_result and successor_given and successor != '-':
+            r1_result = f'R1: successor {successor} is not another file on disk'
         if r1_result:
             refusal_reason = f'refused: {r1_result}'
         elif status == 'live' and rb == 'always' and where == '-':
@@ -6830,9 +6868,9 @@ def _build_parser() -> argparse.ArgumentParser:
         'A stamp that gives --where and lets --label carry forward draws a\n'
         'third advisory where the label names an s<n> section the new spans\n'
         'do not cover.\n'
-        '--successor P sets status=superseded read_before=never unless the\n'
-        'stamp says otherwise; --archive sets status=archived\n'
-        'read_before=never and requires --reason.\n'
+        '--successor P resolves as the path does and sets status=superseded\n'
+        'read_before=never unless the stamp says otherwise; --archive sets\n'
+        'status=archived read_before=never and requires --reason.\n'
         '--batch reads one stamp per stdin line, the same\n'
         'arguments minus the slug, split like a shell line.\n'
         'See hq help kinds (inference and fields), hq help anchors (--where\n'

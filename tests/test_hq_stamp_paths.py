@@ -89,6 +89,70 @@ def test_a_backticked_and_dot_slash_successor_keys_on_the_stored_path(
     assert (current['status'], current['read_before']) == ('live', 'always')
 
 
+def test_a_root_relative_successor_resolves_as_the_path_does(
+        tmp_path, monkeypatch, capsys):
+    """A renamed repo draft takes its successor by the root-relative path.
+
+    Mutation: --successor resolved against the folder alone, so the
+    spelling the positional path accepts misses the file on disk and R1
+    refuses the supersession.
+    Oracle: exit 0, the old row superseded at never naming the key the
+    new file's own root-relative stamp stored, and the resolution line.
+    """
+    folder = _root(tmp_path, monkeypatch)
+    tools = folder.parent.parent / 'tools'
+    tools.mkdir()
+    (tools / 'old_loader.ps1').write_text('$a = 1\n')
+    hq.main(['begin', _SLUG])
+    assert hq.main([
+        'stamp', _SLUG, 'tools/old_loader.ps1', '--kind', 'draft']) == 0
+    (tools / 'old_loader.ps1').rename(tools / 'new_loader.ps1')
+    assert hq.main([
+        'stamp', _SLUG, 'tools/new_loader.ps1', '--kind', 'draft']) == 0
+    old_key, new_key = (row['path'] for row in _rows(folder))
+    capsys.readouterr()
+
+    assert hq.main([
+        'stamp', _SLUG, 'tools/old_loader.ps1',
+        '--successor', 'tools/new_loader.ps1']) == 0
+
+    assert (f'hq stamp: tools/new_loader.ps1 -> {new_key} (root)'
+            in capsys.readouterr().out)
+    current = hq.latest_rows(_rows(folder))[old_key]
+    assert (current['status'], current['read_before'], current['successor']) == (
+        'superseded', 'never', new_key)
+
+
+def test_a_successor_no_base_holds_is_refused_by_name(
+        tmp_path, monkeypatch, capsys):
+    """A refused --successor is named in the refusal and its receipt.
+
+    Mutation: the R1 tier line kept for a stamp whose given successor
+    names no file, so the refusal reads as a tier breach and hides the
+    token that failed to resolve; or the reason naming the raw token in
+    place of the key it resolved to.
+    Oracle: the exact printed line and the receipt's reason for the
+    token './tools/absent.py', with the row still live at edit.
+    """
+    folder = _root(tmp_path, monkeypatch)
+    hq.main(['begin', _SLUG])
+    (folder / 'drafts').mkdir()
+    (folder / 'drafts' / 'x.py').write_text('x = 1\n')
+    assert hq.main(['stamp', _SLUG, 'drafts/x.py']) == 0
+    capsys.readouterr()
+
+    assert hq.main([
+        'stamp', _SLUG, 'drafts/x.py', '--successor', './tools/absent.py']) == 1
+
+    reason = 'refused: R1: successor tools/absent.py is not another file on disk'
+    assert capsys.readouterr().out.strip() == (
+        f'hq stamp: {reason}'
+        ' - supply a live --successor or --archive --reason, or leave the row gated')
+    current = hq.latest_rows(_rows(folder))['drafts/x.py']
+    assert (current['status'], current['read_before'], current['reason']) == (
+        'live', 'edit', reason)
+
+
 def test_a_relative_token_is_never_searched_in_the_home_directory(
         tmp_path, monkeypatch, capsys):
     """A bare relative token stays folder-relative when only $HOME has it.
