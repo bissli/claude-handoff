@@ -22,32 +22,97 @@ import statusline as sl  # noqa: E402  (same)
 
 # A cycle climbing 10,000 tokens a call from a 70,000 floor, on Opus 5.5
 # at the 1-hour write price with nothing written on the first call: the
-# handoff point is 514,765 and the escalation point 690,765.
+# handoff point is 376,209 and the escalation point 405,209.
 CLIMB = [70_000 + 10_000 * step for step in range(90)]
 
 
+def _cycle(resume_context=80_000, resume_sum=700_000, resume_output=3_000,
+           one_hour=True):
+    """Build the worked cycle: F 62,000 with 50,000 written.
+    """
+    return budget.Cycle(floor=62_000, floor_written=50_000,
+                        resume_context=resume_context, resume_sum=resume_sum,
+                        resume_output=resume_output, one_hour=one_hour)
+
+
 def test_the_handoff_point_reproduces_the_worked_values():
-    """Verify H* = C0 + sqrt(2 g A) on the three worked cycles.
+    """Verify H* = C0 + sqrt(2 g A) on hand-computed cycles.
 
     Mutation: any dropped or rescaled term of A - the resume sum S0, the
-    handoff write's w (C0 + W/2), or the m (Fw + C0 - F + W) cache
-    writes - or the factor 2 under the root.
-    Oracle: hand-computed from the formula with F 62,000, Fw 50,000,
-    g 2,300, w 17.6, W 40,480, m 40. At C0 80,000 and S0 700,000,
-    A = 700,000 + 17.6 * 100,240 + 40 * 108,480 = 6,803,424 and
-    sqrt(4,600 A) = 176,906.05, so H* = 256,906; likewise 376,934 at
-    C0 150,000 with S0 1,060,000, and 456,614 at C0 200,000 with S0
-    1,300,000.
+    write's w (C0 + W/2), the cache writes priced at m rather than
+    m - 1, the output r (Or + Ow) left out or priced at m - or the
+    factor 2 under the root.
+    Oracle: hand-computed with F 62,000, Fw 50,000, g 2,300, Or 3,000,
+    w 17.6, W 29,000, Ow 20,000. On Opus 5.5 at the 1-hour TTL, m 40
+    and r 100: at C0 80,000 and S0 700,000, A = 700,000 + 17.6 * 94,500
+    + 39 * 97,000 + 100 * 23,000 = 8,446,200 and sqrt(4,600 A) =
+    197,110.43, so H* = 277,110; likewise 392,350 at C0 150,000 with S0
+    1,060,000, and 469,918 at C0 200,000 with S0 1,300,000. On Fable
+    5.1 at the 5-minute TTL, m 50 and r 200, the first cycle has A =
+    11,716,200 and H* = 312,152.
     """
-    assert budget.handoff_write_tokens(2_300) == 40_480
     assert budget.write_read_ratio('opus-5-5', True) == 40
-    for resume_context, resume_sum, point in ((80_000, 700_000, 256_906),
-                                              (150_000, 1_060_000, 376_934),
-                                              (200_000, 1_300_000, 456_614)):
-        cycle = budget.Cycle(floor=62_000, floor_written=50_000,
-                             resume_context=resume_context,
-                             resume_sum=resume_sum, one_hour=True)
+    for resume_context, resume_sum, point in ((80_000, 700_000, 277_110),
+                                              (150_000, 1_060_000, 392_350),
+                                              (200_000, 1_300_000, 469_918)):
+        cycle = _cycle(resume_context, resume_sum)
         assert budget.handoff_point(cycle, 2_300, 'opus-5-5') == point
+    assert budget.handoff_point(
+        _cycle(one_hour=False), 2_300, 'fable-5-1') == 312_152
+
+
+def test_the_handoff_write_does_not_grow_with_the_work_rate():
+    """Verify the room past the resume grows as the square root of g.
+
+    Mutation: sizing the handoff write as w * g, the session's own work
+    rate. A then grows with g, and a session reading large files is told
+    its two-turn write adds hundreds of thousands of tokens, which runs
+    its point out toward the window.
+    Oracle: a relation - A does not depend on g, so quadrupling g must
+    double H* - C0, to within the rounding of H* to a token.
+    """
+    for tier in ('opus-5-5', 'fable-5-1'):
+        slow = budget.handoff_point(_cycle(), 2_000, tier) - 80_000
+        fast = budget.handoff_point(_cycle(), 8_000, tier) - 80_000
+        assert abs(fast - 2 * slow) <= 2
+
+
+def test_output_tokens_bill_at_the_output_price():
+    """Verify each resume output token adds r, the output price over the
+    cache-read price, to A.
+
+    Mutation: leaving output out of A, which places every point early;
+    or pricing it at the base input price, or at the write ratio m.
+    Oracle: the published per-MTok prices - output at $20 against a
+    $0.20 read on Opus 5.5 is r 100, and $50 against $0.25 on Fable 5.1
+    is r 200. Adding 10,000 resume output tokens must raise
+    (H* - C0)**2 / (2 g), which is A, by r * 10,000, to within the
+    rounding of H* to a token.
+    """
+    for tier, ratio in (('opus-5-5', 100), ('fable-5-1', 200)):
+        rooms = [budget.handoff_point(_cycle(resume_output=output), 2_300,
+                                      tier) - 80_000
+                 for output in (0, 10_000)]
+        added = (rooms[1] ** 2 - rooms[0] ** 2) / (2 * 2_300)
+        assert abs(added - ratio * 10_000) < 200
+
+
+def test_the_point_leaves_a_whole_write_inside_the_window():
+    """Verify H* stops one handoff write short of Claude Code's own
+    compaction point.
+
+    Mutation: dropping the cap, so a fast session's point lands where
+    Claude Code has already compacted it; or capping at the 1M window,
+    or at the compaction point itself, where a write begun at the point
+    is cut off.
+    Oracle: boundary straddle on Fable 5.1 at the 1-hour TTL, where the
+    worked cycle has A = 14,626,200. At g 25,100 the raw point is
+    80,000 + sqrt(50,200 A) = 936,875, under the 938,000 cap, and stands;
+    at g 25,300 it is 940,282, over the cap and under both the window and
+    the compaction point, and must read 967,000 - 29,000 = 938,000.
+    """
+    assert budget.handoff_point(_cycle(), 25_100, 'fable-5-1') == 936_875
+    assert budget.handoff_point(_cycle(), 25_300, 'fable-5-1') == 938_000
 
 
 def test_a_longer_resume_earns_a_longer_cycle():
@@ -58,13 +123,11 @@ def test_a_longer_resume_earns_a_longer_cycle():
     defect, where each handoff's longer resume shortens the next cycle.
     Oracle: monotonicity - with F, Fw, S0, g, and m held fixed, both
     H* and H* - C0 must strictly increase across rising C0, since A
-    rises by w + m per resume token.
+    rises by w + m - 1 per resume token.
     """
     points = []
     for resume_context in (62_000, 80_000, 150_000, 200_000, 300_000):
-        cycle = budget.Cycle(floor=62_000, floor_written=50_000,
-                             resume_context=resume_context,
-                             resume_sum=700_000, one_hour=True)
+        cycle = _cycle(resume_context)
         points.append((resume_context,
                        budget.handoff_point(cycle, 2_300, 'opus-5-5')))
     assert [point for _, point in points] == sorted(
@@ -77,8 +140,9 @@ def test_the_cache_ttl_picks_the_write_price_ratio(tmp_path):
     """Verify m is the published write price over the read price, by TTL.
 
     Mutation: swapping the 1-hour and 5-minute multipliers, pricing a
-    write off the base input price rather than the tier's read
-    multiplier, or reading the TTL from the wrong breakdown key.
+    write off the cache-read price or off a family's read discount
+    rather than the tier's own base and read prices, or swapping the
+    two breakdown keys.
     Oracle: the pricing page's per-MTok rows - Opus 5.5 writes at $5
     (5m) and $8 (1h) against a $0.20 read, Fable 5.1 at $12.50 and $20
     against $0.25, Opus 5 at $6.25 and $10 against $0.50, Sonnet 5 at
@@ -110,28 +174,32 @@ def test_the_resume_ends_at_the_first_call_that_does_other_work(tmp_path):
 
     Mutation: ending the resume at the first hq read or at the call
     after hq open; counting a sidechain record, whose Edit ends the
-    resume early and whose context reads as a restart in place; or
-    taking a call's tool uses from its first record only, which hides
-    the Edit written in the second.
+    resume early and whose context reads as a restart in place; taking
+    a call's tool uses from its first record only, which hides the Edit
+    written in the second; or summing a call's output over its records,
+    each of which repeats the same count.
     Oracle: hand-built transcript - F 62,000 with 50,000 written, hq
     open behind --root and --session flags, a Read, hq read and hq
     standing, a sed of a .handoff path, then a call whose second record
-    is an Edit. C0 is that call's 84,000 and S0 is 62,000 + 64,000 +
-    70,000 + 78,000 + 84,000 = 358,000.
+    is an Edit. C0 is that call's 84,000, S0 is 62,000 + 64,000 +
+    70,000 + 78,000 + 84,000 = 358,000, and Or is the five calls'
+    output, 100 + 200 + 300 + 400 + 500 = 1,500.
     """
     records = (
-        _call(0, 62_000, [('Skill', {'skill': 'handoff'})], written=50_000)
+        _call(0, 62_000, [('Skill', {'skill': 'handoff'})], written=50_000,
+              output=100)
         + _call(1, 64_000, [_bash('cd /w && hq --root /w --session s1 '
-                                  'open auth-token')])
+                                  'open auth-token')], output=200)
         + _call(2, 70_000, [('Read', {
-            'file_path': '/w/.handoff/auth-token/HANDOFF.md'})])
+            'file_path': '/w/.handoff/auth-token/HANDOFF.md'})], output=300)
         + _call(3, 78_000, [_bash('hq read auth-token specs/plan.md'),
-                            _bash('hq standing auth-token')])
+                            _bash('hq standing auth-token')], output=400)
         + _call('side', 300_000, [('Edit', {'file_path': '/w/a.py'})],
-                sidechain=True)
+                sidechain=True, output=9_000)
         + _call(4, 84_000, [_bash('sed -n 1,40p .handoff/auth-token/x.md'),
-                            ('Edit', {'file_path': '/w/src/app.py'})])
-        + _call(5, 90_000, [_bash('pytest -q')])
+                            ('Edit', {'file_path': '/w/src/app.py'})],
+                output=500)
+        + _call(5, 90_000, [_bash('pytest -q')], output=600)
         + _call(6, 96_000, [_bash('hq read auth-token specs/plan.md')]))
     path = tmp_path / 's.jsonl'
     path.write_text('\n'.join(json.dumps(r) for r in records))
@@ -139,7 +207,7 @@ def test_the_resume_ends_at_the_first_call_that_does_other_work(tmp_path):
     assert context == 96_000
     assert cycle == budget.Cycle(floor=62_000, floor_written=50_000,
                                  resume_context=84_000, resume_sum=358_000,
-                                 one_hour=True)
+                                 resume_output=1_500, one_hour=True)
 
 
 def test_a_restart_in_place_restarts_the_floor_and_the_resume(tmp_path):
@@ -171,11 +239,11 @@ def test_a_restart_in_place_restarts_the_floor_and_the_resume(tmp_path):
     path.write_text('\n'.join(json.dumps(r) for r in first + plain))
     assert cb.read_transcript(str(path))[3] == budget.Cycle(
         floor=150_000, floor_written=120_000, resume_context=150_000,
-        resume_sum=150_000, one_hour=True)
+        resume_sum=150_000, resume_output=0, one_hour=True)
     path.write_text('\n'.join(json.dumps(r) for r in first + opened))
     assert cb.read_transcript(str(path))[3] == budget.Cycle(
         floor=150_000, floor_written=120_000, resume_context=170_000,
-        resume_sum=632_000, one_hour=True)
+        resume_sum=632_000, resume_output=0, one_hour=True)
 
 
 def test_the_resume_covers_ls_grep_cd_and_a_persisted_read(tmp_path):
@@ -183,13 +251,14 @@ def test_the_resume_covers_ls_grep_cd_and_a_persisted_read(tmp_path):
 
     Mutation: dropping any one shape from the resume test - an ls of
     .handoff/, a grep or wc of a HANDOFF file, a cd into .handoff/...
-    with a relative path, or a Read of a persisted tool-results file -
-    which would end the resume at that call instead of the pytest
-    after it.
+    with a relative path, a Read of a persisted tool-results file, or
+    either drift check hq open prints, git log from the handoff's sha
+    to HEAD and git status --porcelain - which would end the resume at
+    that call instead of the pytest after it.
     Oracle: hand-built j0 - the pytest call is the first whose tool use
-    is not a resume shape, so C0 is its 110,000 and S0 is the six
-    calls up to and including it: 62,000 + 64,000 + 70,000 + 78,000 +
-    86,000 + 94,000 + 102,000 + 110,000 = 666,000.
+    is not a resume shape, so C0 is its 126,000 and S0 is the ten calls
+    up to and including it: 62,000 + 64,000 + 70,000 + 78,000 + 86,000 +
+    94,000 + 102,000 + 110,000 + 118,000 + 126,000 = 910,000.
     """
     records = (
         _call(0, 62_000, written=50_000)
@@ -202,19 +271,180 @@ def test_the_resume_covers_ls_grep_cd_and_a_persisted_read(tmp_path):
                                   'cat notes/x.md')])
         + _call(6, 102_000, [('Read', {
             'file_path': '/tmp/scratch/tool-results/abc.txt'})])
-        + _call(7, 110_000, [_bash('pytest -q')]))
+        + _call(7, 110_000, [_bash('git log --oneline 1a2b3c4..HEAD')])
+        + _call(8, 118_000, [_bash('git status --porcelain')])
+        + _call(9, 126_000, [_bash('pytest -q')]))
     path = tmp_path / 's.jsonl'
     path.write_text('\n'.join(json.dumps(r) for r in records))
     _, _, _, cycle = cb.read_transcript(str(path))
     assert cycle == budget.Cycle(floor=62_000, floor_written=50_000,
-                                 resume_context=110_000, resume_sum=666_000,
-                                 one_hour=True)
+                                 resume_context=126_000, resume_sum=910_000,
+                                 resume_output=0, one_hour=True)
+
+
+def test_only_the_drift_check_log_stays_in_the_resume(tmp_path):
+    """Verify a git log that is not the drift check ends the resume.
+
+    Mutation: a drift pattern loose enough to take any git log, or any
+    git status, so the owner's own look at history reads as resume.
+    Oracle: boundary straddle - after hq open, git log --oneline -5, a
+    plain git status, and a git log chained to a later diff to HEAD each
+    end the resume at their own call, 70,000, where git log --oneline
+    1a2b3c4..HEAD would not.
+    """
+    path = tmp_path / 's.jsonl'
+    for command in ('git log --oneline -5', 'git status',
+                    'git log --oneline -5 && git diff 1a2b3c4..HEAD'):
+        records = (_call(0, 62_000, written=50_000)
+                   + _call(1, 64_000, [_bash('hq open auth-token')])
+                   + _call(2, 70_000, [_bash(command)])
+                   + _call(3, 76_000, [_bash('pytest -q')]))
+        path.write_text('\n'.join(json.dumps(r) for r in records))
+        assert cb.read_transcript(str(path))[3].resume_context == 70_000
+
+
+def test_a_persons_prompt_ends_the_resume(tmp_path):
+    """Verify the first call answering a typed prompt after hq open is j0.
+
+    Mutation: ignoring user records, so the owner's go-ahead and the
+    Read it asks for stay inside the resume; taking a task notification
+    for a typed prompt, which ends the resume a call early; or taking a
+    sidechain's prompt for the session's.
+    Oracle: hand-built transcript - a typed /handoff command, Skill, hq
+    open, and a Read; then a task notification, a sidechain prompt, and
+    another Read; then the owner's typed "go ahead" and a Read of a
+    .handoff file. The call answering the prompt is j0: C0 is its
+    90,000 and S0 is 62,000 + 64,000 + 70,000 + 80,000 + 90,000 =
+    366,000.
+    """
+    records = (
+        [_prompt('<command-message>claude-handoff:handoff</command-message>')]
+        + _call(0, 62_000, [('Skill', {'skill': 'handoff'})], written=50_000)
+        + _call(1, 64_000, [_bash('hq open auth-token')])
+        + _call(2, 70_000, [('Read', {
+            'file_path': '/w/.handoff/auth-token/HANDOFF.md'})])
+        + [_prompt('<task-notification>done</task-notification>',
+                   kind='task-notification'),
+           _prompt('a subagent brief', sidechain=True)]
+        + _call(3, 80_000, [('Read', {
+            'file_path': '/w/.handoff/auth-token/notes.md'})])
+        + [_prompt('go ahead')]
+        + _call(4, 90_000, [('Read', {
+            'file_path': '/w/.handoff/auth-token/plan.md'})])
+        + _call(5, 96_000, [_bash('pytest -q')]))
+    path = tmp_path / 's.jsonl'
+    path.write_text('\n'.join(json.dumps(r) for r in records))
+    _, _, _, cycle = cb.read_transcript(str(path))
+    assert (cycle.resume_context, cycle.resume_sum) == (90_000, 366_000)
+
+
+def test_a_session_opened_for_its_handoff_keeps_its_whole_resume(tmp_path):
+    """Verify the call answering the /handoff command starts the resume,
+    whatever else it runs.
+
+    Mutation: requiring that call to read back too, so a first call that
+    loads the skill and runs a memman recall beside it counts as earlier
+    work, and its growth comes out of C0 and S0, which puts the point
+    early.
+    Oracle: hand-built transcript - the typed /handoff command, a call
+    at 62,000 running Skill and memman recall, hq open at 80,000, a Read
+    at 90,000, and an Edit at 100,000. Nothing comes out: C0 is 100,000
+    and S0 is 62,000 + 80,000 + 90,000 + 100,000 = 332,000.
+    """
+    records = (
+        [_prompt('<command-message>claude-handoff:handoff</command-message>')]
+        + _call(0, 62_000, [('Skill', {'skill': 'handoff'}),
+                            _bash('memman recall "auth token"')],
+                written=50_000)
+        + _call(1, 80_000, [_bash('hq open auth-token')])
+        + _call(2, 90_000, [('Read', {
+            'file_path': '.handoff/auth-token/HANDOFF.md'})])
+        + _call(3, 100_000, [('Edit', {'file_path': 'a.py'})]))
+    path = tmp_path / 's.jsonl'
+    path.write_text('\n'.join(json.dumps(r) for r in records))
+    cycle = cb.read_transcript(str(path))[3]
+    assert (cycle.resume_context, cycle.resume_sum) == (100_000, 332_000)
+
+
+def test_a_cycle_still_reading_back_ends_its_resume_at_its_last_call(
+        tmp_path):
+    """Verify j0 is the last call while every call since hq open reads
+    back.
+
+    Mutation: leaving j0 at the open, or at the first call, when no call
+    ends the resume, so a session still reading its handoff back prices
+    a resume shorter than the one it is paying.
+    Oracle: hand-built transcript - hq open at 64,000, then a Read at
+    70,000 and an hq read at 78,000. C0 is 78,000 and S0 is 62,000 +
+    64,000 + 70,000 + 78,000 = 274,000.
+    """
+    records = (_call(0, 62_000, written=50_000)
+               + _call(1, 64_000, [_bash('hq open auth-token')])
+               + _call(2, 70_000, [('Read', {
+                   'file_path': '.handoff/auth-token/HANDOFF.md'})])
+               + _call(3, 78_000, [_bash('hq read auth-token plan.md')]))
+    path = tmp_path / 's.jsonl'
+    path.write_text('\n'.join(json.dumps(r) for r in records))
+    cycle = cb.read_transcript(str(path))[3]
+    assert (cycle.resume_context, cycle.resume_sum) == (78_000, 274_000)
+
+
+def test_work_before_a_late_open_is_not_priced_as_resume(tmp_path):
+    """Verify a mid-session hq open prices its resume from the floor.
+
+    Mutation: summing S0 or Or from the cycle's first call, which prices
+    every call of the earlier work as resume and throws the point
+    hundreds of thousands of tokens late; leaving C0 at its billed
+    context; letting the resume's start cross a work call; or not
+    cutting it at the prompt that asked for the open.
+    Oracle: hand-computed. Work climbs from the 62,000 floor through an
+    Edit at 100,000 and a pytest at 160,000, each call billing 1,000
+    output. With no prompt between, the agent's own Skill call at
+    170,000 starts the resume, so 108,000 of growth comes out: C0 =
+    196,000 - 108,000 = 88,000, S0 = 62,000 + 68,000 + 78,000 + 88,000
+    = 296,000, and Or = 4,000. With the agent's reply at 170,000 and a
+    typed /handoff command after it, the resume starts at the Skill
+    call at 176,000 that answers the command, so 114,000 comes out: C0
+    = 200,000 - 114,000 = 86,000 and S0 = 62,000 + 66,000 + 76,000 +
+    86,000 = 290,000.
+    """
+    work = (_call(0, 62_000, written=50_000, output=1_000)
+            + _call(1, 100_000, [('Edit', {'file_path': 'a.py'})],
+                    output=1_000)
+            + _call(2, 160_000, [_bash('pytest -q')], output=1_000))
+    unprompted = (work
+                  + _call(3, 170_000, [('Skill', {'skill': 'handoff'})],
+                          output=1_000)
+                  + _call(4, 176_000, [_bash('hq open auth-token')],
+                          output=1_000)
+                  + _call(5, 186_000, [('Read', {
+                      'file_path': '.handoff/auth-token/HANDOFF.md'})],
+                          output=1_000)
+                  + _call(6, 196_000, [('Edit', {'file_path': 'b.py'})],
+                          output=1_000))
+    prompted = (work
+                + _call(3, 170_000, output=1_000)
+                + [_prompt('<command-message>claude-handoff:handoff'
+                           '</command-message>')]
+                + _call(4, 176_000, [('Skill', {'skill': 'handoff'})])
+                + _call(5, 180_000, [_bash('hq open auth-token')])
+                + _call(6, 190_000, [('Read', {
+                    'file_path': '.handoff/auth-token/HANDOFF.md'})])
+                + _call(7, 200_000, [('Edit', {'file_path': 'b.py'})]))
+    path = tmp_path / 's.jsonl'
+    path.write_text('\n'.join(json.dumps(r) for r in unprompted))
+    assert cb.read_transcript(str(path))[3] == budget.Cycle(
+        floor=62_000, floor_written=50_000, resume_context=88_000,
+        resume_sum=296_000, resume_output=4_000, one_hour=True)
+    path.write_text('\n'.join(json.dumps(r) for r in prompted))
+    cycle = cb.read_transcript(str(path))[3]
+    assert (cycle.resume_context, cycle.resume_sum) == (86_000, 290_000)
 
 
 def test_a_generation_priced_on_its_own_is_not_read_as_its_family():
     """Verify a model with its own cache rate matches before its family.
 
-    Mutation: ordering CACHE_READ_PER_MTOK family-first, so 'opus'
+    Mutation: ordering PRICES_PER_MTOK family-first, so 'opus'
     matches claude-opus-5-5 and prices its cache reads at $0.50 against
     the $0.20 it is billed - two and a half times the real cost, and a
     target held to two fifths of the room already paid for.
@@ -270,18 +500,18 @@ def test_the_countdown_rounds_up_so_it_never_sticks():
     same - and overstates sub-turn room as a full turn.
     Oracle: hand-computed at 1,900 tokens a call on opus with no state,
     where the point is priced for a fresh 69,000 cycle at the 1-hour
-    write price: A = 69,000 + 17.6 * 85,720 + 40 * 102,440 = 5,675,272,
-    so H* = 69,000 + sqrt(3,800 A) = 215,854. From 171,000, 44,854
-    tokens of room is 2.7 turns of 16,720, which must read
-    "handoff in 3".
+    write price with no resume output: A = 69,000 + 17.6 * 83,500 +
+    39 * 98,000 + 100 * 20,000 = 7,360,600, so H* = 69,000 +
+    sqrt(3,800 A) = 236,243. From 190,000, 46,243 tokens of room is 2.8
+    turns of 16,720, which must read "handoff in 3".
     """
     line = re.sub(r'\x1b\[[0-9;]*m', '', sl.render({
         'session_id': 'none',
         'model': {'id': 'claude-opus-5-5', 'display_name': 'Opus 5'},
         'workspace': {'current_dir': '/x/proj'},
-        'context_window': {'total_input_tokens': 171_000},
+        'context_window': {'total_input_tokens': 190_000},
         }))
-    assert line.startswith('171K/215K')
+    assert line.startswith('190K/236K')
     assert 'handoff in 3' in line
 
 
@@ -345,12 +575,13 @@ def test_band_one_sits_a_handoff_write_past_band_zero(monkeypatch, capsys,
                                                       tmp_path):
     """Verify band 0 fires at H*, band 1 at H* + W, and only band 1 rings.
 
-    Mutation: the escalation point set at H* + g instead of H* + w g, a
-    flipped comparison in compose, or the desktop notification raised
-    on band 0 too.
-    Oracle: hand-computed on the 10,000-a-call climb - H* is 514,765
-    and W = 2 turns * 8.8 calls * 10,000 = 176,000, so the escalation
-    point is 690,765; the compose calls straddle both by one token.
+    Mutation: the escalation point set at H* + g, or at H* + w g as if
+    the write grew at the work rate, instead of H* + W; a flipped
+    comparison in compose; or the desktop notification raised on band 0
+    too.
+    Oracle: hand-computed on the 10,000-a-call climb - H* is 376,209 and
+    W is 29,000 at any rate, so the escalation point is 405,209; the
+    compose calls straddle both by one token.
     """
     monkeypatch.setattr(cb, 'STATE_DIR', str(tmp_path / 'state'))
     path = tmp_path / 's.jsonl'
@@ -365,16 +596,16 @@ def test_band_one_sits_a_handoff_write_past_band_zero(monkeypatch, capsys,
         with open(tmp_path / 'state' / 'W.json') as handle:
             return json.loads(out) if out else {}, json.load(handle)
 
-    announced, stored = run(46)
-    assert (stored['handoff'], stored['escalate']) == (514_765, 690_765)
+    announced, stored = run(32)
+    assert (stored['handoff'], stored['escalate']) == (376_209, 405_209)
     assert 'terminalSequence' not in announced
-    announced, stored = run(64)
+    announced, stored = run(35)
     assert stored['band'] == 1
     assert 'terminalSequence' in announced
-    assert cb.compose(514_764, 10_000, 514_765, 690_765)[0] == -1
-    assert cb.compose(514_765, 10_000, 514_765, 690_765)[0] == 0
-    assert cb.compose(690_764, 10_000, 514_765, 690_765)[0] == 0
-    assert cb.compose(690_765, 10_000, 514_765, 690_765)[0] == 1
+    assert cb.compose(376_208, 10_000, 376_209, 405_209)[0] == -1
+    assert cb.compose(376_209, 10_000, 376_209, 405_209)[0] == 0
+    assert cb.compose(405_208, 10_000, 376_209, 405_209)[0] == 0
+    assert cb.compose(405_209, 10_000, 376_209, 405_209)[0] == 1
 
 
 def test_message_names_the_numbers_the_reader_has_to_act_on():
@@ -464,14 +695,16 @@ def _record(index, value, model='claude-opus-5-5', nested=False, flag=False):
     return record
 
 
-def _call(index, value, tools=(), written=0, ttl=None, sidechain=False):
+def _call(index, value, tools=(), written=0, ttl=None, sidechain=False,
+          output=0):
     """Build the records of one call, one tool_use block per record.
 
     Claude Code writes each content block of a response as its own
     record under the shared message id, each carrying the same usage.
     """
     usage = {'cache_read_input_tokens': value - written,
-             'cache_creation_input_tokens': written, 'input_tokens': 0}
+             'cache_creation_input_tokens': written, 'input_tokens': 0,
+             'output_tokens': output}
     if ttl:
         usage['cache_creation'] = {
             'ephemeral_1h_input_tokens': written if ttl == '1h' else 0,
@@ -485,10 +718,30 @@ def _call(index, value, tools=(), written=0, ttl=None, sidechain=False):
                          'content': [block]}} for block in blocks]
 
 
+def _five_minute_climb(upto):
+    """Build the first `upto` calls of CLIMB, each writing 10,000 tokens at
+    the 5-minute TTL.
+
+    Priced at m = 25, the climb's handoff point is 369,773 and its
+    escalation point 398,773. A later 1-hour rewrite larger than all
+    those writes together flips the cycle to m = 40, which moves the
+    raw point outward.
+    """
+    return [record for index, value in enumerate(CLIMB[:upto])
+            for record in _call(f'f{index}', value, written=10_000, ttl='5m')]
+
+
 def _bash(command):
     """Name a Bash tool use running `command`.
     """
     return 'Bash', {'command': command}
+
+
+def _prompt(text, kind='human', sidechain=False):
+    """Build one user record, typed by a person unless `kind` says not.
+    """
+    return {'type': 'user', 'isSidechain': sidechain, 'origin': {'kind': kind},
+            'message': {'role': 'user', 'content': text}}
 
 
 def test_the_measured_rate_ignores_a_record_the_api_never_billed(tmp_path):
@@ -599,7 +852,7 @@ def test_a_band_is_announced_once_and_rearmed_by_a_restart_in_place(
     until the user disables the hook.
     Oracle: a spy on stdout across four runs - warn at 520K, silence at
     530K, silence at the 120K a restart in place drops to, and warn
-    again at 590K, past the new cycle's 585,205 point.
+    again at 610K, past the new cycle's 455,207 point.
     """
     state = tmp_path / 'state'
     monkeypatch.setattr(cb, 'STATE_DIR', str(state))
@@ -631,9 +884,12 @@ def test_a_state_file_in_the_old_format_loads_and_keeps_its_band(
     computed band unconditionally.
     Oracle: a spy on stdout and the rewritten file across two turns
     after an old file holding band 0, a 350,000 target, and a 264,205
-    handoff point - nothing is said at 280K or at 420K, short of the
-    440,205 escalation point, the old point stays latched because band
-    0 was already announced, and the file comes back in the new shape.
+    handoff point - nothing is said at 280K, at a dip to 260K under the
+    point, or back at 290K, short of the 293,205 escalation point one
+    handoff write past it. The old point stays latched because band 0
+    was already announced, the band stored across the dip stays 0 so
+    the climb back cannot announce it again, and the file comes back in
+    the new shape.
     """
     state = tmp_path / 'state'
     state.mkdir()
@@ -653,7 +909,8 @@ def test_a_state_file_in_the_old_format_loads_and_keeps_its_band(
         return capsys.readouterr().out.strip()
 
     assert run(22) == ''
-    assert run(36) == ''
+    assert run(20) == ''
+    assert run(23) == ''
     stored = json.loads((state / 'U.json').read_text())
     assert set(stored) == {'band', 'growth_per_call', 'handoff', 'escalate',
                            'context'}
@@ -711,8 +968,8 @@ def test_the_hook_and_the_gauge_never_name_a_different_threshold(monkeypatch,
 
 def test_no_threshold_rises_once_a_warning_is_given(monkeypatch, capsys,
                                                     tmp_path):
-    """Verify a dip that is not a restart in place releases neither
-    latch.
+    """Verify a latched threshold holds while the raw point moves out,
+    and a dip that is not a restart in place releases neither latch.
 
     Mutation: testing `context < last_context` for the restart in place
     that releases the latches, with no size to it; or dropping the
@@ -721,24 +978,23 @@ def test_no_threshold_rises_once_a_warning_is_given(monkeypatch, capsys,
     tokens then hands the session a fresh handoff point further out and
     a rearmed band, which is the walking-backwards this latch exists to
     stop.
-    Oracle: monotonicity of the state file against its own previous
-    turn - from the warning at 520K, across an hq open and read that
-    lengthen the resume and would raise the raw point to 1,490,745, a
-    1,000-token dip, and more climbing, no stored threshold may rise
-    and no stored band may fall.
+    Oracle: monotonicity of the state file against its own first turn,
+    with a spy on the raw point. From the warning at 380K on the
+    5-minute climb, a 1-hour rewrite at 380,100 moves the raw point out
+    to 383,712, and it stays past 369,773 across a 1,000-token dip and
+    a climb to 385,000; every turn must store the first turn's 369,773
+    and 398,773 and band 0.
     """
     monkeypatch.setattr(cb, 'STATE_DIR', str(tmp_path / 'state'))
     path = tmp_path / 's.jsonl'
-    records = list(starmap(_record, enumerate(CLIMB[:46])))
-    tail = ((None, 0, []),
-            ('t0', 520_100, [_bash('hq open auth-token')]),
-            ('t1', 519_100, []),
-            ('t2', 521_100, [_bash('hq read auth-token x.md')]),
-            ('t3', 522_100, []))
-    stored = []
-    for identifier, value, tools in tail:
+    records = _five_minute_climb(32)
+    tail = ((None, 0, 0), ('t0', 380_100, 380_000), ('t1', 379_100, 0),
+            ('t2', 385_000, 0))
+    stored, raw = [], []
+    for identifier, value, written in tail:
         if identifier:
-            records.extend(_call(identifier, value, tools))
+            records.extend(_call(identifier, value, written=written,
+                                 ttl='1h' if written else None))
         path.write_text('\n'.join(json.dumps(r) for r in records))
         payload = {'session_id': 'M', 'transcript_path': str(path)}
         monkeypatch.setattr(sys, 'stdin', _Stdin(json.dumps(payload)))
@@ -746,14 +1002,14 @@ def test_no_threshold_rises_once_a_warning_is_given(monkeypatch, capsys,
         capsys.readouterr()
         with open(tmp_path / 'state' / 'M.json') as handle:
             stored.append(json.load(handle))
+        _, _, per_call, cycle = cb.read_transcript(str(path))
+        raw.append(budget.handoff_point(cycle, per_call, 'opus-5-5'))
 
-    _, _, per_call, cycle = cb.read_transcript(str(path))
-    assert budget.handoff_point(cycle, per_call, 'opus-5-5') == 1_490_745
+    assert raw[:2] == [369_773, 383_712]
+    assert all(point > 369_773 for point in raw[1:])
     assert all(row['band'] == 0 for row in stored)
-    assert [row['handoff'] for row in stored] == [514_765] * len(tail)
-    escalations = [row['escalate'] for row in stored]
-    assert escalations[0] == 690_765
-    assert escalations == sorted(escalations, reverse=True)
+    assert [row['handoff'] for row in stored] == [369_773] * len(tail)
+    assert [row['escalate'] for row in stored] == [398_773] * len(tail)
 
 
 def test_a_young_cycle_is_not_pinned_to_its_fallback_rate(monkeypatch,
@@ -765,8 +1021,8 @@ def test_a_young_cycle_is_not_pinned_to_its_fallback_rate(monkeypatch,
     quiet stretch before the warning - holds the point for the rest of
     the cycle.
     Oracle: hand-computed on the 70,000 floor - three calls measure no
-    rate yet, so the 1,900 fallback puts the point at 175,587; seven
-    more calls measure 10,000 a call and must move it out to 514,765.
+    rate yet, so the 1,900 fallback puts the point at 203,473; seven
+    more calls measure 10,000 a call and must move it out to 376,209.
     """
     monkeypatch.setattr(cb, 'STATE_DIR', str(tmp_path / 'state'))
     path = tmp_path / 's.jsonl'
@@ -780,7 +1036,7 @@ def test_a_young_cycle_is_not_pinned_to_its_fallback_rate(monkeypatch,
         assert capsys.readouterr().out.strip() == ''
         with open(tmp_path / 'state' / 'Y.json') as handle:
             points.append(json.load(handle)['handoff'])
-    assert points == [175_587, 514_765]
+    assert points == [203_473, 376_209]
 
 
 def test_the_latch_holds_a_threshold_down_and_never_up():
@@ -804,13 +1060,13 @@ def test_the_gauge_never_hands_back_room_it_has_withdrawn(monkeypatch,
 
     Mutation: re-deriving the handoff point in render, or in compose,
     from this turn's measurements. The warning is given, a cache
-    rewrite moves the unlatched point outward, and the line returns to
-    green with turns to spare - contradicting a warning the user has
-    already been given and acted on.
-    Oracle: a spy on the rendered line across two turns - the climb
-    reaching 520K crosses the 514,765 point and must read amber, and a
-    cache rewrite at the 1-hour TTL at 520,100, which on its own would
-    put the point at 505,790, must not read green again.
+    rewrite moves the unlatched point outward past the context, and the
+    line returns to green with turns to spare - contradicting a warning
+    the user has already been given and acted on.
+    Oracle: a spy on the rendered line across two turns - the 5-minute
+    climb reaching 380K crosses its 369,773 point and must read amber,
+    and a 1-hour rewrite at 380,100, which on its own puts the point at
+    383,712, past the context, must not read green again.
     """
     monkeypatch.setattr(cb, 'STATE_DIR', str(tmp_path / 'state'))
     monkeypatch.setattr(sl, 'STATE_DIR', str(tmp_path / 'state'))
@@ -829,10 +1085,12 @@ def test_the_gauge_never_hands_back_room_it_has_withdrawn(monkeypatch,
             'context_window': {'total_input_tokens': context},
             }))
 
-    records = list(starmap(_record, enumerate(CLIMB[:46])))
-    assert 'handoff now' in run(records, 520_000)
-    rewrite = _call('r', 520_100, written=200_000, ttl='1h')
-    assert 'handoff now' in run(records + rewrite, 520_100)
+    records = _five_minute_climb(32)
+    assert 'handoff now' in run(records, 380_000)
+    rewrite = _call('r', 380_100, written=380_000, ttl='1h')
+    assert 'handoff now' in run(records + rewrite, 380_100)
+    _, _, per_call, cycle = cb.read_transcript(str(path))
+    assert budget.handoff_point(cycle, per_call, 'opus-5-5') == 383_712
 
 
 def test_a_barely_growing_session_never_reads_as_zero_growth():
@@ -866,8 +1124,8 @@ def test_the_gauge_stays_readable_past_the_escalation_point():
     Mutation: keeping the bar past the escalation point. It clamps to
     full, so 2.3x and 3.6x print the same glyph - and past it is
     exactly where the reader needs to tell them apart.
-    Oracle: hand-computed against the no-state point of 215,854 - 452K
-    is 2.1x and 700K is 3.2x, both past the 249,294 escalation point.
+    Oracle: hand-computed against the no-state point of 236,243 - 452K
+    is 1.9x and 700K is 3.0x, both past the 265,243 escalation point.
     """
     def line(context):
         return sl.render({
@@ -878,8 +1136,32 @@ def test_the_gauge_stays_readable_past_the_escalation_point():
             })
 
     assert line(452_000) != line(700_000)
-    assert '2.1x over' in line(452_000)
-    assert '3.2x over' in line(700_000)
+    assert '1.9x over' in line(452_000)
+    assert '3.0x over' in line(700_000)
+
+
+def test_the_gauge_turns_red_one_handoff_write_past_its_point():
+    """Verify the no-state gauge escalates exactly one write past its point.
+
+    Mutation: the fallback escalation point set at H* + g, or at H* + w g
+    as if the write grew at the work rate, instead of H* + W - the gauge
+    then turns red on a different turn from the hook's band 1.
+    Oracle: boundary straddle against the no-state point of 236,243 -
+    236,243 + 29,000 = 265,243, so 265,242 reads amber and 265,243 reads
+    red.
+    """
+    def line(context):
+        return sl.render({
+            'session_id': 'none',
+            'model': {'id': 'claude-opus-5-5', 'display_name': 'Opus 5'},
+            'workspace': {'current_dir': '/x/proj'},
+            'context_window': {'total_input_tokens': context},
+            })
+
+    assert line(265_242).startswith(sl.YELLOW)
+    assert 'handoff now' in line(265_242)
+    assert line(265_243).startswith(sl.RED)
+    assert 'x over' in line(265_243)
 
 
 def test_the_gauge_marks_its_cost_as_an_estimate():
@@ -908,7 +1190,7 @@ def test_the_decision_numbers_survive_a_narrow_pane():
     lines do. A pane is cut from the right, so the two fields that carry
     the decision are the ones lost.
     Oracle: hand-checked - the visible line with color stripped must
-    start with the size against the 215,854 no-state point and fit a
+    start with the size against the 236,243 no-state point and fit a
     narrow split.
     """
     visible = re.sub(r'\x1b\[[0-9;]*m', '', sl.render({
@@ -917,6 +1199,6 @@ def test_the_decision_numbers_survive_a_narrow_pane():
         'workspace': {'current_dir': '/x/myproject'},
         'context_window': {'total_input_tokens': 150_000},
         }))
-    assert visible.startswith('150K/215K')
+    assert visible.startswith('150K/236K')
     assert 'handoff in' in visible.split('$')[0]
     assert len(visible) <= 64

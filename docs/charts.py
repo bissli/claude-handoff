@@ -118,7 +118,7 @@ def dollars_per_turn(context_tokens: float, tier: str) -> float:
     context_tokens : float
         Billed context carried into the turn.
     tier : str
-        Key of ``budget.CACHE_READ_PER_MTOK``.
+        Key of ``budget.PRICES_PER_MTOK``.
 
     Returns
     -------
@@ -415,7 +415,7 @@ def session_costs(tier: str, target_k: float | None) -> list[float]:
     Parameters
     ----------
     tier : str
-        Key of ``budget.CACHE_READ_PER_MTOK``.
+        Key of ``budget.PRICES_PER_MTOK``.
     target_k : float or None
         Hand off when context reaches this many thousand tokens; None
         never hands off.

@@ -3,8 +3,8 @@
 The budget is a cost rule. A session should hand off where the cost per
 call of work is lowest: staying longer re-reads a growing context on
 every call, and leaving pays a cycle's fixed overhead again. The point
-between the two follows from the cycle's own measurements and from a
-ratio of two prices, never from a dollar figure.
+between the two follows from the cycle's own measurements and from
+ratios between the tier's prices, never from a dollar figure.
 
 Notes
 -----
@@ -16,29 +16,38 @@ Notes
 import math
 from dataclasses import dataclass
 
+
+@dataclass(frozen=True)
+class Prices:
+    """Published prices of one tier, in dollars per million tokens.
+
+    Attributes
+    ----------
+    base_input : float
+        Uncached input price, the one both cache-write multipliers scale.
+    cache_read : float
+        Cache-read price.
+    output : float
+        Output price, thinking tokens included.
+    """
+
+    base_input: float
+    cache_read: float
+    output: float
+
+
 # Notes:
 # - Keys match as substrings of the model id, most specific first, so
 #   a generation priced on its own is found before its family.
-# - The cache-read price is stored, not the base price and the
-#   multiplier against it, because that multiplier varies by model:
-#   see CACHE_READ_MULTIPLIER.
-CACHE_READ_PER_MTOK = {
-    'fable-5-1': 0.25,
-    'fable': 1.00,
-    'opus-5-5': 0.20,
-    'opus': 0.50,
-    'sonnet-5': 0.20,
-    'sonnet': 0.30,
-    }
-
-# Cache-read price as a fraction of the base input price, per tier.
-CACHE_READ_MULTIPLIER = {
-    'fable-5-1': 0.025,
-    'fable': 0.1,
-    'opus-5-5': 0.05,
-    'opus': 0.1,
-    'sonnet-5': 0.1,
-    'sonnet': 0.1,
+# - All three prices are stored because the cache-read discount against
+#   the base input price varies by model.
+PRICES_PER_MTOK = {
+    'fable-5-1': Prices(base_input=10.00, cache_read=0.25, output=50.00),
+    'fable': Prices(base_input=10.00, cache_read=1.00, output=50.00),
+    'opus-5-5': Prices(base_input=4.00, cache_read=0.20, output=20.00),
+    'opus': Prices(base_input=5.00, cache_read=0.50, output=25.00),
+    'sonnet-5': Prices(base_input=2.00, cache_read=0.20, output=10.00),
+    'sonnet': Prices(base_input=3.00, cache_read=0.30, output=15.00),
     }
 
 # Cache-write price as a multiple of the base input price, by TTL. Every
@@ -58,6 +67,21 @@ CALLS_PER_TURN = 8.8
 # Turns a handoff write takes. Reading it back happens in a fresh
 # session, so it is charged to that one, not to this.
 HANDOFF_TURNS = 2
+
+# Context a handoff write adds. The write prints the handoff rules and
+# writes one document, and neither grows with the work before it, so
+# this holds whatever the session's growth rate.
+HANDOFF_WRITE_TOKENS = 29_000
+
+# Output tokens a handoff write bills, thinking included.
+HANDOFF_OUTPUT_TOKENS = 20_000
+
+# Context at which Claude Code compacts a session on its own, on the
+# 1M window every tier in PRICES_PER_MTOK has: the window less a
+# 20,000-token output reserve and a 13,000-token buffer. A handoff
+# point closer to it than one handoff write leaves no room to finish
+# that write.
+AUTO_COMPACT_TOKENS = 967_000
 
 # Billed context on the first call after a restart in place: the system
 # prompt, tools, and instruction files all return, along with whatever
@@ -87,10 +111,15 @@ class Cycle:
     floor_written : int
         Cache-creation tokens of that first call, F_w.
     resume_context : int
-        Billed context of the resume-end call j0, C0. Equals ``floor``
+        Billed context of the resume-end call j0, C0, less the growth of
+        any work the cycle did before its resume began. Equals ``floor``
         when the cycle opened no handoff.
     resume_sum : int
-        Billed context summed over the calls up to and including j0, S0.
+        Billed context summed over the resume's calls up to and including
+        j0, S0, each less that same growth, so the resume's first call
+        counts as the floor.
+    resume_output : int
+        Output tokens billed by those same calls, O_r, thinking included.
     one_hour : bool
         True when the cycle's cache writes use the 1-hour TTL, False for
         the 5-minute one.
@@ -100,6 +129,7 @@ class Cycle:
     floor_written: int
     resume_context: int
     resume_sum: int
+    resume_output: int
     one_hour: bool
 
 
@@ -115,11 +145,11 @@ def model_tier(model: str) -> str | None:
     Returns
     -------
     str or None
-        One of the keys of ``CACHE_READ_PER_MTOK``, or None for a model this
+        One of the keys of ``PRICES_PER_MTOK``, or None for a model this
         plugin has nothing worth saying about.
     """
     lowered = model.lower()
-    for tier in CACHE_READ_PER_MTOK:
+    for tier in PRICES_PER_MTOK:
         if tier in lowered:
             return tier
     return None
@@ -140,7 +170,7 @@ def cost_per_turn(context: int, tier: str) -> float:
     float
         Cost of a single user turn, in dollars.
     """
-    return (context / 1e6 * CACHE_READ_PER_MTOK[tier]
+    return (context / 1e6 * PRICES_PER_MTOK[tier].cache_read
             * CALLS_PER_TURN)
 
 
@@ -157,36 +187,21 @@ def write_read_ratio(tier: str, one_hour: bool) -> float:
     Returns
     -------
     float
-        The ratio m, the same whatever the base input price.
+        The ratio m.
     """
+    prices = PRICES_PER_MTOK[tier]
     write = CACHE_WRITE_MULTIPLIER_1H if one_hour else CACHE_WRITE_MULTIPLIER_5M
-    return write / CACHE_READ_MULTIPLIER[tier]
-
-
-def handoff_write_tokens(per_call: int) -> int:
-    """Tokens a handoff write adds to the context, W.
-
-    Parameters
-    ----------
-    per_call : int
-        Estimated tokens added per assistant call, g.
-
-    Returns
-    -------
-    int
-        ``W = w * g``, where ``w = HANDOFF_TURNS * CALLS_PER_TURN`` is the
-        write's length in calls, rounded to a token.
-    """
-    return round(HANDOFF_TURNS * CALLS_PER_TURN * per_call)
+    return write * prices.base_input / prices.cache_read
 
 
 def handoff_point(cycle: Cycle, per_call: int, tier: str) -> int:
-    """Context at which a handoff minimizes the cycle's cost per work call.
+    """Context at which a handoff minimizes the cost per call of work.
 
     Parameters
     ----------
     cycle : Cycle
-        The current cycle's floor, resume, and cache TTL.
+        The current cycle's floor, resume, and cache TTL, standing in for
+        the next cycle's.
     per_call : int
         Estimated tokens added per assistant call, g.
     tier : str
@@ -195,37 +210,54 @@ def handoff_point(cycle: Cycle, per_call: int, tier: str) -> int:
     Returns
     -------
     int
-        The handoff point H* in billed tokens, rounded to a token.
+        The handoff point H* in billed tokens, rounded to a token, and
+        never past ``AUTO_COMPACT_TOKENS - HANDOFF_WRITE_TOKENS``.
 
     Notes
     -----
-    - Costs are counted in read-token-calls: every call bills its whole
-      context at the cache-read price, and every new token bills once
-      more at m times that price for its cache write::
+    - Costs are counted in read-token-calls. Every call bills its whole
+      context at the cache-read price. A token written to the cache
+      bills m - 1 more, on top of the read its own call already counts,
+      and an output token bills r::
 
           w  = HANDOFF_TURNS * CALLS_PER_TURN
-          W  = w * g
+          W  = HANDOFF_WRITE_TOKENS
+          Ow = HANDOFF_OUTPUT_TOKENS
           m  = write_read_ratio(tier, cycle.one_hour)
-          A  = S0 + w * (C0 + W/2) + m * (Fw + C0 - F + W)
-          H* = C0 + sqrt(2 * g * A)
+          r  = output price / cache-read price
+          A  = S0 + w * (C0 + W/2) + (m - 1) * (Fw + C0 - F + W)
+               + r * (Or + Ow)
+          H* = min(C0 + sqrt(2 * g * A), AUTO_COMPACT_TOKENS - W)
 
     - A is what a cycle pays whatever its length: the resume, the
-      handoff write re-reading the context, and the cache writes of the
-      floor, the resume, and the handoff. T work calls add a growth tax
-      of ``g * T**2 / 2``, so the cost per work call is
-      ``C0 + w*g + g*T/2 + A/T``, lowest at ``T* = sqrt(2 * A / g)``,
-      where the context has reached H*.
-    - The price itself cancels, so only the ratio m moves the point.
+      handoff write re-reading the context, the cache writes of the
+      floor, the resume, and the write, and the output of the resume and
+      the write. T work calls add a growth tax of ``g * T**2 / 2``, so
+      the cost per work call is ``K + g*T/2 + A/T``, with K free of T,
+      lowest at ``T* = sqrt(2 * A / g)``, where the context has reached
+      H*.
+    - At H* the next work call costs as much as a work call averages
+      over a fresh cycle, so A belongs to the next cycle, and this
+      cycle's measurements stand in for it.
+    - A does not depend on g, so the room past the resume grows as the
+      square root of g and the count of work calls falls as one over it.
     - H* rises with C0: a longer resume earns a longer cycle to spread
       its cost over.
-    - Output tokens are left out of A, which places the point early
-      rather than late.
+    - The dollar price cancels, so only the ratios m and r move the point.
+    - The cap lets a write begun at H* finish before Claude Code compacts
+      the session on its own.
     """
     calls_to_write = HANDOFF_TURNS * CALLS_PER_TURN
-    written = handoff_write_tokens(per_call)
-    ratio = write_read_ratio(tier, cycle.one_hour)
+    prices = PRICES_PER_MTOK[tier]
+    write_ratio = write_read_ratio(tier, cycle.one_hour)
+    output_ratio = prices.output / prices.cache_read
     overhead = (cycle.resume_sum
-                + calls_to_write * (cycle.resume_context + written / 2)
-                + ratio * (cycle.floor_written + cycle.resume_context
-                           - cycle.floor + written))
-    return round(cycle.resume_context + math.sqrt(2 * per_call * overhead))
+                + calls_to_write * (cycle.resume_context
+                                    + HANDOFF_WRITE_TOKENS / 2)
+                + (write_ratio - 1) * (cycle.floor_written
+                                       + cycle.resume_context - cycle.floor
+                                       + HANDOFF_WRITE_TOKENS)
+                + output_ratio * (cycle.resume_output
+                                  + HANDOFF_OUTPUT_TOKENS))
+    point = cycle.resume_context + math.sqrt(2 * per_call * overhead)
+    return round(min(point, AUTO_COMPACT_TOKENS - HANDOFF_WRITE_TOKENS))

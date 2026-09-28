@@ -91,10 +91,10 @@ def session_state(session: str, tier: str) -> tuple[int, int, int]:
     -----
     - Before the first Stop there is no state, so the handoff point is
       priced for a fresh cycle that opened no handoff, at the fallback
-      growth rate and the 5-minute write price. The first Stop replaces
-      it with the cycle's own measurements.
+      growth rate and the 1-hour write price Claude Code writes at. The
+      first Stop replaces it with the cycle's own measurements.
     - A file without an escalation point takes the handoff point plus
-      one handoff write's growth, the figure the hook latches first.
+      one handoff write, the figure the hook latches first.
     """
     safe = session.replace('/', '_')
     per_call, handoff, escalate = budget.FALLBACK_GROWTH_PER_CALL, 0, 0
@@ -112,10 +112,11 @@ def session_state(session: str, tier: str) -> tuple[int, int, int]:
             floor_written=budget.FRESH_SESSION_TOKENS,
             resume_context=budget.FRESH_SESSION_TOKENS,
             resume_sum=budget.FRESH_SESSION_TOKENS,
+            resume_output=0,
             one_hour=budget.DEFAULT_ONE_HOUR)
         handoff = budget.handoff_point(fresh, per_call, tier)
     if escalate <= 0:
-        escalate = handoff + budget.handoff_write_tokens(per_call)
+        escalate = handoff + budget.HANDOFF_WRITE_TOKENS
     return per_call, handoff, escalate
 
 

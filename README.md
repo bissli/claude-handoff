@@ -70,9 +70,10 @@ src="docs/cost-per-turn-light.svg">
 So the plugin warns where a cycle's cost per call of work is lowest,
 not at a fixed dollar or token line. Carrying on re-reads a growing
 context on every call. Handing off pays a cycle's fixed overhead again:
-the resume, the write, and the cache writes of the floor. The point
-between the two moves with the resume, the growth rate, and the price
-of a cache write against a read. [The handoff point](#the-handoff-point)
+the resume, the write, the cache writes of the floor, and the output
+the resume and the write bill. The point between the two moves with
+the resume, the growth rate, and the prices of a cache write and of
+output against a read. [The handoff point](#the-handoff-point)
 has the arithmetic.
 
 Every figure below already includes the cache discount. The bill being
@@ -263,10 +264,10 @@ current.
 At the end of a turn, once as each line is crossed - the handoff point,
 then one handoff write past it:
 
-> Context 262K, at the 256K handoff point for this cycle, growing 20K a
+> Context 283K, at the 277K handoff point for this cycle, growing 20K a
 > turn - a good point to run /handoff.
 
-> Context 300K, 43K past the 256K handoff point, where a handoff begun
+> Context 310K, 33K past the 277K handoff point, where a handoff begun
 > there would have finished. Every further turn raises the cost of each
 > call of work. Run /handoff.
 
@@ -277,86 +278,112 @@ The second also raises a desktop notification.
 The warning sits at the context where a cycle's cost per call of work
 is lowest. A cycle runs from a session's first call, or from the first
 call after a restart in place, to the handoff that ends it. Every call
-bills its whole context at the cache-read price, and every new token
-bills once more, at m times that price, when it is written to the
-cache. Counted in those read-token units:
+bills its whole context at the cache-read price. A token written to the
+cache bills m - 1 read prices more, on top of the read its own call
+already counts, and an output token bills r. Counted in those
+read-token units:
 
 ```
 F   billed context of the cycle's first call
 Fw  tokens that first call writes to the cache
 C0  billed context at the resume end, call j0
-S0  billed context summed over the calls up to and including j0
+S0  billed context summed over the resume's calls up to and including j0
+Or  output tokens those calls bill, thinking included
 g   tokens added per call, measured from the transcript
 w   calls a handoff write takes: 2 turns x 8.8 = 17.6
-W   tokens the write adds: w x g
+W   tokens a handoff write adds: 29,000
+Ow  output tokens a handoff write bills: 20,000
 m   cache-write price / cache-read price
+r   output price / cache-read price
 
-A  = S0 + w x (C0 + W/2) + m x (Fw + C0 - F + W)
-H* = C0 + sqrt(2 x g x A)
+A  = S0 + w x (C0 + W/2) + (m - 1) x (Fw + C0 - F + W) + r x (Or + Ow)
+H* = min(C0 + sqrt(2 x g x A), 967,000 - W)
 ```
 
 A is what a cycle pays whatever its length: the resume, the handoff
-write re-reading the context, and the cache writes of the floor, the
-resume, and the handoff. T calls of work re-read `g x T^2 / 2` tokens
-on top of C0, so one call of work costs `C0 + w x g + g x T / 2 + A / T`.
-That is lowest at `T = sqrt(2 x A / g)`, where the context reaches H*.
-The dollar price cancels, and only the ratio m remains.
+write re-reading the context, the cache writes of the floor, the
+resume, and the write, and the output of the resume and the write. T
+calls of work re-read `g x T^2 / 2` tokens on top of C0, so one call of
+work costs `K + g x T / 2 + A / T`, where K does not depend on T. That
+is lowest at `T = sqrt(2 x A / g)`, where the context reaches H*. At
+that point the next call of work costs as much as a call of work
+averages over a fresh cycle, so A is the next cycle's overhead, and
+the current cycle's measurements stand in for it. The dollar price
+cancels, and only the ratios m and r remain. The cap lets a write
+begun at H* finish before 967,000, where Claude Code compacts a session
+on its own: the 1M window every priced model has, less a 20,000-token
+output reserve and a 13,000-token buffer.
+
+W and Ow are fixed. A handoff write prints the handoff rules and writes
+one document, and neither grows with the work before it, so a session
+reading large files writes a handoff the same size as a quiet one.
 
 The resume starts at the cycle's first `hq open`, with `--root` or
 `--session` allowed ahead of the verb. It runs through every following
 call whose tool uses are all a Read of any path, a Skill or ToolSearch
-call, or a Bash command naming `.handoff`, `HANDOFF`, or an hq read verb
-(`open`, `read`, `standing`, `artifacts`, `when`, `arc`, `list`, `help`).
-j0 is the first call after those, the first to use any other tool or
-none. A cycle with no `hq open` has j0 at its first call, so C0 and S0
-are both F.
+call, or a Bash command naming `.handoff`, `HANDOFF`, an hq read verb
+(`open`, `read`, `standing`, `artifacts`, `when`, `arc`, `list`, `help`),
+or one of the two drift checks `hq open` prints (`git log <sha>..HEAD`
+and `git status --porcelain`). j0 is the first call after those: the
+first to use any other tool, or the first to answer a prompt a person
+typed after the open. A person's prompt is a user record whose origin
+kind is human. A headless transcript records no origin, so there the
+resume ends on tool uses alone. A cycle with no `hq open` has j0 at its
+first call, so C0 and S0 are both F.
 
-m comes from the model and the cache TTL. A write costs 1.25 times the
-base input price at the 5-minute TTL and 2 times at the 1-hour TTL, on
-every model. The TTL is the one that carried more of the cycle's cache
-writes in each call's `usage.cache_creation` breakdown, and the 1-hour
-one Claude Code itself writes at when no call carries a breakdown.
+A session that works first and opens a handoff later starts its resume
+at the run of such calls that ends at the open, reaching back at most
+to the call that answers the last prompt before it, whatever that
+call's tools. The growth of the work before that run comes out of C0
+and out of every call of S0, so the resume is priced from the floor, as
+the next cycle will pay it. A session opened for its handoff has that
+run reach its first call, and nothing comes out.
 
-| model                                 | cache read  | m, 5-minute | m, 1-hour |
-| ------------------------------------- | ----------- | -----------: | ---------: |
-| Opus 5.5                              | 0.05x input | 25          | 40        |
-| Fable 5.1                             | 0.025x      | 50          | 80        |
-| Opus 5, Fable 5, Sonnet 5, Sonnet 4.6 | 0.1x        | 12.5        | 20        |
+m and r come from the model and the cache TTL. A write costs 1.25 times
+the base input price at the 5-minute TTL and 2 times at the 1-hour TTL,
+on every model. The TTL is the one that carried more of the cycle's
+cache writes in each call's `usage.cache_creation` breakdown, and the
+1-hour one Claude Code itself writes at when no call carries a
+breakdown.
+
+| model                                 | cache read  | m, 5-minute | m, 1-hour |   r |
+| ------------------------------------- | ----------- | ----------: | --------: | --: |
+| Opus 5.5                              | 0.05x input |          25 |        40 | 100 |
+| Fable 5.1                             | 0.025x      |          50 |        80 | 200 |
+| Opus 5, Fable 5, Sonnet 5, Sonnet 4.6 | 0.1x        |        12.5 |        20 |  50 |
 
 Worked values on Opus 5.5 at the 1-hour TTL, with F 62,000, Fw 50,000,
-and g 2,300, so W is 40,480 and m is 40:
+g 2,300, and Or 3,000, so m is 40 and r is 100:
 
 | C0      | S0        | A          | H*      |
 | ------- | --------- | ---------- | ------- |
-| 80,000  | 700,000   | 6,803,424  | 256,906 |
-| 150,000 | 1,060,000 | 11,195,424 | 376,934 |
-| 200,000 | 1,300,000 | 14,315,424 | 456,614 |
+| 80,000  | 700,000   | 8,446,200  | 277,110 |
+| 150,000 | 1,060,000 | 12,768,200 | 392,350 |
+| 200,000 | 1,300,000 | 15,838,200 | 469,918 |
 
 What moves the point:
 
 - A longer resume moves it out, and the room past it, H* - C0, grows
-  too: each resume token adds w + m to A directly, plus one more
+  too: each resume token adds w + m - 1 to A directly, plus one more
   through its own weight in S0, the sum that already counts it once
   as the resume-end call's own context. A fixed warning point would
   instead take every resume token out of the work room, so each
   handoff's larger resume would shorten the next cycle.
-- Faster growth moves it out in tokens and in by calls: the room grows
-  as the square root of g, and the count of work calls falls as one
-  over that root.
-- A dearer cache write moves it out, through m: the 1-hour TTL writes
-  at 1.6 times the 5-minute price.
+- Faster growth moves it out in tokens and in by calls: A does not
+  depend on g, so the room grows as the square root of g, and the
+  count of work calls falls as one over that root.
+- A dearer cache write or dearer output moves it out, through m and r:
+  the 1-hour TTL writes at 1.6 times the 5-minute price.
 - The dollar price of a model never moves it.
 
 Band 1 sits W past the handoff point, where a handoff begun at band 0
-would have finished. Output tokens are left out of A, which places the
-point early rather than late. Once band 0 has fired, both points are
-latched for the rest of the cycle: either may fall, and neither rises,
-because context only grows and a point that moved outward would walk
-the gauge backwards. Before band 0 fires, the point follows the
-measured rate both ways, so the fallback rate of a cycle's first calls
-cannot pin it low. A restart in place releases both latches. Haiku has
-no entry in the price table, so the hook says nothing on a Haiku
-session.
+would have finished. Once band 0 has fired, both points are latched for
+the rest of the cycle: either may fall, and neither rises, because
+context only grows and a point that moved outward would walk the gauge
+backwards. Before band 0 fires, the point follows the measured rate
+both ways, so the fallback rate of a cycle's first calls cannot pin it
+low. A restart in place releases both latches. Haiku has no entry in
+the price table, so the hook says nothing on a Haiku session.
 
 ## Pushing the agent to hand off (optional)
 
@@ -399,9 +426,10 @@ Anthropic list prices (September 2026), per million tokens:
 
 A cache read is a multiple of the input price, and the multiple is not
 the same everywhere: 0.05 on Opus 5.5 and 0.025 on Fable 5.1, against
-the 0.1 Sonnet 5 and every earlier model charge. The plugin stores the product, so
-a model matched to its family rather than its own generation is priced
-at up to two and a half times what it bills.
+the 0.1 Sonnet 5 and every earlier model charge. The plugin stores each
+model's own input, cache-read, and output prices, so a model matched to
+its family rather than its own generation is priced at up to four
+times what it bills.
 
 The cost of one turn, which the status line prints beside the gauge:
 
@@ -418,8 +446,8 @@ Fable 5.1 at 400K:  0.400 x $0.25 x 8.8 = $0.88 a turn
 ```
 
 That figure leaves out cache writes and output. The handoff point
-takes cache writes in through m and leaves output out; [The handoff
-point](#the-handoff-point) gives the formula.
+takes both in, through m and r; [The handoff point](#the-handoff-point)
+gives the formula.
 
 The defaults, measured from a month of the author's usage - sessions
 with different tool habits will measure differently, which is why the
@@ -442,7 +470,7 @@ hook re-measures growth per session:
 | cache read       | a re-sent token served from the prompt cache, at 5% of input price on Opus 5.5, 2.5% on Fable 5.1, 10% elsewhere         |
 | cache write      | a new token added to the cache, at 125% of input price for the 5-minute TTL, 200% for the 1-hour TTL                     |
 | cycle            | a session's calls from its first, or from a restart in place, to the handoff that ends it                                |
-| resume           | a cycle's calls from `hq open` through its last handoff read; ends at j0                                                 |
+| resume           | a cycle's calls from `hq open` through its last handoff read; ends at j0, or at a person's next prompt                   |
 | handoff point    | context where a cycle's cost per call of work is lowest, H*; the gauge's 100% and band 0                                 |
 | escalation       | one handoff write's growth past the handoff point, where a handoff begun there would finish; band 1                      |
 | floor            | what a session is billed before any conversation: ~69K                                                                   |
@@ -452,13 +480,14 @@ hook re-measures growth per session:
 ## How it decides
 
 - Growth is measured from the billed-context series itself, not by
-  counting turns - transcripts interleave prompts with injected
-  reminders and tool results, and the series has no such ambiguity. The
-  series is cut at every restart in place so the drop never reads as
-  negative growth.
+  counting turns - a headless transcript does not mark which records a
+  person typed, and a turn's call count varies widely, while the series
+  has neither problem. The series is cut at every restart in place so
+  the drop never reads as negative growth.
 - The warning sits at the handoff point, priced from the cycle's floor,
-  its resume, its growth rate, and its cache TTL, and band 1 sits one
-  handoff write past it.
+  its resume, its growth rate, and its cache TTL, and never closer to
+  the point where Claude Code compacts on its own than one handoff
+  write. Band 1 sits one handoff write past it.
 - Once band 0 has fired, both points latch downward; only a restart in
   place releases them. The countdowns still track the live rate - "two
   turns left" is meant to react - but the thresholds hold still.

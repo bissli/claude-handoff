@@ -24,9 +24,9 @@ Notes
   swings when a session starts reading large files. A restart in place
   releases both.
 - Growth is measured from the context series itself, not by counting
-  turns. Transcripts interleave real user prompts with injected system
-  reminders, tool results, and hook output, and no reliable rule
-  separates them; the context series has no such ambiguity.
+  turns. A headless transcript carries no mark of which user records a
+  person typed, and a turn's call count varies widely; the context
+  series has neither problem.
 - Only records that billed something are points on that series. A failed
   call is written as an assistant record too, and reading its zeroed
   usage as a context of zero is indistinguishable from a restart in
@@ -62,12 +62,14 @@ HQ_VERB = r'\bhq(?:\s+--(?:root|session)(?:=|\s+)\S+)*\s+'
 HQ_OPEN = re.compile(HQ_VERB + r'open\b')
 
 # A Bash command that could be reading the handoff back: it names the
-# .handoff directory or a HANDOFF file by any path, or runs an hq query
-# verb. open is listed with the query verbs, so a retried open stays
-# inside the resume rather than ending it.
+# .handoff directory or a HANDOFF file by any path, runs an hq query
+# verb, or runs one of the two drift checks hq open prints. open is
+# listed with the query verbs, so a retried open stays inside the
+# resume rather than ending it.
 RESUME_COMMAND = re.compile(
     r'\.handoff|HANDOFF|' + HQ_VERB
-    + r'(?:open|read|standing|artifacts|when|arc|list|help)\b')
+    + r'(?:open|read|standing|artifacts|when|arc|list|help)\b'
+    + r'|\bgit\s+status\s+--porcelain\b|\bgit\s+log\b[^|;&]*\.\.HEAD\b')
 
 # Tool names that never end a resume by themselves: reading a file,
 # searching for a skill or a tool, is exploration, not new work.
@@ -88,6 +90,11 @@ class Call:
         Cache-write tokens at the 1-hour TTL.
     minutes_written : int
         Cache-write tokens at the 5-minute TTL.
+    output : int
+        Output tokens the call billed, thinking included.
+    prompted : bool
+        True when a person's prompt arrived after the call before, so
+        this call is the first to answer it.
     tools : list[dict[str, Any]]
         The call's ``tool_use`` blocks, from every record of the call.
     """
@@ -96,7 +103,32 @@ class Call:
     written: int
     hour_written: int
     minutes_written: int
+    output: int
+    prompted: bool
     tools: list[dict[str, Any]] = field(default_factory=list)
+
+
+def reads_back(call: Call) -> bool:
+    """Tell whether every tool use of a call is one a resume makes.
+
+    Parameters
+    ----------
+    call : Call
+        One assistant call.
+
+    Returns
+    -------
+    bool
+        True when each tool use is in ``RESUME_TOOLS`` or is a Bash
+        command matching ``RESUME_COMMAND``. A call with no tool use
+        reads back too: it is the agent's recap or its reply.
+    """
+    return all(
+        tool.get('name') in RESUME_TOOLS
+        or (tool.get('name') == 'Bash'
+            and RESUME_COMMAND.search(
+                str((tool.get('input') or {}).get('command') or '')))
+        for tool in call.tools)
 
 
 def growth_per_call(series: list[int]) -> int:
@@ -168,11 +200,22 @@ def read_transcript(path: str) -> tuple[int, str, int, budget.Cycle | None]:
       has neither.
     - The cycle starts at the last drop ``main`` would read as a
       restart in place. Its resume ends at j0, the first call after the
-      cycle's first ``hq open`` whose tool uses are not all a Read, a
-      Skill or ToolSearch call, or a Bash command naming ``.handoff``,
-      ``HANDOFF``, or an hq read verb. A cycle with no ``hq open`` has
-      j0 at its first call, and one still reading its handoff back has
-      j0 at its last.
+      cycle's first ``hq open`` that answers a person's prompt or does
+      not read back (:func:`reads_back`). A cycle with no ``hq open``
+      has j0 at its first call, and one still reading its handoff back
+      has j0 at its last.
+    - The resume begins at the run of read-back calls that ends at the
+      open, and reaches back at most to the call answering the last
+      prompt before it, whatever that call's tools. The growth of any
+      work before that run comes out of C0 and out of every call of S0,
+      so the resume is priced as the next cycle will pay it, from the
+      floor. A session opened for its handoff has that run reach its
+      first call, and nothing comes out.
+    - A person's prompt is a user record whose origin kind is human,
+      which a slash command they type carries too. Tool results and
+      hook output carry no origin, and a task notification carries
+      another kind. A headless transcript records no origin, so there
+      the resume ends on tool uses alone.
     - The TTL is the one that carried more of the cycle's cache writes.
       A record with no TTL breakdown counts toward neither, and a cycle
       with none prices its writes at ``budget.DEFAULT_ONE_HOUR``, the
@@ -185,9 +228,10 @@ def read_transcript(path: str) -> tuple[int, str, int, budget.Cycle | None]:
         handle = open(path, errors='replace')
     except OSError:
         return 0, '', budget.FALLBACK_GROWTH_PER_CALL, None
+    prompted = False
     with handle:
         for line in handle:
-            if '"usage"' not in line:
+            if '"usage"' not in line and '"origin"' not in line:
                 continue
             try:
                 entry = json.loads(line)
@@ -196,6 +240,11 @@ def read_transcript(path: str) -> tuple[int, str, int, budget.Cycle | None]:
             if entry.get('isSidechain'):
                 continue
             message = entry.get('message') or {}
+            if entry.get('type') == 'user':
+                origin = entry.get('origin')
+                if isinstance(origin, dict) and origin.get('kind') == 'human':
+                    prompted = True
+                continue
             usage = message.get('usage')
             if not usage or message.get('role') != 'assistant':
                 continue
@@ -226,7 +275,10 @@ def read_transcript(path: str) -> tuple[int, str, int, budget.Cycle | None]:
                     billed=billed,
                     written=counts.get('cache_creation_input_tokens') or 0,
                     hour_written=ttl.get('ephemeral_1h_input_tokens') or 0,
-                    minutes_written=ttl.get('ephemeral_5m_input_tokens') or 0)
+                    minutes_written=ttl.get('ephemeral_5m_input_tokens') or 0,
+                    output=counts.get('output_tokens') or 0,
+                    prompted=prompted)
+                prompted = False
                 calls.append(call)
                 if identifier:
                     by_id[identifier] = call
@@ -244,25 +296,26 @@ def read_transcript(path: str) -> tuple[int, str, int, budget.Cycle | None]:
             start = index
     cycle = calls[start:]
 
-    opened = False
-    resume_end = 0
-    for index, call in enumerate(cycle):
-        inputs = [(tool.get('name'), tool.get('input') or {})
-                  for tool in call.tools]
-        commands = [str(given.get('command') or '')
-                    for name, given in inputs if name == 'Bash']
-        if not opened:
-            opened = any(HQ_OPEN.search(command) for command in commands)
-            resume_end = index if opened else 0
-            continue
-        resume_end = index
-        reads = [
-            name in RESUME_TOOLS
-            or (name == 'Bash'
-                and RESUME_COMMAND.search(str(given.get('command') or '')))
-            for name, given in inputs]
-        if not all(reads):
-            break
+    opened = next(
+        (index for index, call in enumerate(cycle)
+         if any(tool.get('name') == 'Bash' and HQ_OPEN.search(
+             str((tool.get('input') or {}).get('command') or ''))
+             for tool in call.tools)),
+        None)
+    resume_start = resume_end = 0
+    if opened is not None:
+        resume_start = opened
+        while (resume_start > 0 and not cycle[resume_start].prompted
+               and (cycle[resume_start - 1].prompted
+                    or reads_back(cycle[resume_start - 1]))):
+            resume_start -= 1
+        resume_end = len(cycle) - 1
+        for index in range(opened + 1, len(cycle)):
+            if cycle[index].prompted or not reads_back(cycle[index]):
+                resume_end = index
+                break
+    resume = cycle[resume_start:resume_end + 1]
+    worked = cycle[resume_start].billed - cycle[0].billed
 
     hour_written = sum(call.hour_written for call in cycle)
     minutes_written = sum(call.minutes_written for call in cycle)
@@ -271,8 +324,9 @@ def read_transcript(path: str) -> tuple[int, str, int, budget.Cycle | None]:
     measured = budget.Cycle(
         floor=cycle[0].billed,
         floor_written=cycle[0].written,
-        resume_context=cycle[resume_end].billed,
-        resume_sum=sum(call.billed for call in cycle[:resume_end + 1]),
+        resume_context=cycle[resume_end].billed - worked,
+        resume_sum=sum(call.billed - worked for call in resume),
+        resume_output=sum(call.output for call in resume),
         one_hour=one_hour)
     return series[-1], model, growth_per_call(series), measured
 
@@ -458,7 +512,7 @@ def main() -> int:
         budget.handoff_point(cycle, per_call, tier),
         handoff_held if held else 0)
     escalate_at = latched(
-        handoff_at + budget.handoff_write_tokens(per_call),
+        handoff_at + budget.HANDOFF_WRITE_TOKENS,
         escalate_held if held else 0)
     band, message = compose(context, per_call, handoff_at, escalate_at)
     # The stored band falls only when the context itself fell, never
