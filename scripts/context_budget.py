@@ -132,39 +132,31 @@ def reads_back(call: Call) -> bool:
 
 
 def growth_per_call(series: list[int]) -> int:
-    """Estimate how many tokens each assistant call adds to the context.
+    """Estimate how many tokens each call of work adds to the context.
 
     Parameters
     ----------
     series : list[int]
-        Billed context of each assistant call, in order.
+        Billed context of each call of the cycle's work, from j0 on, in
+        order.
 
     Returns
     -------
     int
-        Mean tokens added per call over the most recent unbroken run of
-        growth, or ``budget.FALLBACK_GROWTH_PER_CALL`` when the series is
-        too short to measure.
+        Mean tokens added per call over the last ``GROWTH_WINDOW_CALLS``
+        calls, or ``budget.FALLBACK_GROWTH_PER_CALL`` when the series is
+        too short to measure or does not grow.
 
     Notes
     -----
-    - The series is cut at a restart in place, the drop ``main`` tests
-      for: averaging across one reads as near-zero growth, which would
-      silence the warning exactly where it matters most. A smaller dip,
-      such as an expired cache block, stays in the run.
     - The mean is right here rather than the median: what matters is how
       fast the context fills, and one 40K tool result fills it just as
       surely as forty small ones.
     """
     window = series[-GROWTH_WINDOW_CALLS:]
-    run: list[int] = []
-    for value in window:
-        if run and run[-1] - value > budget.RESTART_IN_PLACE_TOKENS // 2:
-            run = []
-        run.append(value)
-    if len(run) < 5 or run[-1] <= run[0]:
+    if len(window) < 5 or window[-1] <= window[0]:
         return budget.FALLBACK_GROWTH_PER_CALL
-    return max(1, (run[-1] - run[0]) // (len(run) - 1))
+    return max(1, (window[-1] - window[0]) // (len(window) - 1))
 
 
 def read_transcript(path: str) -> tuple[int, str, int, budget.Cycle | None]:
@@ -179,8 +171,8 @@ def read_transcript(path: str) -> tuple[int, str, int, budget.Cycle | None]:
     -------
     tuple[int, str, int, budget.Cycle or None]
         Billed context of the last assistant call, that call's model id,
-        the estimated tokens added per call, and the measurements of the
-        cycle since the last restart in place. Context is 0 and the
+        the estimated tokens each call of work adds, and the measurements
+        of the cycle since the last restart in place. Context is 0 and the
         cycle None when the transcript holds no usage record yet.
 
     Notes
@@ -216,6 +208,16 @@ def read_transcript(path: str) -> tuple[int, str, int, budget.Cycle | None]:
       hook output carry no origin, and a task notification carries
       another kind. A headless transcript records no origin, so there
       the resume ends on tool uses alone.
+    - j0 is the first call of work unless the cycle is still reading
+      its handoff back, so Or stops short of it while C0 and S0 take
+      it in: its context carries the whole resume, and its output is
+      work's.
+    - Growth is measured from j0. The cycle starts past the last
+      restart in place, since averaging across one reads as near-zero
+      growth, which would silence the warning where it matters most. A
+      smaller dip, such as an expired cache block, stays in. The
+      resume's own reading grows the context far faster than work does,
+      and C0 already counts that growth.
     - The TTL is the one that carried more of the cycle's cache writes.
       A record with no TTL breakdown counts toward neither, and a cycle
       with none prices its writes at ``budget.DEFAULT_ONE_HOUR``, the
@@ -303,16 +305,18 @@ def read_transcript(path: str) -> tuple[int, str, int, budget.Cycle | None]:
              for tool in call.tools)),
         None)
     resume_start = resume_end = 0
+    read_end = -1
     if opened is not None:
         resume_start = opened
         while (resume_start > 0 and not cycle[resume_start].prompted
                and (cycle[resume_start - 1].prompted
                     or reads_back(cycle[resume_start - 1]))):
             resume_start -= 1
-        resume_end = len(cycle) - 1
+        resume_end = read_end = len(cycle) - 1
         for index in range(opened + 1, len(cycle)):
             if cycle[index].prompted or not reads_back(cycle[index]):
                 resume_end = index
+                read_end = index - 1
                 break
     resume = cycle[resume_start:resume_end + 1]
     worked = cycle[resume_start].billed - cycle[0].billed
@@ -326,9 +330,11 @@ def read_transcript(path: str) -> tuple[int, str, int, budget.Cycle | None]:
         floor_written=cycle[0].written,
         resume_context=cycle[resume_end].billed - worked,
         resume_sum=sum(call.billed - worked for call in resume),
-        resume_output=sum(call.output for call in resume),
+        resume_output=sum(call.output
+                          for call in cycle[resume_start:read_end + 1]),
         one_hour=one_hour)
-    return series[-1], model, growth_per_call(series), measured
+    return (series[-1], model, growth_per_call(series[start + resume_end:]),
+            measured)
 
 
 def compose(context: int, per_call: int, handoff_at: int,

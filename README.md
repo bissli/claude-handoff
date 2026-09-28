@@ -288,8 +288,8 @@ F   billed context of the cycle's first call
 Fw  tokens that first call writes to the cache
 C0  billed context at the resume end, call j0
 S0  billed context summed over the resume's calls up to and including j0
-Or  output tokens those calls bill, thinking included
-g   tokens added per call, measured from the transcript
+Or  output tokens the resume's calls before j0 bill, thinking included
+g   tokens added per call of work, measured from j0 on
 w   calls a handoff write takes: 2 turns x 8.8 = 17.6
 W   tokens a handoff write adds: 29,000
 Ow  output tokens a handoff write bills: 20,000
@@ -328,8 +328,12 @@ and `git status --porcelain`). j0 is the first call after those: the
 first to use any other tool, or the first to answer a prompt a person
 typed after the open. A person's prompt is a user record whose origin
 kind is human. A headless transcript records no origin, so there the
-resume ends on tool uses alone. A cycle with no `hq open` has j0 at its
-first call, so C0 and S0 are both F.
+resume ends on tool uses alone. j0 is the first call of work: its
+context closes the resume, so C0 and S0 count it, and its output is
+work, so Or stops at the call before it. A cycle still reading its
+handoff back has j0 at its last call, which Or counts. A cycle with no
+`hq open` has j0 at its first call, so C0 and S0 are both F and Or is
+0.
 
 A session that works first and opens a handoff later starts its resume
 at the run of such calls that ends at the open, reaching back at most
@@ -454,8 +458,8 @@ with different tool habits will measure differently, which is why the
 hook re-measures growth per session:
 
 - **8.8** assistant calls per user turn
-- **1,900** tokens of growth per call (~17K a turn) until a session has
-  history enough to measure its own rate
+- **1,900** tokens of growth per call (~17K a turn) until a cycle has
+  run five calls of work to measure its own rate
 - **69,000** billed tokens for a fresh session, **123,000** after a
   restart in place
 
@@ -482,8 +486,10 @@ hook re-measures growth per session:
 - Growth is measured from the billed-context series itself, not by
   counting turns - a headless transcript does not mark which records a
   person typed, and a turn's call count varies widely, while the series
-  has neither problem. The series is cut at every restart in place so
-  the drop never reads as negative growth.
+  has neither problem. Growth is measured over the calls from j0 on.
+  That leaves out the drop at a restart in place, which would read as
+  negative growth, and the resume's own reading, which grows the
+  context far faster than work does and which C0 already counts.
 - The warning sits at the handoff point, priced from the cycle's floor,
   its resume, its growth rate, and its cache TTL, and never closer to
   the point where Claude Code compacts on its own than one handoff

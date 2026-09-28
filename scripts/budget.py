@@ -119,7 +119,9 @@ class Cycle:
         j0, S0, each less that same growth, so the resume's first call
         counts as the floor.
     resume_output : int
-        Output tokens billed by those same calls, O_r, thinking included.
+        Output tokens billed by those same calls before j0, O_r, thinking
+        included. j0 is the first call of work, so its output is work's,
+        unless the cycle is still reading its handoff back.
     one_hour : bool
         True when the cycle's cache writes use the 1-hour TTL, False for
         the 5-minute one.

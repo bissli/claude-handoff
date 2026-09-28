@@ -182,8 +182,8 @@ def test_the_resume_ends_at_the_first_call_that_does_other_work(tmp_path):
     open behind --root and --session flags, a Read, hq read and hq
     standing, a sed of a .handoff path, then a call whose second record
     is an Edit. C0 is that call's 84,000, S0 is 62,000 + 64,000 +
-    70,000 + 78,000 + 84,000 = 358,000, and Or is the five calls'
-    output, 100 + 200 + 300 + 400 + 500 = 1,500.
+    70,000 + 78,000 + 84,000 = 358,000, and Or is the output of the four
+    calls before it, 100 + 200 + 300 + 400 = 1,000.
     """
     records = (
         _call(0, 62_000, [('Skill', {'skill': 'handoff'})], written=50_000,
@@ -207,7 +207,7 @@ def test_the_resume_ends_at_the_first_call_that_does_other_work(tmp_path):
     assert context == 96_000
     assert cycle == budget.Cycle(floor=62_000, floor_written=50_000,
                                  resume_context=84_000, resume_sum=358_000,
-                                 resume_output=1_500, one_hour=True)
+                                 resume_output=1_000, one_hour=True)
 
 
 def test_a_restart_in_place_restarts_the_floor_and_the_resume(tmp_path):
@@ -389,6 +389,71 @@ def test_a_cycle_still_reading_back_ends_its_resume_at_its_last_call(
     assert (cycle.resume_context, cycle.resume_sum) == (78_000, 274_000)
 
 
+def test_the_first_call_of_work_bills_its_output_as_work(tmp_path):
+    """Verify Or counts the resume's calls before j0 and never j0 itself.
+
+    Mutation: summing Or through j0, so whatever the first call of work
+    writes is priced as resume at r and moves the point out; dropping
+    the last call's output while the cycle still reads back, where that
+    call is resume; or pricing the first call of a cycle that opened no
+    handoff as resume.
+    Oracle: hand-built transcripts. A typed /handoff, a Skill call at
+    62,000, hq open, and a Read bill 100 + 200 + 300 output, and a
+    Workflow call billing 40,000 answers the typed "go ahead", so Or is
+    600. Cut before the prompt, the cycle still reads back and Or is 600
+    through the Read. With no hq open, a first call billing 5,000 leaves
+    Or at 0.
+    """
+    reading = (
+        [_prompt('<command-message>claude-handoff:handoff</command-message>')]
+        + _call(0, 62_000, [('Skill', {'skill': 'handoff'})], written=50_000,
+                output=100)
+        + _call(1, 64_000, [_bash('hq open auth-token')], output=200)
+        + _call(2, 70_000, [('Read', {
+            'file_path': '.handoff/auth-token/HANDOFF.md'})], output=300))
+    working = (reading + [_prompt('go ahead')]
+               + _call(3, 80_000, [('Workflow', {'script': '...'})],
+                       output=40_000)
+               + _call(4, 90_000, [_bash('pytest -q')], output=700))
+    unopened = (_call(0, 62_000, [('Edit', {'file_path': 'a.py'})],
+                      written=50_000, output=5_000)
+                + _call(1, 70_000, [_bash('pytest -q')], output=700))
+    path = tmp_path / 's.jsonl'
+    for records, output in ((working, 600), (reading, 600), (unopened, 0)):
+        path.write_text('\n'.join(json.dumps(r) for r in records))
+        assert cb.read_transcript(str(path))[3].resume_output == output
+
+
+def test_growth_is_measured_from_the_first_call_of_work(tmp_path):
+    """Verify the resume's own reading stays out of the growth rate.
+
+    Mutation: averaging from the cycle's first call, so the resume's
+    reading, which C0 already counts, inflates g and throws the point
+    out until the window slides past it; or measuring while the cycle
+    still reads back, before any call of work has run.
+    Oracle: hand-computed. From the 62,000 floor, hq open at 64,000 and
+    four Reads climb 20,000 a call to 144,000. j0 is an Edit at 150,000,
+    and five pytest calls climb 2,000 a call to 160,000, so g is
+    10,000 / 5 = 2,000, where the floor would give 98,000 / 11 = 8,909.
+    Cut after the last Read, the cycle still reads back and g is the
+    fallback.
+    """
+    reading = (_call(0, 62_000, written=50_000)
+               + _call(1, 64_000, [_bash('hq open auth-token')])
+               + [record for step in range(4)
+                  for record in _call(2 + step, 84_000 + 20_000 * step, [(
+                      'Read', {'file_path': f'.handoff/auth-token/{step}.md'})])])
+    working = (reading + _call(6, 150_000, [('Edit', {'file_path': 'a.py'})])
+               + [record for step in range(1, 6)
+                  for record in _call(6 + step, 150_000 + 2_000 * step,
+                                      [_bash('pytest -q')])])
+    path = tmp_path / 's.jsonl'
+    path.write_text('\n'.join(json.dumps(r) for r in working))
+    assert cb.read_transcript(str(path))[2] == 2_000
+    path.write_text('\n'.join(json.dumps(r) for r in reading))
+    assert cb.read_transcript(str(path))[2] == budget.FALLBACK_GROWTH_PER_CALL
+
+
 def test_work_before_a_late_open_is_not_priced_as_resume(tmp_path):
     """Verify a mid-session hq open prices its resume from the floor.
 
@@ -402,11 +467,11 @@ def test_work_before_a_late_open_is_not_priced_as_resume(tmp_path):
     output. With no prompt between, the agent's own Skill call at
     170,000 starts the resume, so 108,000 of growth comes out: C0 =
     196,000 - 108,000 = 88,000, S0 = 62,000 + 68,000 + 78,000 + 88,000
-    = 296,000, and Or = 4,000. With the agent's reply at 170,000 and a
-    typed /handoff command after it, the resume starts at the Skill
-    call at 176,000 that answers the command, so 114,000 comes out: C0
-    = 200,000 - 114,000 = 86,000 and S0 = 62,000 + 66,000 + 76,000 +
-    86,000 = 290,000.
+    = 296,000, and Or = 3,000 from the three calls before the Edit.
+    With the agent's reply at 170,000 and a typed /handoff command after
+    it, the resume starts at the Skill call at 176,000 that answers the
+    command, so 114,000 comes out: C0 = 200,000 - 114,000 = 86,000 and
+    S0 = 62,000 + 66,000 + 76,000 + 86,000 = 290,000.
     """
     work = (_call(0, 62_000, written=50_000, output=1_000)
             + _call(1, 100_000, [('Edit', {'file_path': 'a.py'})],
@@ -435,7 +500,7 @@ def test_work_before_a_late_open_is_not_priced_as_resume(tmp_path):
     path.write_text('\n'.join(json.dumps(r) for r in unprompted))
     assert cb.read_transcript(str(path))[3] == budget.Cycle(
         floor=62_000, floor_written=50_000, resume_context=88_000,
-        resume_sum=296_000, resume_output=4_000, one_hour=True)
+        resume_sum=296_000, resume_output=3_000, one_hour=True)
     path.write_text('\n'.join(json.dumps(r) for r in prompted))
     cycle = cb.read_transcript(str(path))[3]
     assert (cycle.resume_context, cycle.resume_sum) == (86_000, 290_000)
@@ -515,19 +580,22 @@ def test_the_countdown_rounds_up_so_it_never_sticks():
     assert 'handoff in 3' in line
 
 
-def test_growth_ignores_context_dropped_by_a_restart_in_place():
-    """Verify a restart-in-place drop restarts the growth run, not
-    flattens it.
+def test_growth_ignores_context_dropped_by_a_restart_in_place(tmp_path):
+    """Verify a restart-in-place drop restarts the growth run.
 
-    Mutation: dropping the `run = []` reset in growth_per_call, so the
-    window spans the drop.
+    Mutation: starting the cycle at the transcript's first call, or
+    measuring growth from the series start, so the window spans the
+    drop.
     Oracle: hand-computed. The post-restart run climbs 20K over five
     steps, so growth is 5,000; spanning the drop would give (60-100)/9,
     which is negative and would silently fall back.
     """
     series = [100_000, 120_000, 140_000, 160_000, 180_000,
               60_000, 65_000, 70_000, 75_000, 80_000]
-    assert cb.growth_per_call(series) == 5_000
+    path = tmp_path / 's.jsonl'
+    path.write_text('\n'.join(json.dumps(_record(index, value))
+                              for index, value in enumerate(series)))
+    assert cb.read_transcript(str(path))[2] == 5_000
 
 
 def test_growth_keeps_a_dip_smaller_than_a_restart_in_place():
@@ -542,12 +610,13 @@ def test_growth_keeps_a_dip_smaller_than_a_restart_in_place():
     assert cb.growth_per_call(series) == 80
 
 
-def test_growth_cuts_where_the_stop_hook_sees_a_restart_in_place():
+def test_growth_cuts_where_the_stop_hook_sees_a_restart_in_place(
+        tmp_path):
     """Verify the growth cut and the Stop hook's restart-in-place test
     agree.
 
-    Mutation: `>=` in place of `>` in growth_per_call's cut, or any
-    threshold other than half of RESTART_IN_PLACE_TOKENS.
+    Mutation: `>=` in place of `>` in read_transcript's cycle start, or
+    any threshold other than half of RESTART_IN_PLACE_TOKENS.
     Oracle: boundary straddle from a 180,000 peak. A fall of 61,501
     cuts, leaving five values 5,000 apart; a fall of exactly 61,500 does
     not, so the run ends below its start and falls back.
@@ -555,8 +624,12 @@ def test_growth_cuts_where_the_stop_hook_sees_a_restart_in_place():
     peak = [170_000, 175_000, 180_000]
     cut = peak + [118_499 + 5_000 * step for step in range(5)]
     kept = peak + [118_500 + 5_000 * step for step in range(5)]
-    assert cb.growth_per_call(cut) == 5_000
-    assert cb.growth_per_call(kept) == budget.FALLBACK_GROWTH_PER_CALL
+    path = tmp_path / 's.jsonl'
+    for series, growth in ((cut, 5_000),
+                           (kept, budget.FALLBACK_GROWTH_PER_CALL)):
+        path.write_text('\n'.join(json.dumps(_record(index, value))
+                                  for index, value in enumerate(series)))
+        assert cb.read_transcript(str(path))[2] == growth
 
 
 def test_growth_falls_back_on_a_short_series():
