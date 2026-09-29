@@ -37,6 +37,7 @@ import os
 import pathlib
 import re
 import shlex
+import shutil
 import socket
 import subprocess
 import sys
@@ -6685,6 +6686,9 @@ def _verb_list(root: pathlib.Path, argv: argparse.Namespace) -> int:
       header gives ``-`` for the date and the cycle; a Plan with no
       checkbox item, or no Plan, gives ``-`` for the progress; a missing
       Task line gives ``-``.
+    - On a terminal, a Task wider than the columns left of the terminal
+      width is cut to fit and ends in ``...``, so no row wraps. Piped
+      output keeps the whole Task.
     - Only ``- [ ]``, ``- [x]``, and ``- [X]`` bullets under ``## Plan``
       are plan items; a checkbox under any other section is not.
     - A file the script cannot read prints its slug with ``-`` in every
@@ -6766,7 +6770,13 @@ def _verb_list(root: pathlib.Path, argv: argparse.Namespace) -> int:
         )
     print(header_line)
     print('-' * len(header_line))
+    task_width = None
+    if sys.stdout.isatty():
+        prefix_width = len(header_line) - len('TASK')
+        task_width = max(shutil.get_terminal_size().columns - prefix_width, 8)
     for slug, written, cycle, progress, task in rows:
+        if task_width is not None and len(task) > task_width:
+            task = task[:task_width - 3] + '...'
         print(
             f'{slug.ljust(col_widths[0])}  '
             f'{written.ljust(col_widths[1])}  '

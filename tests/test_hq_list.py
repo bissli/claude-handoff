@@ -389,3 +389,33 @@ def test_list_parses_task_plan_and_block_edges(tmp_path, monkeypatch, capsys):
     rc, out, _ = _run(['list'], capsys)
     assert rc == 0
     assert out.splitlines()[2] == 'edges  2026-09-03  c4     1 open    First line.'
+
+
+def test_list_truncates_task_to_terminal_width(tmp_path, monkeypatch, capsys):
+    """On a terminal, a long Task is cut with ... so the row fits; piped
+    output keeps it whole.
+
+    Mutation: no cut, a cut that ignores the prefix columns (row runs past
+    the width), a dropped isatty guard (piped Task cut), or an off-by-one
+    leaving the row one column wide.
+    Oracle: COLUMNS=60, so every data row is exactly 60 columns.
+    """
+    root = _new_root(tmp_path, monkeypatch)
+    folder = root / '.handoff' / 'feature-x'
+    folder.mkdir(parents=True)
+    task_line = 'Implement the export pipeline for every region. ' * 3
+    (folder / 'HANDOFF.md').write_text(
+        '# Handoff: feature-x\n\n'
+        'Written: 2026-09-01 | Cycle: 3 | host @ abc1234\n\n'
+        '## Task\n\n' + task_line + '\n',
+        encoding='utf-8')
+    monkeypatch.setenv('COLUMNS', '60')
+
+    _, out, _ = _run(['list'], capsys)
+    assert out.splitlines()[2].endswith(task_line.strip())
+
+    monkeypatch.setattr(hq.sys.stdout, 'isatty', lambda: True)
+    _, out, _ = _run(['list'], capsys)
+    data_line = out.splitlines()[2]
+    assert len(data_line) == 60
+    assert data_line.endswith('...')
