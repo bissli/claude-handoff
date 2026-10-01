@@ -712,7 +712,7 @@ def test_the_reference_example_file_is_the_scripts_own_output(
         git + ['-C', str(root), 'add', 'scripts/auth.py', '.gitignore'], check=True)
     subprocess.run(git + ['-C', str(root), 'commit', '-qm', 'poller'], check=True)
     (root / 'scripts' / 'auth.py').write_text('\n'.join(auth_lines[:-1]) + '\n    raise Refresh()\n')
-    folder = root / '.handoff' / 'auth-token-refresh'
+    folder = root / '.handoff' / 'auth-refresh'
     (folder / 'notes').mkdir(parents=True)
     (folder / 'specs').mkdir()
     (folder / 'specs' / 'SPEC.md').write_text(
@@ -730,7 +730,7 @@ def test_the_reference_example_file_is_the_scripts_own_output(
     monkeypatch.delenv('HQ_CYCLE', raising=False)
     monkeypatch.setenv('HQ_NOW', '2026-08-24T10:00:00')
     monkeypatch.chdir(root)
-    slug = 'auth-token-refresh'
+    slug = 'auth-refresh'
     assert hq.main(['begin', slug]) == 0
     assert hq.main([
         'stamp', slug, 'specs/SPEC.md', '--where', '3. Retry',
@@ -751,7 +751,7 @@ def test_the_reference_example_file_is_the_scripts_own_output(
         'note', slug, 'dead-end', '--headline', 'httpx event hooks for auto-refresh',
         'A hook cannot retry the original request.']) == 0
     example_text = EXAMPLE.read_text()
-    fence_start = example_text.index('# Handoff: auth-token-refresh')
+    fence_start = example_text.index('# Handoff: auth-refresh')
     fence_end = example_text.index('```', fence_start)
     example = example_text[fence_start:fence_end].rstrip('\n')
     cursor_start = example.index('## Task')

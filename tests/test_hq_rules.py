@@ -731,13 +731,13 @@ def test_log_renders_three_cycles_plus_rollup():
         {'cycle': '5', 'written': '2026-01-05', 'repos': 'main@abc1238',
          'log': 'shipped step 3', 'note': '-'},
     ]
-    result = hq.render_log(manifest, 'auth-token-refresh')
+    result = hq.render_log(manifest, 'auth-refresh')
     lines = result.splitlines()
     assert len(lines) == 4
     assert 'shipped step 1' in lines[0]
     assert 'shipped step 2' in lines[1]
     assert 'shipped step 3' in lines[2]
-    assert lines[3] == '- cycles 1-2 - hq arc auth-token-refresh'
+    assert lines[3] == '- cycles 1-2 - hq arc auth-refresh'
     assert 'initial setup' not in result
     assert 'first pass' not in result
 

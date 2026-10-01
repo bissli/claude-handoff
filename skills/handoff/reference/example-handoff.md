@@ -8,7 +8,7 @@ first `<!-- hq:` marker down is the script's. The golden test in
 rendered file to this one line for line.
 
 ```markdown
-# Handoff: auth-token-refresh
+# Handoff: auth-refresh
 
 Written: 2026-08-26 | Cycle: 3 | master @ fcbab89 | dirty: scripts/auth.py
 
@@ -37,16 +37,16 @@ Wire refresh_token() into poll() at scripts/auth.py:88, in the 401 branch.
 <!-- hq:read 68645f0c76e2 -->
 ## Read first
 root ~/code/poller
-.handoff/auth-token-refresh/specs/SPEC.md:11-13  (14 tok)  refresh contract; s3 is the retry schedule
+.handoff/auth-refresh/specs/SPEC.md:11-13  (14 tok)  refresh contract; s3 is the retry schedule
 <!-- /hq:read -->
 
 <!-- hq:artifacts f8c343183272 -->
 ## Artifacts
 root ~/code/poller
-.handoff/auth-token-refresh/specs/SPEC.md  spec  always  c1
+.handoff/auth-refresh/specs/SPEC.md  spec  always  c1
 scripts/auth.py  draft  edit  c1  poller; the 401 branch is under edit
-.handoff/auth-token-refresh/notes/idp-quirks.md
-hq when auth-token-refresh <path> prints any row above whole
+.handoff/auth-refresh/notes/idp-quirks.md
+hq when auth-refresh <path> prints any row above whole
 <!-- /hq:artifacts -->
 
 <!-- hq:standing 936662dbc05b -->
@@ -58,7 +58,7 @@ hq when auth-token-refresh <path> prints any row above whole
 ### Dead ends
 [x01] httpx event hooks for auto-refresh
 [x02] A pid in the lock.
-hq standing auth-token-refresh <id> prints any item above whole
+hq standing auth-refresh <id> prints any item above whole
 <!-- /hq:standing -->
 
 ## Log

@@ -512,11 +512,11 @@ def test_the_skill_example_cursor_matches_the_reference_example():
     Mutation: a section renamed or a line edited in one file only, so the
     template the agent writes from drifts from the file the golden test
     replays.
-    Oracle: the slice from `# Handoff: auth-token-refresh` to the first
+    Oracle: the slice from `# Handoff: auth-refresh` to the first
     `<!-- hq:read` marker in each file.
     """
     def _cursor(text):
-        start = text.index('# Handoff: auth-token-refresh')
+        start = text.index('# Handoff: auth-refresh')
         return text[start:text.index('<!-- hq:read', start)]
     skill_cursor = _cursor(SKILL.read_text())
     assert '## Task' in skill_cursor

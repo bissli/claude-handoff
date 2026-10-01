@@ -160,14 +160,14 @@ Using it:
 ```
 /handoff                       writes or updates the handoff, checks it
   (kill the session, start fresh)
-/handoff auth-token-refresh    reads that handoff back, resumes its plan
+/handoff auth-refresh          reads that handoff back, resumes its plan
 /handoff list                  every handoff here, with plan progress
-/handoff check auth-token-refresh    re-reviews one in place
-/handoff done auth-token-refresh     marks the thread finished
+/handoff check auth-refresh    re-reviews one in place
+/handoff done auth-refresh     marks the thread finished
 /handoff --no-check            writes without the reviewer pass
 ```
 
-(`auth-token-refresh` stands for whatever folder name the writing
+(`auth-refresh` stands for whatever folder name the writing
 session chose.)
 
 - A write cycle ends with a reviewer pass: a fresh agent reads the
@@ -350,11 +350,11 @@ cache writes in each call's `usage.cache_creation` breakdown, and the
 1-hour one Claude Code itself writes at when no call carries a
 breakdown.
 
-| model                                 | cache read  | m, 5-minute | m, 1-hour |   r |
-| ------------------------------------- | ----------- | ----------: | --------: | --: |
-| Opus 5.5                              | 0.05x input |          25 |        40 | 100 |
-| Fable 5.1                             | 0.025x      |          50 |        80 | 200 |
-| Opus 5, Fable 5, Sonnet 5, Sonnet 4.6 | 0.1x        |        12.5 |        20 |  50 |
+| model                     | cache read  | m, 5-minute | m, 1-hour |   r |
+| ------------------------- | ----------- | ----------: | --------: | --: |
+| Opus 5.5                  | 0.05x input |          25 |        40 | 100 |
+| Fable 5.1                 | 0.025x      |          50 |        80 | 200 |
+| Opus 5, Fable 5, Sonnet 5 | 0.1x        |        12.5 |        20 |  50 |
 
 Worked values on Opus 5.5 at the 1-hour TTL, with F 62,000, Fw 50,000,
 g 2,300, and Or 3,000, so m is 40 and r is 100:

@@ -124,12 +124,12 @@ def test_open_records_the_resolved_folder_not_the_typed_prefix(
     folder name. The line then shows 'auth', which names no folder and
     matches no /handoff argument the reader could type back.
     Oracle: hand-computed - hq open auth against the folder
-    auth-token-refresh must record auth-token-refresh.
+    auth-refresh must record auth-refresh.
     """
-    _root(tmp_path, monkeypatch, 'auth-token-refresh')
+    _root(tmp_path, monkeypatch, 'auth-refresh')
     assert hq.main(['open', 'auth']) == 0
     record = tmp_path / f'{_SESSION}.thread'
-    assert record.read_text().strip() == 'auth-token-refresh'
+    assert record.read_text().strip() == 'auth-refresh'
 
 
 def test_a_query_against_another_thread_does_not_move_the_session(
@@ -139,15 +139,15 @@ def test_a_query_against_another_thread_does_not_move_the_session(
     Mutation: recording for every verb that takes a slug - moving the
     call past the _THREAD_VERBS test. Looking up one artifact row on a
     neighboring thread then relabels the whole session.
-    Oracle: hand-computed - open auth-token-refresh, then artifacts on
-    rate-limits; the record must still name auth-token-refresh.
+    Oracle: hand-computed - open auth-refresh, then artifacts on
+    rate-limits; the record must still name auth-refresh.
     """
-    folder = _root(tmp_path, monkeypatch, 'auth-token-refresh')
+    folder = _root(tmp_path, monkeypatch, 'auth-refresh')
     (folder.parent / 'rate-limits').mkdir(parents=True, exist_ok=True)
-    assert hq.main(['open', 'auth-token-refresh']) == 0
+    assert hq.main(['open', 'auth-refresh']) == 0
     hq.main(['artifacts', 'rate-limits'])
     record = tmp_path / f'{_SESSION}.thread'
-    assert record.read_text().strip() == 'auth-token-refresh'
+    assert record.read_text().strip() == 'auth-refresh'
 
 
 def test_a_write_that_dies_midway_leaves_the_last_whole_slug(
@@ -162,7 +162,7 @@ def test_a_write_that_dies_midway_leaves_the_last_whole_slug(
     """
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path))
     record = tmp_path / f'{_SESSION}.thread'
-    record.write_text('auth-token-refresh\n')
+    record.write_text('auth-refresh\n')
 
     whole_write = pathlib.Path.write_text
 
@@ -173,7 +173,7 @@ def test_a_write_that_dies_midway_leaves_the_last_whole_slug(
     monkeypatch.setattr(pathlib.Path, 'write_text', half_then_die)
     hq._record_thread(_SESSION, 'rate-limits')
     monkeypatch.undo()
-    assert record.read_text().strip() == 'auth-token-refresh'
+    assert record.read_text().strip() == 'auth-refresh'
     assert not list(tmp_path.glob(f'{_SESSION}.thread.*'))
 
 
@@ -184,13 +184,13 @@ def test_done_takes_the_session_off_the_thread_it_finished(
     Mutation: leaving the record in place after done, or clearing it
     on finish instead. The line then names a thread nobody is working,
     or drops the slug at the end of every cycle.
-    Oracle: hand-computed - open auth-token-refresh, then done on it;
+    Oracle: hand-computed - open auth-refresh, then done on it;
     the read path must be gone, and the line back to the bare
     directory.
     """
-    _root(tmp_path, monkeypatch, 'auth-token-refresh')
-    assert hq.main(['open', 'auth-token-refresh']) == 0
-    assert hq.main(['done', 'auth-token-refresh']) == 0
+    _root(tmp_path, monkeypatch, 'auth-refresh')
+    assert hq.main(['open', 'auth-refresh']) == 0
+    assert hq.main(['done', 'auth-refresh']) == 0
     assert not (tmp_path / f'{_SESSION}.thread').exists()
     line = _visible(_SESSION, '/x/myproject', tmp_path, monkeypatch)
     assert line.endswith('opus myproject')
@@ -203,15 +203,15 @@ def test_done_on_a_neighbor_leaves_the_session_where_it_is(
     Mutation: unlinking the record whatever thread done names. A
     session filing a stale neighbor then loses the slug for the thread
     it is actually working.
-    Oracle: hand-computed - open auth-token-refresh, then done on
-    rate-limits; the record must still name auth-token-refresh.
+    Oracle: hand-computed - open auth-refresh, then done on
+    rate-limits; the record must still name auth-refresh.
     """
-    folder = _root(tmp_path, monkeypatch, 'auth-token-refresh')
+    folder = _root(tmp_path, monkeypatch, 'auth-refresh')
     (folder.parent / 'rate-limits').mkdir(parents=True, exist_ok=True)
-    assert hq.main(['open', 'auth-token-refresh']) == 0
+    assert hq.main(['open', 'auth-refresh']) == 0
     assert hq.main(['done', 'rate-limits']) == 0
     record = tmp_path / f'{_SESSION}.thread'
-    assert record.read_text().strip() == 'auth-token-refresh'
+    assert record.read_text().strip() == 'auth-refresh'
 
 
 def test_undo_reopens_without_dropping_the_slug(tmp_path, monkeypatch):
@@ -223,13 +223,13 @@ def test_undo_reopens_without_dropping_the_slug(tmp_path, monkeypatch):
     Oracle: hand-computed - done then done --undo, both on the open
     thread; the record must survive both.
     """
-    _root(tmp_path, monkeypatch, 'auth-token-refresh')
-    assert hq.main(['open', 'auth-token-refresh']) == 0
-    assert hq.main(['done', 'auth-token-refresh']) == 0
-    assert hq.main(['open', 'auth-token-refresh']) == 0
-    assert hq.main(['done', 'auth-token-refresh', '--undo']) == 0
+    _root(tmp_path, monkeypatch, 'auth-refresh')
+    assert hq.main(['open', 'auth-refresh']) == 0
+    assert hq.main(['done', 'auth-refresh']) == 0
+    assert hq.main(['open', 'auth-refresh']) == 0
+    assert hq.main(['done', 'auth-refresh', '--undo']) == 0
     record = tmp_path / f'{_SESSION}.thread'
-    assert record.read_text().strip() == 'auth-token-refresh'
+    assert record.read_text().strip() == 'auth-refresh'
 
 
 def test_a_refused_begin_puts_the_session_on_no_thread(
@@ -242,9 +242,9 @@ def test_a_refused_begin_puts_the_session_on_no_thread(
     Oracle: hand-computed - a lock held by another session minutes
     old; begin exits 1 and must leave no record.
     """
-    folder = _root(tmp_path, monkeypatch, 'auth-token-refresh')
+    folder = _root(tmp_path, monkeypatch, 'auth-refresh')
     (folder / '.hq.lock').write_text(
         f'slug={folder.name}\nsession=other-session\nhost=other-host\n'
         'time=2026-09-09T11:30:00\ncycle=1\n')
-    assert hq.main(['begin', 'auth-token-refresh']) == 1
+    assert hq.main(['begin', 'auth-refresh']) == 1
     assert not (tmp_path / f'{_SESSION}.thread').exists()

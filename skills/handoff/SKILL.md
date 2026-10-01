@@ -28,7 +28,7 @@ Every line that calls for a move names it: `<finding> - <what to do>`.
 ## The folder
 
 ```
-.handoff/auth-token-refresh/
+.handoff/auth-refresh/
 +- HANDOFF.md      header line; cursor: ## Task ## Now ## Plan ## State
 |                  ## Environment ## Open questions ## Unfiled; then the
 |                  blocks <!-- hq:read --> <!-- hq:artifacts -->
@@ -124,8 +124,14 @@ Target, first match wins - an argument is never required:
    the candidates and ask
 3. an existing `.handoff/` folder whose slug or Task line matches this
    session's task - update it, never create a twin
-4. a new slug: 2-4 kebab-case words naming the task as this session
-   would state it (`auth-token-refresh`), unique under `.handoff/`
+4. a new slug: exactly two lowercase nouns, `area-subject` - the part
+   of the system touched, then the thing changed (`auth-refresh`);
+   neither word carries a dash, so a compound term joins or
+   shortens. Two threads on one subject make it the area, and the
+   second word names each thread's question (`cache-ttl`,
+   `cache-size`). Never the repo name, a stage word (review, fix,
+   cleanup), a date, version, round, or ticket id - those go in the
+   Task line. Unique under `.handoff/`
 
 What the target holds decides the route; the write path is the same
 in every case:
@@ -146,7 +152,7 @@ The hand-written half of a real file, three cycles in
 written by print at `begin`:
 
 ```markdown
-# Handoff: auth-token-refresh
+# Handoff: auth-refresh
 
 Written: 2026-08-26 | Cycle: 3 | master @ fcbab89 | dirty: scripts/auth.py
 
@@ -246,8 +252,8 @@ Run these steps in order:
 The pair that brackets a cycle:
 
 ```
-hq begin auth-token-refresh
-hq finish auth-token-refresh \
+hq begin auth-refresh
+hq finish auth-refresh \
   --log "token store and refresh endpoint written"
 ```
 
