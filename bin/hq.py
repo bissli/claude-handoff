@@ -3135,19 +3135,13 @@ def dangling_successors(
     -------
     list[tuple[str, str]]
         One pair per row with status ``superseded`` whose successor field
-        names no regular file on disk, in ledger order.
-
-    Notes
-    -----
-    - Such a row is ungated with nothing live standing in for it, so
-      ``begin`` and ``finish`` name it as an advisory; R1 accepted the
-      successor when it was on disk, and this is the only place its later
-      disappearance surfaces.
+        names nothing on disk, in ledger order. A directory counts as
+        present, so a moved ``probe-dir`` row passes.
     """
     return [
         (path, row['successor']) for path, row in live.items()
         if row['status'] == 'superseded' and row['successor'] != '-'
-        and not _successor_path(folder, row['successor']).is_file()
+        and not _successor_path(folder, row['successor']).exists()
         ]
 
 

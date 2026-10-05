@@ -2369,6 +2369,33 @@ def test_dangling_successor_is_an_advisory_in_finish_and_the_work_list(
     assert 'successor missing: SPEC.md -> NEXT.md' in capsys.readouterr().out
 
 
+def test_directory_successor_on_disk_is_not_named_missing(
+        tmp_path, monkeypatch, capsys):
+    """A probe-dir row superseded by a directory on disk stays silent.
+
+    Mutation: the dangling check testing is_file() in place of exists(),
+    or naming no successor at all.
+    Oracle: begin prints no 'successor missing' line while probe-new/
+    exists, and prints 'successor missing: probe-old -> probe-new' after
+    it is removed.
+    """
+    folder = _new_root(tmp_path, monkeypatch)
+    hq.main(['begin', _SLUG])
+    (folder / 'probe-old').mkdir()
+    assert hq.main(['stamp', _SLUG, 'probe-old', '--kind', 'probe-dir']) == 0
+    (folder / 'probe-old').rename(folder / 'probe-new')
+    assert hq.main(['stamp', _SLUG, 'probe-new', '--kind', 'probe-dir']) == 0
+    assert hq.main(['stamp', _SLUG, 'probe-old', '--successor', 'probe-new']) == 0
+    capsys.readouterr()
+
+    hq.main(['begin', _SLUG])
+    assert 'successor missing' not in capsys.readouterr().out
+
+    (folder / 'probe-new').rmdir()
+    hq.main(['begin', _SLUG])
+    assert 'successor missing: probe-old -> probe-new' in capsys.readouterr().out
+
+
 def test_r1_holds_when_the_stored_kind_is_spec_and_the_heading_moved(
         tmp_path, monkeypatch):
     """R1 binds to the stored kind as well as the inferred one.
