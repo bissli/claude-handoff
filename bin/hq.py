@@ -255,6 +255,9 @@ The reading steps hq open prints after its findings; each binds.
   run; a moved sha, an unresolved anchor, or a moved span says what
   to read instead; a stale folder path waits for the next write.
 - Read HANDOFF.md.
+- Every ## Directives line binds from the first action for the whole
+  session; a subagent brief whose work it touches repeats that line
+  word for word.
 - Then run hq read <slug> <path> on every ## Read first line that
   shows a span: it prints the span and records the read; a line
   printed instead names its move.
@@ -353,6 +356,16 @@ doubt, write it down.
 
 Cursor rules:
 
+- Directives holds an instruction the user gave for the life of this
+  thread, one bullet each, whole, a few lines at most: "Run the
+  integration suite with --db staging-copy; never point a test at
+  the shared database." A rule the agent worked out is a constraint,
+  a rule for every thread in the repo belongs in CLAUDE.md, and the
+  next step is Now.
+- Directives carries word for word. To add, rewrite, or clear one on
+  the user's word, edit the section and pass finish
+  --replace-directives "<why>", which records the old section in a
+  decision; finish refuses any other change.
 - Point, never paste: a rehomed sibling is stamped with hq stamp;
   its pointer line is generated, never typed.
 - Skip what the repo records: git history, CLAUDE.md, README content.
@@ -2079,6 +2092,30 @@ def not_carried(
         and ' '.join(ln.split()) not in spent_lines]
 
 
+def directives_text(cursor: str) -> str:
+    """Body of the cursor's ``## Directives`` section, whitespace collapsed.
+
+    Parameters
+    ----------
+    cursor : str
+        Cursor text as ``split_handoff`` returns it.
+
+    Returns
+    -------
+    str
+        Every line under ``## Directives`` up to the next ``## `` heading,
+        joined with each whitespace run collapsed to one space, so a
+        bullet re-wrapped at the column compares equal. Empty when the
+        section is absent or holds nothing.
+    """
+    section_m = re.search(r'^## Directives\s*$', cursor, re.MULTILINE)
+    if not section_m:
+        return ''
+    rest = cursor[section_m.end():]
+    next_m = re.search(r'^## ', rest, re.MULTILINE)
+    return ' '.join((rest[:next_m.start()] if next_m else rest).split())
+
+
 def split_handoff(text: str) -> dict:
     """Parse HANDOFF.md text into its structural components.
 
@@ -3339,7 +3376,8 @@ def _assemble_handoff(
     folder : pathlib.Path
         Handoff folder; used to resolve row paths and derive the slug.
     cursor_text : str
-        Cursor portion of the handoff (## Task through ## Open questions).
+        Cursor portion of the handoff (## Directives through ## Open
+        questions).
     header_line : str
         'Written: ... | Cycle: N | branch @ sha7 | clean' line.
     log_body : str
@@ -4048,10 +4086,13 @@ def _verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
 
     # --- Step 5: rewrite HANDOFF.md ---
     _cursor_headings = {
-        'Task', 'Now', 'Plan', 'State', 'Environment', 'Open questions',
+        'Directives', 'Task', 'Now', 'Plan', 'State', 'Environment',
+        'Open questions',
         }
     cursor_parts: list[str] = []
-    for h in ['Task', 'Now', 'Plan', 'State', 'Environment', 'Open questions']:
+    for h in [
+            'Directives', 'Task', 'Now', 'Plan', 'State', 'Environment',
+            'Open questions']:
         body = '\n'.join(sections_raw.get(h, [])).strip()
         # The header tail is a repo state the thread wrote by hand;
         # finish rewrites the header, so the cursor is its live home and
@@ -4611,8 +4652,9 @@ def _verb_begin(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
             ('HANDOFF.md',
              (f'# Handoff: {folder.name}\n\n'
               f'Written: {anch["now"][:10]} | Cycle: 1\n\n'
-              '## Task\n\n## Now\n\n## Plan\n\n## State\n\n'
-              '## Environment\n\n## Open questions\n\n## Log\n')),
+              '## Directives\n\n## Task\n\n## Now\n\n## Plan\n\n'
+              '## State\n\n## Environment\n\n## Open questions\n\n'
+              '## Log\n')),
             ('ledger.tsv', _LEDGER_HEADER + '\n'),
             ('standing.md', ''),
             ('cycles/manifest.tsv', _MANIFEST_HEADER + '\n'),
@@ -5304,8 +5346,9 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
     anch : dict
         Anchors for this invocation.
     argv : argparse.Namespace
-        Parsed flags; ``--log`` is required and ``--acknowledge`` passes a
-        witness break.
+        Parsed flags; ``--log`` is required, ``--acknowledge`` passes a
+        witness break, and ``--replace-directives`` passes a changed
+        ``## Directives`` section and records its reason.
 
     Returns
     -------
@@ -5318,7 +5361,9 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
       session's; a path it writes that it cannot write; W1 or W2;
       an R3 sha mismatch; a live gated row absent from disk; an
       ``## Unfiled`` section below the first block marker; an untyped
-      ``## Unfiled`` bullet.
+      ``## Unfiled`` bullet; a ``## Directives`` section that differs
+      from the previous finish's archive without
+      ``--replace-directives``, or that flag on an unchanged section.
     - Every check, the path preflight included, precedes the first
       write, so a refusal leaves the folder byte-identical and a re-run
       appends nothing twice.
@@ -5408,6 +5453,34 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
     items, cursor_clean, refusal = drain_unfiled(parsed['cursor'])
     if refusal:
         print(f'hq finish: {refusal}')
+        return 1
+    # --- Refusal: directives changed ---
+    replace_why = ' '.join((getattr(argv, 'replace_directives', None) or '').split())
+    directives_old: str | None = None
+    # An adopt row archives the foreign file it read, whose sections
+    # adopt merged and reordered, so only a finish row's archive compares.
+    if manifest and manifest[-1].get('rewrite_sha', '-') in {'', '-'}:
+        prev_archive = folder / 'cycles' / f'c{int(manifest[-1]["cycle"]):02d}.md'
+        if prev_archive.is_file():
+            directives_old = directives_text(split_handoff(
+                prev_archive.read_text(encoding='utf-8', errors='replace'))['cursor'])
+    directives_new = directives_text(cursor_clean)
+    if directives_old is None:
+        if replace_why:
+            print(
+                'advisory: --replace-directives given, no earlier cycle to'
+                ' compare - drop the flag')
+        replace_why = ''
+    elif directives_old != directives_new and not replace_why:
+        print(
+            f'hq finish: ## Directives changed since c{int(manifest[-1]["cycle"]):02d}'
+            ' - carry it unchanged, or pass --replace-directives "<why>" when'
+            ' the user changed it')
+        return 1
+    elif directives_old == directives_new and replace_why:
+        print(
+            'hq finish: --replace-directives given but ## Directives is unchanged'
+            f' since c{int(manifest[-1]["cycle"]):02d} - drop the flag')
         return 1
     # --- Advisory: collisions ---
     now_m = re.search(r'^## Now\s*$', cursor_clean, re.MULTILINE)
@@ -5567,12 +5640,22 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
             return 1
         new_note_lines.append(line)
         standing_text_new += line + '\n'
+    # The decision quotes the replaced section whole, so not_carried
+    # below finds each old directive line carried in standing.md.
+    if replace_why:
+        line = _note_line(
+            standing_text_new, 'decision', 'Directives replaced',
+            f'{replace_why.rstrip(".")}. Previous: {directives_old or "none"}',
+            anch['cycle'])
+        new_note_lines.append(line)
+        standing_text_new += line + '\n'
     # --- Advisory: cursor lines not carried ---
     # Notes:
     # - The cursor is rewritten every cycle, so the previous archive is
     #   the one record of what it held; a line that neither the new
     #   cursor, standing.md, a live label, nor a rehomed sibling
-    #   carries is listed and counted in the manifest, never refused.
+    #   carries is listed and counted in the manifest, never refused;
+    #   only a changed ## Directives section is refused, above.
     # - Every line prints: once this cycle files, hq open --not-carried
     #   compares against it and lists none of them.
     # - A cursor heading carries no fact, so a section omitted as empty
@@ -6943,6 +7026,10 @@ def _build_parser() -> argparse.ArgumentParser:
         '--acknowledge "<reason>" turns a W1 or W2 witness break into an\n'
         'acknowledged line and records the break and the reason in the\n'
         'manifest.\n'
+        '--replace-directives "<why>" passes a changed ## Directives\n'
+        'section and records the old section and the reason in one\n'
+        'decision; without it a changed section refuses, and with it an\n'
+        'unchanged one does.\n'
         'The cursor lines from the last finished cycle that nothing now\n'
         'carries print as an advisory, and the manifest records their\n'
         'count; they never block the write, and the Now step is exempt.\n'
@@ -6959,6 +7046,7 @@ def _build_parser() -> argparse.ArgumentParser:
     fin.add_argument('slug')
     fin.add_argument('--log', required=True)
     fin.add_argument('--acknowledge')
+    fin.add_argument('--replace-directives')
 
     _done_epilog = (
         'finish ends a cycle and the thread goes on; done ends the thread.\n'

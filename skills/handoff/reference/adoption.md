@@ -71,8 +71,10 @@ Everything else:
 - Map every other foreign section to the cursor section carrying the
   same kind of fact - Task, Now, Plan, State, Environment, Open
   questions - and keep every fact.
-- A directive the file quotes - a reading order, a backup or worktree
-  it says never to delete - becomes a `## Constraints` entry.
+- An instruction the user gave for the life of the thread becomes a
+  `## Directives` bullet, whole. Any other rule the file quotes - a
+  reading order, a backup or worktree it says never to delete -
+  becomes a `## Constraints` entry.
 - What fits nowhere moves whole to a sibling `notes/<topic>.md`,
   stamped `--read-before edit` when the cursor points at it. Touch no
   sibling file except to add.

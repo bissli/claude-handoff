@@ -29,10 +29,11 @@ Every line that calls for a move names it: `<finding> - <what to do>`.
 
 ```
 .handoff/auth-refresh/
-+- HANDOFF.md      header line; cursor: ## Task ## Now ## Plan ## State
-|                  ## Environment ## Open questions ## Unfiled; then the
-|                  blocks <!-- hq:read --> <!-- hq:artifacts -->
-|                  <!-- hq:standing --> and ## Log
++- HANDOFF.md      header line; cursor: ## Directives ## Task ## Now
+|                  ## Plan ## State ## Environment ## Open questions
+|                  ## Unfiled; then the blocks <!-- hq:read -->
+|                  <!-- hq:artifacts --> <!-- hq:standing --> and
+|                  ## Log
 +- ledger.tsv      append-only stamps
 +- standing.md     append-only decisions, constraints, dead ends
 +- cycles/         each finished HANDOFF.md verbatim, c01.md ..
@@ -45,7 +46,7 @@ Every line that calls for a move names it: `<finding> - <what to do>`.
 |                  folder is one unit
 ```
 
-The agent writes the cursor (Task through Open questions) and
+The agent writes the cursor (Directives through Open questions) and
 `## Unfiled`, and never opens `ledger.tsv` or `standing.md`: it
 dictates them through `hq stamp`, `hq note`, and `hq supersede`. It
 reads `cycles/cNN.md` by range and never edits one. The script writes
