@@ -2863,6 +2863,27 @@ def test_an_always_row_with_no_anchor_is_refused_with_its_headings(
     assert dict(zip(hq.LEDGER_FIELDS, rows[-1].split('\t')))['where'] == 's1'
 
 
+def test_a_refused_stamp_lists_no_hash_led_body_line(
+        tmp_path, monkeypatch, capsys):
+    """Verify the refused-stamp heading list omits a '#42 ...' body line.
+
+    Mutation: the listing reverted to ln.startswith('#'), so it offers
+    an anchor the resolver never matches.
+    Oracle: the file's one real heading, listed by hand.
+    """
+    folder = _new_root(tmp_path, monkeypatch)
+    hq.main(['begin', _SLUG])
+    (folder / 'SPEC.md').write_text(
+        '## 1. Fix the loader crash reported in issue\n'
+        '#42 and the follow-up timeout\n'
+        'Body.\n')
+    capsys.readouterr()
+    assert hq.main(['stamp', _SLUG, 'SPEC.md']) == 1
+    assert capsys.readouterr().out.splitlines()[1:] == [
+        '  ## 1. Fix the loader crash reported in issue',
+        ]
+
+
 def test_a_draft_keeps_edit_or_always_and_steps_down_from_an_old_always(
         tmp_path, monkeypatch, capsys):
     """R1 holds a draft at edit or always; an older always draft may re-stamp edit.

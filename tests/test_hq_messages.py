@@ -624,8 +624,7 @@ def test_open_reports_git_drift_against_the_header_sha(tmp_path, monkeypatch):
     out = _strip_read(_run(['open', _SLUG])[1])
     assert re.fullmatch(
         rf'git drift: header \S+@{old_sha} -> now \S+@[0-9a-f]{{7}}'
-        rf' - run git log --oneline {old_sha}\.\.'
-        r'HEAD, and -- <todo path> for each todo file the Plan points at\n',
+        rf' - run git log --oneline {old_sha}\.\.HEAD\n',
         out), out
 
 

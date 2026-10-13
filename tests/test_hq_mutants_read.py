@@ -789,6 +789,45 @@ def test_open_span_comparison_uses_correct_parts_indices(
     assert 'span moved: SPEC.md' in capsys.readouterr().out
 
 
+def test_open_reports_no_span_move_once_an_anchor_stops_resolving(
+        tmp_path, monkeypatch, capsys):
+    """Verify open skips the span check when one anchor no longer resolves.
+
+    Mutation: the unresolved guard dropped, so open compares Alpha's and
+    Beta's stored spans against Beta's alone and reports a move.
+    Oracle: Beta keeps its lines while Alpha's heading is renamed away,
+    so the only true report is the unresolved Alpha anchor.
+    """
+    folder = _new_root(tmp_path, monkeypatch)
+    hq.main(['begin', _SLUG])
+    (folder / 'SPEC.md').write_text(
+        '# Spec\n'
+        '\n'
+        '## Alpha\n'
+        'a\n'
+        '\n'
+        '## Beta\n'
+        'b\n')
+    hq.main(['stamp', _SLUG, 'SPEC.md', '--read-before', 'always',
+             '--where', 'Alpha;Beta'])
+    hq.main(['finish', _SLUG, '--log', 'c1'])
+    (folder / 'SPEC.md').write_text(
+        '# Spec\n'
+        '\n'
+        '## Gamma\n'
+        'a\n'
+        '\n'
+        '## Beta\n'
+        'b\n')
+    capsys.readouterr()
+
+    hq.main(['open', _SLUG])
+
+    out = capsys.readouterr().out
+    assert "unresolved anchor in SPEC.md: 'Alpha'" in out
+    assert 'span moved' not in out
+
+
 def test_open_span_moved_condition_requires_both_old_and_new(
         tmp_path, monkeypatch, capsys):
     """Open reports span moved only when old_spans AND new_spans are both set.

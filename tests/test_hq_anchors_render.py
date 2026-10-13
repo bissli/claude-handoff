@@ -55,6 +55,36 @@ def test_s11b_resolves_to_letter_suffixed_heading():
     assert spans == [(5, 8)]
 
 
+def test_a_hash_led_body_line_does_not_end_a_section():
+    """Verify '#42 ...' and seven-hash body lines stay inside the section.
+
+    Mutation: the resolver's heading test reverted to line.startswith('#'),
+    or the pattern's {1,6} bound dropped so seven hashes open a heading.
+    Oracle: hand-counted span (1, 5) of the five-line section, and the
+    seven-hash line's own text left unresolved.
+    """
+    text = (
+        '## 1. Fix the loader crash reported in issue\n'
+        '#42 and the follow-up timeout\n'
+        'Body one.\n'
+        '####### seven hashes is body text\n'
+        'Body two.\n')
+    assert hq.resolve_where(text, ['s1']) == ([(1, 5)], [])
+    seven = 'seven hashes is body text'
+    assert hq.resolve_where(text, [seven]) == ([], [seven])
+
+
+def test_a_tab_after_the_hashes_opens_a_heading():
+    r"""Verify '#<tab>Title' is a heading, as CommonMark's ATX rule allows.
+
+    Mutation: the pattern's [ \t] narrowed to a space, so a heading whose
+    hashes end in a tab stops resolving.
+    Oracle: hand-counted span (1, 2) of the two-line section.
+    """
+    text = '#\tTabbed title\nBody.\n'
+    assert hq.resolve_where(text, ['Tabbed title']) == ([(1, 2)], [])
+
+
 def test_s0_resolves_a_dotted_s_prefixed_heading():
     """`s0` resolves `## S0. Warmup checks (before rollout)` like the literal form.
 

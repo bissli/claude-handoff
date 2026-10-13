@@ -9,88 +9,96 @@ allowed-tools: Bash(hq *)
 
 # Handoff
 
-One folder per task thread, `.handoff/<slug>/` at the repo root
-(`git rev-parse --show-toplevel`; outside a repo, the nearest ancestor
-of the cwd that already holds `.handoff/`, else the cwd). Its
-`HANDOFF.md` carries what a fresh session needs to resume. Write near
-the budget, then kill the session: only this folder and the repo
-survive.
+A task thread has one folder, `.handoff/<slug>/`, at the project
+root. The root is `git rev-parse --show-toplevel`. Outside a repo it
+is the nearest ancestor of the cwd that holds `.handoff/`, or the cwd
+when none does. `HANDOFF.md` in that folder holds what a fresh session
+needs to resume. Write it near the context budget, then kill the
+session. Only this folder and the repo survive.
 
-The plugin puts `hq` on the agent's PATH. After a plugin update
-mid-session `hq` fails with `command not found`: run `/reload-plugins`,
-or until then call
-`~/.claude/plugins/cache/claude-handoff/claude-handoff/<version>/bin/hq`.
-Every verb but `list` and `help` takes the slug first. Exit 0 is
-done; 1 is a refusal or a blocking finding, and nothing is written
-but a refused `stamp`'s receipt row; 2 is a usage error.
-Every line that calls for a move names it: `<finding> - <what to do>`.
+The plugin puts `hq` on the PATH. After a plugin update during the
+session, `hq` fails with `command not found`. Run `/reload-plugins`.
+Until then, call
+`~/.claude/plugins/cache/claude-handoff/claude-handoff/<version>/bin/hq`
+instead.
+
+Every verb except `list` and `help` takes the slug as its first
+argument. Exit 0 means done. Exit 1 means a refusal or a blocking
+finding, and nothing was written except the receipt row of a refused
+`stamp`. Exit 2 means a usage error. Every printed line that calls for
+an action names it, in the form `<finding> - <what to do>`.
 
 ## The folder
 
 ```
 .handoff/auth-refresh/
-+- HANDOFF.md      header line; cursor: ## Directives ## Task ## Now
-|                  ## Plan ## State ## Environment ## Open questions
-|                  ## Unfiled; then the blocks <!-- hq:read -->
-|                  <!-- hq:artifacts --> <!-- hq:standing --> and
-|                  ## Log
-+- ledger.tsv      append-only stamps
++- HANDOFF.md      header line, then the cursor (## Directives
+|                  ## Task ## Now ## Plan ## State ## Environment
+|                  ## Open questions ## Unfiled), then the blocks
+|                  <!-- hq:read --> <!-- hq:artifacts -->
+|                  <!-- hq:standing -->, then ## Log
++- ledger.tsv      append-only stamp rows
 +- standing.md     append-only decisions, constraints, dead ends,
 |                  evidence
 +- cycles/         each finished HANDOFF.md verbatim, c01.md ..
 +- .hq.lock        held from begin to finish
-+- .hq.done        marked done; list skips it
++- .hq.done        marks the thread done, and list skips it
 +- HANDOFF.orig.md the foreign file an adoption began from
 +- work-dir        the pin, only when the work already lives elsewhere
 +- notes/          what the thread learned: evidence, excerpts, reviews
-+- specs/ drafts/ outputs/  what it made, by kind; probes/ or any other
-|                  folder is one unit
++- specs/ drafts/ outputs/  what it made, by kind
++- probes/         throwaway scripts. Any other folder is one unit too
 ```
 
-The agent writes the cursor (Directives through Open questions) and
-`## Unfiled`, and never opens `ledger.tsv` or `standing.md`: it
-dictates them through `hq stamp`, `hq note`, and `hq supersede`. It
-reads `cycles/cNN.md` by range and never edits one. The script writes
-everything else; a hand edit to the header line or below the first
-`<!-- hq:` marker is overwritten by `finish`.
+The agent writes the cursor, `## Directives` through `## Open
+questions`, and `## Unfiled`. The agent never opens `ledger.tsv` or
+`standing.md`. It writes to them only through `hq stamp`, `hq note`,
+and `hq supersede`. It reads a `cycles/cNN.md` file by line range and
+never edits one. The script writes everything else. `finish`
+overwrites a hand edit to the header line or to anything below the
+first `<!-- hq:` marker.
 
-Everything the thread learned or made lives in the folder under the
-kind folder the diagram names, never loose at its top level; any file
-name serves but a snapshot-shaped one (`*.bak`, `*.orig.*`, `*.prev.*`,
-`*.pre-*`, `cycle<N>`), which stays a snapshot; `probes/` or a name the
-work calls for is stamped as one unit or file by file. One exception,
-judged at the first `hq begin`, whose `work dir:` line names the verb:
-when the thread's spec and experiments already live in a project
-directory, `hq work-dir <slug> <dir>` pins it once. From then on the
-specs, drafts, and outputs this thread makes go there, each named as
-its neighbors are and stamped by its `~` or absolute path, `--kind
-spec` or `--kind draft` to gate it; `notes/` stays in the folder. The
-agent invents no project directory and proposes none. Only a file that
-outlives the session or is stamped is bound.
+Every file that holds what the thread learned or made goes under the
+kind folder the diagram names, and none sits loose at the folder's top
+level. Any file name serves, except a snapshot-shaped one (`*.bak`,
+`*.orig.*`, `*.prev.*`, `*.pre-*`, `cycle<N>`), which stays a
+snapshot. A folder such as `probes/` is stamped as one unit, or file
+by file.
 
-## Which verb, which target
+The one exception is a pinned work dir, decided at the first
+`hq begin`, whose `work dir:` line names the verb. When the thread's
+spec and experiments already live in a project directory, run
+`hq work-dir <slug> <dir>` once to pin it.
+From then on, the specs, drafts, and outputs this thread makes go to
+that directory. Name each as its neighbors are named. Stamp it by its
+`~` or absolute path, with `--kind spec` or `--kind draft` to gate it.
+`notes/` stays in the handoff folder. The agent never invents or
+proposes a project directory. Only a file that outlives the session,
+or is stamped, is bound by this rule.
 
-One question settles the verb: does this session hold anything a
-fresh session needs that the repo does not already hold?
+## Verb and target
 
-- Yes - work in flight, an edit not yet committed, an open plan step,
-  an open question, a decision or finding the repo does not record, a
-  handoff read here with a step still open. Write.
-- No, after work - every edit committed, nothing left open or
-  unrecorded - say there is nothing to hand off and stop; touch
-  nothing. Where the work closed a thread read here, name
-  `/handoff done <slug>` to the user; never run it. A user who wants a
+One question decides the verb: does this session hold anything a fresh
+session needs that the repo does not already hold? Judge the content.
+How late the session is never decides it.
+
+- Yes: write. This covers work in progress, an uncommitted edit, an
+  open plan step, an open question, a decision or finding the repo
+  does not record, or a handoff read in this session with a step still
+  open.
+- No, after work: every edit is committed and nothing is open or
+  unrecorded. Say there is nothing to hand off and stop. Touch nothing.
+  When the work closed a thread read in this session, tell the user to
+  run `/handoff done <slug>`. Never run it yourself. A user who wants a
   record anyway types `/handoff write`.
-- No, in a session whose opening move this is, or one that has only
-  looked something up. Read.
-
-Ask it of the content, never of how late the session is.
+- No, and this is the session's first action, or the session has only
+  looked something up: read.
 
 | Input                              | Action                               |
 | ---------------------------------- | ------------------------------------ |
-| `/handoff`                         | what the question above settles      |
+| `/handoff`                         | what the question above decides      |
 | `/handoff <slug>`                  | the same, against `.handoff/<slug>/` |
-| `/handoff list [n]`                | this repo, newest first; n caps it   |
+| `/handoff list [n]`                | this repo, newest first, n caps it   |
 | `/handoff check [slug]`            | review one handoff in place, fix it  |
 | `/handoff when <slug> <path>`      | one path's ledger rows               |
 | `/handoff diff <slug> <c1> <c2>`   | the cursor change between two cycles |
@@ -100,58 +108,60 @@ Ask it of the content, never of how late the session is.
 | `/handoff done <slug>`             | end the thread: `hq done`            |
 | `/handoff done <slug> --undo`      | reopen it: `hq done --undo`          |
 
-`write` and `read` as the first word, typed by the user, override the
-inference, an optional slug after each. A verb the agent picks itself,
-as when answering a nudge, goes through the question. A first argument
-matching a verb above is that verb, not a slug.
+`/handoff write [slug]` and `/handoff read [slug]`, typed by the user,
+override the question. A verb the agent picks itself, as when it
+answers a nudge, goes through the question. A first argument that
+matches a verb in the table is that verb, never a slug.
 
-Guess neither the verb nor the target. Where either is ambiguous,
-say so, list the candidates, and stop - touch nothing.
+Guess neither the verb nor the target. Where either is ambiguous, say
+so, list the candidates, and stop. Touch nothing.
 
-An argument is always a folder under `.handoff/`, never the
-`HANDOFF.md` inside. Read, check, done, when, diff, arc, artifacts, and
-standing resolve it the same way: exact name, else a unique prefix of
-the `.handoff/*/` names, else list the candidates and stop. A write
-resolves on the exact name alone and creates the folder where none
-exists, so a longer neighbor never claims the slug typed. A target
-exists when its `HANDOFF.md` exists.
+A slug argument names a folder under `.handoff/`, never the
+`HANDOFF.md` inside it. Read, check, done, when, diff, arc, artifacts,
+and standing resolve a slug the same way: the exact folder name, else
+a unique prefix of the `.handoff/*/` names, else list the candidates
+and stop. A write resolves on the exact name alone and creates the
+folder when none exists, so a longer neighbor never claims the slug
+typed. A target exists when its `HANDOFF.md` exists.
 
 ## write
 
-Target, first match wins - an argument is never required:
+Pick the target by the first rule that matches. No argument is
+required.
 
-1. an explicit folder argument
-2. the handoff this session read, wrote, or checked, when the work
-   since has been that same task; several threads this session - name
-   the candidates and ask
-3. an existing `.handoff/` folder whose slug or Task line matches this
-   session's task - update it, never create a twin
-4. a new slug: exactly two lowercase nouns, `area-subject` - the part
-   of the system touched, then the thing changed (`auth-refresh`);
-   neither word carries a dash, so a compound term joins or
-   shortens. Two threads on one subject make it the area, and the
-   second word names each thread's question (`cache-ttl`,
-   `cache-size`). Never the repo name, a stage word (review, fix,
-   cleanup), a date, version, round, or ticket id - those go in the
-   Task line. Unique under `.handoff/`
+1. The folder argument, when given.
+2. The handoff this session read, wrote, or checked, when the work
+   since then has been that same task. When this session touched
+   several threads, name the candidates and ask.
+3. An existing `.handoff/` folder whose slug or Task line matches this
+   session's task. Update it. Never create a twin.
+4. A new slug: exactly two lowercase nouns, `area-subject`. The first
+   is the part of the system touched, the second the thing changed, as
+   in `auth-refresh`. Neither word carries a dash, so a compound term
+   joins or shortens. When two threads share a subject, the subject is
+   the area and the second word names each thread's question
+   (`cache-ttl`, `cache-size`). Never use the repo name, a stage word
+   (review, fix, cleanup), a date, a version, a round, or a ticket id.
+   Those go in the Task line. The slug is unique under `.handoff/`.
 
-What the target holds decides the route; the write path is the same
-in every case:
+What the target holds decides how `begin` starts. The write path below
+is the same in every case.
 
-- `ledger.tsv` exists: update. Read the old `HANDOFF.md` first if this
-  session has not.
-- `HANDOFF.md` with a conforming `Written: | Cycle:` header and no
-  `ledger.tsv`: `begin` runs `adopt` itself. No copy by hand.
-- `HANDOFF.md` with no conforming header: `hq adopt <slug>` refuses it
-  and names `reference/adoption.md`; convert the file by that
+- `ledger.tsv` exists: this is an update. Read the old `HANDOFF.md`
+  first, unless this session already has.
+- `HANDOFF.md` has a conforming `Written: | Cycle:` header and no
+  `ledger.tsv` exists: `begin` runs `hq adopt` itself. Copy nothing by
+  hand.
+- `HANDOFF.md` has no conforming header: `hq adopt <slug>` refuses it
+  and names `reference/adoption.md`. Convert the file by that
   procedure first.
-- no folder: `begin` creates it with an empty cursor.
+- No folder: `begin` creates it with an empty cursor.
 
 ### The file
 
-The hand-written half of a real file, three cycles in
-(`reference/example-handoff.md` is the whole file); the rules it is
-written by print at `begin`:
+Below is the hand-written half of a real file, three cycles in.
+`reference/example-handoff.md` holds the whole file. `begin` prints the
+rules it is written by (`hq help write`).
 
 ```markdown
 # Handoff: auth-refresh
@@ -185,8 +195,8 @@ Wire refresh_token() into poll() at scripts/auth.py:88, in the 401 branch.
 
 ### Command forms
 
-`stamp` and `note` take `--batch` too: one row per stdin line, the
-same arguments minus the slug. Stamp forms:
+`stamp` and `note` also take `--batch`: one item per stdin line, with
+the same arguments minus the slug. Stamp forms:
 
 ```
 hq stamp <slug> specs/SPEC.md \
@@ -217,41 +227,44 @@ hq supersede <slug> e03 --reason "the IdP lifted the cap"
 
 ### Write path
 
-Run these steps in order:
+Run these steps in order.
 
-1. `hq begin <slug>` takes the lock and prints the work list, whose
-   `cycle N begun by <session> on <host>` line names the cycle, then
-   the writing rules (`hq help write`). Make each move in steps 2 and
-   3; the printed rules bind this cycle. `hq begin: lock held by
+1. Run `hq begin <slug>`. It takes the lock and prints the work list.
+   The list's `cycle N begun by <session> on <host>` line names the
+   cycle. Then it prints the writing rules (`hq help write`), which
+   bind this cycle. Act on each work-list item in steps 2 and 3.
+   A lock refusal (exit 1) means another session is inside a cycle
+   under two hours old. The two refusals are `hq begin: lock held by
    <session> on <host> since <time>; use --force to take over` and
-   `hq begin: lock file unreadable; use --force to take over` (exit 1)
-   mean another session is inside a cycle less than two hours old:
-   stop and say so; `begin --force` only when the user confirms that
-   session is dead. `note`, `stamp`, and `supersede` print the same
-   two refusals under their own names, ending `run hq begin <slug>
-   --force to take over`: stop the same way, and run that only on the
-   same confirmation. An older lock is taken over without `--force`.
-2. One `hq note` per item settled this session, or one `--batch`; one
-   `hq supersede <slug> <old-id> <new-id>` when a ruling reverses an
-   earlier one.
-3. Place each file this session made by `## The folder` before its first
-   stamp; then one `hq stamp` per artifact created, re-read, or moved,
-   or one `--batch`. A refusal names the way out: a successor, an
-   archive reason, or leave the row gated.
-4. Rewrite the cursor from `## Task` down, above the first `<!-- hq:`
-   marker, by the printed rules, carrying forward every line this
-   session did not settle; leave the header line and everything below
-   the marker alone.
-5. Run the Reviewer pass (below); each surviving finding becomes a
-   `note`, a `stamp`, or a cursor edit in this cycle - return to step 2
-   for it. A cursor line that a surviving finding names moves out by
-   the printed rules.
-6. `hq finish <slug> --log "<one line for the Log>"`. It exits 1 on
-   the first blocking line; make its move and re-run. Neither an
-   `advisory:` line nor a `:?` in the read block blocks. On success it
-   prints `<path>  N cursor lines  N tokens (cursor a, read b,
-   artifacts c, standing d)`, a `read first:` size line, and
-   `resume: /handoff <slug>`.
+   `hq begin: lock file unreadable; use --force to take over`. Stop
+   and tell the user. Run `begin --force` only when the user confirms
+   that session is dead. `note`, `stamp`, and `supersede` print the
+   same two refusals under their own names, ending `run hq begin
+   <slug> --force to take over`. Stop the same way, and run that only
+   on the same confirmation. `begin` takes over a lock older than two
+   hours without `--force`.
+2. Run one `hq note` per item settled this session, or one `--batch`
+   call for all of them. Run `hq supersede <slug> <old-id> <new-id>`
+   for each ruling that reverses an earlier one.
+3. Place each file this session made where `## The folder` says,
+   before its first stamp. Then run one `hq stamp` per artifact
+   created, re-read, or moved, or one `--batch` call. A refusal names
+   the way out: a successor, an archive reason, or leaving the row
+   gated.
+4. Rewrite the cursor, from `## Task` down to the first `<!-- hq:`
+   marker, by the printed rules. Carry forward every line this session
+   did not settle. Leave the header line and everything below the
+   marker alone.
+5. Run the Reviewer pass below. Each finding that survives the
+   re-check becomes a `note`, a `stamp`, or a cursor edit in this
+   cycle. Return to step 2 for it. A cursor line a surviving finding
+   names moves out by the printed rules.
+6. Run `hq finish <slug> --log "<one line for the Log>"`. It exits 1
+   at the first blocking line. Do what that line says and re-run. An
+   `advisory:` line never blocks, and neither does a `:?` in the read
+   block. On success it prints `<path>  N cursor lines  N tokens
+   (cursor a, read b, artifacts c, standing d)`, a `read first:` size
+   line, and `resume: /handoff <slug>`.
 
 The pair that brackets a cycle:
 
@@ -263,117 +276,133 @@ hq finish auth-refresh \
 
 ### Reviewer pass
 
-With the file on disk, spawn the skeptic below before `finish`. It
-returns one numbered item per finding, `<n>. <finding>`; re-check
-each in the write session and stop - never loop. A question it raises
-for the user goes under `## Open questions`; do not stop for it. Only
-`--no-check` from the user, anywhere in the call, skips this pass;
-the agent never grants itself the skip.
+With the file on disk, and before `finish`, spawn the Skeptic below.
+It returns one numbered item per finding, `<n>. <finding>`. Re-check
+each finding in the write session, then stop. Never loop back to the
+Skeptic. A question it raises for the user goes under `## Open
+questions`. Do not stop for it. Only `--no-check` from the user,
+anywhere in the call, skips this pass. The agent never grants itself
+the skip.
 
-- Skeptic (Agent tool, at the executing tier the host's agent
-  rules name - a host with none takes type `general-purpose`, model
-  `sonnet` - and at the judging tier, or model `opus` there, only
-  where the Now step's correctness turns on a span the skeptic must
-  read code to settle; the session names its tier and reason before
-  launching):
-  from the file alone, fill five slots - the task, the next action,
-  why it is next, how to verify it, what to ask the user; an empty
-  slot is a finding, except `none` in the last. For each `always` row
-  `hq artifacts <slug>` prints, open its span with `hq read <slug>
-  <path>` and report any point where the Now step contradicts it. For
-  each todo file the Plan points at, verify that the Now step agrees
-  with its live item. `finish` renders the header line and the blocks
-  after this pass, so they are a cycle behind: a stale or absent sha,
-  cycle, id, row, or label there is never a finding. Read
-  a standing id the cursor cites with `hq standing <slug> <id>`, never
-  from the block. Last, name each cursor line the next session does
-  not act on. A line it acts on is one it executes, checks, obeys, or
-  answers, or needs to understand one of those. Lines it does not act
-  on include history, a done Plan item, an open item's detail beyond
-  its done condition, a closed approach or superseded item, and a
-  ruling already applied or recorded in a Standing item. A line that
-  cites evidence ids is one it acts on. One finding
-  covers a run of adjacent lines of one kind: its section, its first
-  and last words, and why. Never name a line the Now step, an open
-  Plan item, or an open question depends on, or an environment fact
-  that work uses.
+- Skeptic (Agent tool, at the executing tier the host's agent rules
+  name, else type `general-purpose` with model `sonnet`). Use the
+  judging tier, or model `opus` where the host names none, only when
+  the Now step's correctness turns on a span the Skeptic must read
+  code to settle. Name the tier and the reason before launching. Its
+  brief:
+
+  `finish` renders the header line and the blocks after this pass, so
+  they are a cycle behind. A stale or absent sha, cycle, id, row, or
+  label there is never a finding.
+
+  1. From the file alone, fill five slots: the task, the next action,
+     why it is next, how to verify it, and what to ask the user. An
+     empty slot is a finding, except `none` in the last slot.
+  2. For each `always` row `hq artifacts <slug>` prints, open its span
+     with `hq read <slug> <path>`. Report any point where the Now step
+     contradicts it.
+  3. Read a standing id the cursor cites with `hq standing <slug>
+     <id>`, never from the block.
+  4. Last, name each cursor line the next session does not act on. The
+     next session acts on a line when it executes, checks, obeys, or
+     answers it, or needs it to understand such a line. It does not
+     act on history, a done Plan item, an open item's detail beyond
+     its done condition, a closed approach, a superseded item, or a
+     ruling already applied or recorded in a Standing item. A line
+     that cites evidence ids is one it acts on. One finding covers a
+     run of adjacent lines of one kind, and gives the section, the
+     first and last words, and the reason. Never name a line the Now
+     step, an open Plan item, or an open question depends on, nor an
+     environment fact the work uses.
 
 ### Report
 
-Whatever else the turn contains, its final message relays verbatim
-the path-and-size line `finish` printed and its `resume:` line, and
-tells the user to kill this session and start a fresh one before
-running that resume line - with `--no-check` too.
+Whatever else the turn contains, its final message repeats, word for
+word, the path-and-size line and the `resume:` line that `finish`
+printed. It tells the user to kill this session and start a fresh one
+before running the resume line. This holds with `--no-check` too.
 
 ## read
 
-1. With a slug given, go straight to step 2: `open` resolves it by
-   the shared rule and lists the candidates itself. With none, run
-   `hq list`: one line, read that slug; several, list them and ask
-   which; none, say so. The last two stop there - never pick the
-   newest, and never fall through to write.
-2. Run `hq open <slug>`. It is read-only and prints what is wrong,
-   then the remaining steps (`hq help read`); each binds.
+1. With a slug given, go to step 2. `open` resolves the slug by the
+   shared rule and lists the candidates itself. With no slug, run
+   `hq list`. One line: read that slug. Several lines: list them and
+   ask the user which. No line: say so. In the last two cases stop
+   there. Never pick the newest, and never fall through to write.
+2. Run `hq open <slug>`. It writes nothing. It prints what is wrong,
+   then the reading steps (`hq help read`). Each step binds.
 
-In the generated blocks, a line ending in `- hq artifacts <slug>
-...`, `- hq when <slug> <path>`, `- hq standing <slug> ...`, or
-`- hq arc <slug>` is a command to run, as printed, when the held text
-is wanted; `path spec? unstamped` is a file that needs a stamp. A
-folded Standing or Artifacts block closes on the `hq` line that prints
-any one item above it whole: run it for the one item wanted; a re-read
-of the whole store is never the move.
+In the generated blocks, a line ending in `- hq artifacts <slug> ...`,
+`- hq when <slug> <path>`, `- hq standing <slug> ...`, or
+`- hq arc <slug>` names a command. Run it as printed when the held
+text is wanted. A line `path spec? unstamped` names a file that needs
+a stamp. A folded Standing or Artifacts block ends with the `hq`
+command that prints any one item above it whole. Run it for the one
+item wanted. Never re-read the whole store.
 
 ## check
 
-Resolve like read, then run `hq open <slug>` and the printed reading
-steps only through the reads: `HANDOFF.md` and each spanned `## Read
-first` line, then stop - a check neither drift-checks nor executes
-Now, and open questions do not stop it. Then run the write path:
-`begin`; steps 2 to 4 only for findings - what `open` printed and
-what the skeptic returns - as notes, stamps, and cursor edits; the
-Reviewer pass, skipped only by the user's `--no-check`; `finish --log
-"check: <n> findings applied - <what they changed>"`, counting both
-kinds. A check with nothing to apply still runs `finish`, which
-releases the lock and advances the cycle. A target with no conforming
-header is converted by `reference/adoption.md`, and the check stops
-there.
+Resolve the slug as read does. Run `hq open <slug>` and follow the
+printed reading steps only through the reads: `HANDOFF.md` and each
+`## Read first` line that shows a span. Then stop. A check neither
+drift-checks nor executes Now, and open questions do not stop it. A
+target with no conforming header is converted by
+`reference/adoption.md`, and the check stops there. Otherwise run the
+write path:
+
+1. `begin`.
+2. Steps 2 to 4 of the write path, for findings alone: what `open`
+   printed, and later what the Skeptic returns. Each becomes a note, a
+   stamp, or a cursor edit.
+3. The Reviewer pass. Only the user's `--no-check` skips it.
+4. `finish --log "check: <n> findings applied - <what they changed>"`,
+   where n counts both kinds of finding.
+
+A check with nothing to apply still runs `finish`, which releases the
+lock and advances the cycle.
 
 ## list, when, diff, arc, artifacts, standing
 
-Each runs the `hq` verb of the same name - `hq list [n]` or
-`hq list --done`, `hq when <slug> <path>`, `hq diff <slug> <c1> <c2>
-[<section>]`, `hq arc <slug>`, `hq artifacts <slug>`, `hq standing
-<slug> [<id> ...]` - and shows the user its output unchanged; none
-writes, and no output from `hq diff` means identical. Each verb's
-`--help` names its columns and filter flags.
+Each runs the `hq` verb of the same name and shows the user its output
+unchanged: `hq list [n]` or `hq list --done`, `hq when <slug> <path>`,
+`hq diff <slug> <c1> <c2> [<section>]`, `hq arc <slug>`,
+`hq artifacts <slug>`, `hq standing <slug> [<id> ...]`. None writes.
+No output from `hq diff` means the two cursors, or the named section,
+are identical. Each verb's `--help` names its columns and filter
+flags.
 
 ## done
 
-Resolve `<slug>` per the shared rule; with none given, list the
-candidates and stop - never pick the newest: ending the wrong thread
-is not a mistake a later cycle corrects. Run `hq done <slug>`, with
+Resolve `<slug>` by the shared rule. With none given, list the
+candidates and stop. Never pick the newest: no later cycle corrects
+the ending of the wrong thread. Run `hq done <slug>`, with
 `--reason "<line>"` when the session knows why. `done` ends the
-thread; `finish` ends one cycle. Show the output unchanged. The
-marker, `--undo`, and a repeated `done` are in `hq done --help`.
+thread, where `finish` ends one cycle. Show the output unchanged.
+`hq done --help` covers the marker, `--undo`, and a repeated `done`.
 
 ## The hooks
 
-Two hooks report; only `HQ_GATE_DENY`, set by the operator, makes the
-gate block, and `finish` consults neither. Once `hq open` arms it, at
-a write in reach - under the root or the armed folder's pinned work
-dir - the gate names each unread gated path once: an `always` row at
-the first such write, an `edit` row at a write to that file. A read
-is a Read tool call, the path as an argument of its own
-`cat`/`head`/`tail`/`less`/`sed -n` segment, or an `hq read` receipt;
-`ls`, `wc`, `grep`, a `stamp`, and a path piped into `head` are none.
-At the end of a turn, the Stop hook names a `HANDOFF.md` written by
-hand since its last finished cycle and the `begin`/`finish` pair that
-files it.
+Two hooks report. Only `HQ_GATE_DENY`, set by the operator, makes the
+gate block a write, and `finish` consults neither hook. `hq open` arms
+the gate. From then on, at a write in reach, under the root or the
+armed folder's pinned work dir, the gate names each unread gated path
+once: an `always` row at the first such write, an `edit` row at a
+write to that file. A read is a Read tool call, the path as an
+argument of its own `cat`, `head`, `tail`, `less`, or `sed -n` shell
+segment, or an `hq read` receipt. `ls`, `wc`, `grep`, a `stamp`, and
+a path piped into `head` do not count as reads. At the end of a turn,
+the Stop hook names a `HANDOFF.md` written by hand since its last
+finished cycle, and the `begin` and `finish` pair that files it.
 
-## Where the rest lives
+## Help topics and reference files
 
 `reference/adoption.md` and `reference/example-handoff.md` sit beside
-this file. `hq help anchors`: every `--where` form. `hq help kinds`:
-kinds, tiers, ledger fields. `hq help rules`: R1 to W2 in full.
-`hq help stale-path`: fixing a folder path under a former directory.
-`hq <verb> --help`: each verb's columns.
+this file.
+
+- `hq help write`: the cursor, ledger, Unfiled, and todo rules.
+- `hq help read`: the steps after `open`.
+- `hq help anchors`: every `--where` form.
+- `hq help kinds`: kinds, tiers, and ledger fields.
+- `hq help rules`: R1 to W2 in full.
+- `hq help stale-path`: fixing a folder path under a former directory.
+- `hq <verb> --help`: each verb's columns and flags.
