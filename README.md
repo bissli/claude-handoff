@@ -185,7 +185,8 @@ session chose.)
   in `HANDOFF.md`; an append-only ledger of the thread's artifacts in
   `ledger.tsv` (which spec, draft, or notes file matters, and whether
   it must be read before the next edit); the settled decisions,
-  constraints, and dead ends in `standing.md`, append-only; and every
+  constraints, dead ends, and graded evidence the work rests on in
+  `standing.md`, append-only; and every
   finished cycle verbatim under `cycles/`. A small script, `hq.py`,
   which the plugin puts on the agent's PATH as `hq` while it is
   enabled, writes the ledger, renders the generated blocks of
@@ -200,10 +201,13 @@ session chose.)
   outputs go there instead; a pin is the thread's own, and no global
   setting moves every thread at once.
 - Run again a session later, it updates the same folder: the cursor
-  rewritten, the plan ticked off, decisions and dead ends appended,
-  the previous cycle archived. What is no longer live is counted, not
-  printed, and what is read at resume is a spec's anchored span, its
-  size beside it, never a whole file. The file grows with what stays
+  rewritten, the plan ticked off, decisions, dead ends, and evidence
+  appended, the previous cycle archived. An item that stops holding is
+  superseded by its replacement, or retired with
+  `hq supersede <task-name> <id> --reason "<why>"` when none exists.
+  What is no longer live is counted, not printed, and what is read at
+  resume is a spec's anchored span, its size beside it, never a whole
+  file. The file grows with what stays
   live, not with the cycle count: a thread that supersedes as it goes
   holds its size, and one that accumulates distinct live items pays
   about 58 tokens a cycle for them.

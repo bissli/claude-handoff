@@ -39,7 +39,7 @@ _USAGE_ONLY_PRINTS = {
     'hq stamp: --reason may not start with',
     'hq stamp: --archive requires --reason',
     'hq stamp: --status archived requires --reason',
-    'hq note: kind must be decision, constraint, or dead-end',
+    'hq note: kind must be decision, constraint, dead-end, or evidence',
     'hq note: --headline is required',
     'hq supersede: ids must share a prefix',
     'hq list: count must be a positive integer',

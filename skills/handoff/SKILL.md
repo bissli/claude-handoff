@@ -35,7 +35,8 @@ Every line that calls for a move names it: `<finding> - <what to do>`.
 |                  <!-- hq:artifacts --> <!-- hq:standing --> and
 |                  ## Log
 +- ledger.tsv      append-only stamps
-+- standing.md     append-only decisions, constraints, dead ends
++- standing.md     append-only decisions, constraints, dead ends,
+|                  evidence
 +- cycles/         each finished HANDOFF.md verbatim, c01.md ..
 +- .hq.lock        held from begin to finish
 +- .hq.done        marked done; list skips it
@@ -208,8 +209,10 @@ hq note <slug> decision \
 hq note <slug> --batch <<'ROWS'
 constraint --headline "Never log token values" "Not even at debug."
 dead-end --headline "httpx event hooks" "A hook cannot retry the request."
+evidence --grade measured --open --headline "Staging IdP caps refresh at 5/min" source: notes/idp-quirks.md
 ROWS
 hq supersede <slug> d17 d23
+hq supersede <slug> e03 --reason "the IdP lifted the cap"
 ```
 
 ### Write path
@@ -288,7 +291,8 @@ the agent never grants itself the skip.
   answers, or needs to understand one of those. Lines it does not act
   on include history, a done Plan item, an open item's detail beyond
   its done condition, a closed approach or superseded item, and a
-  ruling already applied or recorded in a Standing item. One finding
+  ruling already applied or recorded in a Standing item. A line that
+  cites evidence ids is one it acts on. One finding
   covers a run of adjacent lines of one kind: its section, its first
   and last words, and why. Never name a line the Now step, an open
   Plan item, or an open question depends on, or an environment fact

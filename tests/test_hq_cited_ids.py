@@ -204,3 +204,25 @@ def test_a_chain_ending_in_a_retirement_names_the_retired_end(
     assert _advisories(out) == [
         ('advisory: cited id retired: d02 in c1'
          ' - drop the citation or cite what replaced it')]
+
+
+def test_a_bare_evidence_id_counts_as_a_citation(tmp_path, monkeypatch):
+    """Verify a bare e id draws the advisory, as a bare d id does.
+
+    Mutation: the bare scan kept to d ids, so an evidence id counts only
+    inside brackets.
+    Oracle: e01 superseded by e02, cited bare.
+    """
+    folder = _root(tmp_path, monkeypatch)
+    assert _run(['begin', _SLUG])[0] == 0
+    for n in (1, 2):
+        assert _run([
+            'note', _SLUG, 'evidence', '--grade', 'measured', '--headline',
+            f'Cap is {n}', f'source: run-0{n}'])[0] == 0
+    assert _run(['supersede', _SLUG, 'e01', 'e02'])[0] == 0
+    _set(folder, 'Task', 'Probe the cited-id advisory.')
+    _set(folder, 'Now', 'Recheck e01 against the run.')
+    rc, out = _run(['finish', _SLUG, '--log', 'c1'])
+    assert rc == 0
+    assert _advisories(out) == [
+        'advisory: cited id superseded: e01 -> e02 - cite e02 in its place']

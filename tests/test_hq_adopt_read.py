@@ -130,7 +130,8 @@ def test_note_refuses_an_unknown_kind_and_a_missing_headline(
     before = (folder / 'standing.md').read_text()
     assert hq.main(['note', _SLUG, 'wish', '--headline', 'H', 'body']) == 2
     assert (
-        "hq note: kind must be decision, constraint, or dead-end; got 'wish'"
+        "hq note: kind must be decision, constraint, dead-end, or evidence;"
+        " got 'wish'"
         in capsys.readouterr().out)
     assert hq.main(['note', _SLUG, 'decision', 'body']) == 2
     assert 'hq note: --headline is required' in capsys.readouterr().out

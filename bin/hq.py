@@ -3,7 +3,7 @@
 
 Each handoff lives in .handoff/<slug>/: HANDOFF.md written by the agent,
 ledger.tsv stamping every artifact, and standing.md for decisions,
-constraints, and dead ends. Three rendered blocks keep the payload bounded
+constraints, dead ends, and evidence. Three rendered blocks keep the payload bounded
 across cycles, because each block shows live counts and unsuperseded items,
 not history.
 
@@ -92,7 +92,9 @@ _CYCLE_WRITE_VERBS = ('note', 'stamp', 'supersede')
 # path written under one of them names where a folder used to be.
 _FORMER_HANDOFF_DIRNAMES = ('working', 'scratch')
 _NOTE_BATCH_LINE = re.compile(
-    r'^(?P<kind>decision|constraint|dead-end)\s+--headline\s+'
+    r'^(?P<kind>decision|constraint|dead-end|evidence)\s+'
+    r'(?P<opts>(?:(?:--grade\s+\w+|--open|--contradicts\s+\w+)\s+)*)'
+    r'--headline\s+'
     r'(?:"(?P<dq>[^"]*)"|\'(?P<sq>[^\']*)\'|(?P<bare>[^"\'\s]\S*))'
     r'(?P<body>.*)$')
 _HEADER_PAT = re.compile(r'Written:\s*.+?\s*\|\s*Cycle:\s*(\d+)')
@@ -115,7 +117,7 @@ _TEMP_DIRS = (
 _KIND_DIRS = {'specs': 'spec', 'drafts': 'draft', 'notes': 'notes', 'outputs': 'other'}
 _GATE_RB = {'always', 'edit'}
 _LABEL_RESIDENT = 120
-_KIND_PREFIX = {'decision': 'd', 'constraint': 'c', 'dead-end': 'x'}
+_KIND_PREFIX = {'decision': 'd', 'constraint': 'c', 'dead-end': 'x', 'evidence': 'e'}
 # Least recoverable last: a superseded row has a successor to follow, an
 # archived one a reason, and a missing one neither.
 _NON_LIVE_ORDER = ('superseded', 'archived', 'missing')
@@ -237,11 +239,12 @@ read_before is a tier (hq help write has the table); what belongs in each:
   keys the row the stored spelling keys.
 - Standing block: an item the cursor cites by id, or one this cycle
   recorded, prints expanded - a constraint its headline and the first
-  sentence of its body, a decision or dead end its headline; +Nc
-  counts the characters held back. Every other item prints as
-  [id] headline, no cap, and hq standing <slug> <id> prints any item
-  in full. Ids are d decision, c constraint, x dead end; (cN) is the
-  cycle that recorded the item.
+  sentence of its body, a decision, dead end, or evidence item its
+  headline; +Nc counts the characters held back. Evidence prints only
+  when the cursor cites it, and one line counts the rest. Every other
+  item prints as [id] headline, no cap, and hq standing <slug> <id>
+  prints any item in full. Ids are d decision, c constraint, x dead
+  end, e evidence; (cN) is the cycle that recorded the item.
 - Log line: <branch>@<sha> +N - N counts the paths git reported
   dirty when that cycle finished.""",
     'read': """\
@@ -277,7 +280,9 @@ The reading steps hq open prints after its findings; each binds.
   pointed todo moved or disagrees with the file: the todo wins on
   what is open or done, the handoff on approach and decisions. Note
   drift in one line and proceed.
-- Do not re-plan and do not reopen a Standing item. Open questions
+- Do not re-plan and do not reopen a Standing item: an open evidence
+  item, or one a contradiction advisory names, is re-checked by
+  recording a new item. Open questions
   present: recap in six lines at most - the task, what is settled,
   what each question decides, each restated for a reader outside the
   thread - then put them to the user and stop. Otherwise state the
@@ -389,7 +394,10 @@ Cursor rules:
 - Anything still awaiting the user - a question, an unapproved plan -
   goes under Open questions; read stops there.
 - An item recorded with note or under ## Unfiled is not repeated in
-  State: the Standing block carries it.
+  State: the Standing block carries it. A line that cites evidence
+  ids stays, since uncited evidence leaves the block.
+- Cite a c or x id in brackets, [c07]: a bare one reads as a cycle.
+  A range, [e01-e05], cites nothing.
 - No line ceiling binds the cursor: a block holds text back over a
   store; the cursor has none, so a reworded line drops facts.
 
@@ -443,6 +451,26 @@ Standing items:
 - supersede echoes the item it drops from the block; a ruling
   inside that text which still holds takes one more hq note under
   a new id.
+- To retire an item of any kind that no longer holds and has no
+  replacement, run hq supersede <slug> <id> --reason "<why>".
+- A claim the work rests on is evidence: a measurement, quoted
+  primary wording, a data-field fact, a fact about the code as
+  built, a prior finding. A rule the work follows stays a decision
+  or a constraint.
+- Grades: measured, the work observed it or quoted the primary
+  source; inferred, the work reasoned it from other items; asserted,
+  a source states it and nothing checked it.
+- The body names the source and the inputs. A qualified status
+  ("one witness") and the Plan item that acts on the claim
+  ("action: Plan item 3") go there too.
+- --open marks a claim not yet settled. To settle it, record a new
+  item and supersede the open one onto it.
+- finish checks --contradicts between evidence items. A
+  contradiction with anything outside standing.md goes in the body
+  as text.
+- The cursor cites the claims in view, [e01, e02].
+- An item that rests on an asserted item carries no mark of it: a
+  doubt the grades and contradictions do not show goes in the body.
 
 Unfiled - items settled this session with no note call go under
 ## Unfiled, above the first <!-- hq: marker, as typed bullets, one
@@ -1403,7 +1431,7 @@ def holdback_line(resident: str, held_chars: int, command: str) -> str:
 
 # A standing id cited as a word of its own: not part of a path, a
 # longer token, or a hyphenated name.
-_CITED_ID = re.compile(r'(?<![\w/.-])([cdx]\d{2,})(?![\w-])')
+_CITED_ID = re.compile(r'(?<![\w/.-])([cdxe]\d{2,})(?![\w-])')
 
 
 def render_standing(
@@ -1431,10 +1459,12 @@ def render_standing(
     str
         Block body, each kind under its heading and newest cycle first
         within it: a live item in ``whole_ids`` whole - a constraint as
-        its headline and the first sentence of its body, a decision or
-        dead end as its headline - and every other live item as
-        ``[id] headline``. A closing line naming ``hq standing <slug>
-        <id>`` follows when any item printed as ``[id] headline``.
+        its headline and the first sentence of its body, a decision,
+        dead end, or evidence item as its headline - and every other
+        live item as ``[id] headline``. Evidence outside ``whole_ids``
+        prints nothing and is counted on one closing line of its group.
+        A closing line naming ``hq standing <slug> <id>`` follows when
+        any item printed as ``[id] headline``.
 
     Notes
     -----
@@ -1452,27 +1482,43 @@ def render_standing(
       split has nothing to hold back.
     - The closing line keeps ``<id>`` as a placeholder: it serves every
       ``[id] headline`` line above it, so no one id fills it.
+    - A printed evidence item that a live evidence item's body
+      contradicts, ``contradicts [<id>]``, carries ``contradicted by
+      [<id>, ...]`` after its headline.
     """
     live = [i for i in items if i['id'] not in superseded_ids]
+    contradicted_by: dict[str, list[str]] = {}
+    for item in sorted(live, key=lambda i: int(i['id'][1:])):
+        if item['prefix'] == 'e':
+            targets = re.findall(r'contradicts \[([dcxe]\d+)\]', item['body'])
+            for target in dict.fromkeys(targets):
+                contradicted_by.setdefault(target, []).append(item['id'])
     out: list[str] = []
     folded = False
     for prefix, heading, body_mode in (
         ('c', '### Constraints', 'sentence'),
         ('d', '### Decisions', 'headline'),
         ('x', '### Dead ends', 'headline'),
+        ('e', '### Evidence', 'headline'),
     ):
         group = [i for i in live if i['prefix'] == prefix]
         if not group:
             continue
         group.sort(key=lambda i: -int(i.get('cycle') or 0))
         out.append(heading)
+        uncited_cnt = 0
         for item in group:
+            if item['id'] not in whole_ids and prefix == 'e':
+                uncited_cnt += 1
+                continue
             if item['id'] not in whole_ids:
                 out.append(f'[{item["id"]}] {item["headline"]}')
                 folded = True
                 continue
             pfx = f'(c{item["cycle"]}) ' if item.get('cycle') else ''
             line = f'[{item["id"]}] {pfx}**{item["headline"]}**'
+            if prefix == 'e' and item['id'] in contradicted_by:
+                line += f' contradicted by [{", ".join(contradicted_by[item["id"]])}]'
             body = item.get('body', '')
             if body:
                 if body_mode == 'sentence':
@@ -1484,6 +1530,11 @@ def render_standing(
                     line.rstrip(), len(held),
                     f'hq standing {slug} {item["id"]}')
             out.append(line.rstrip())
+        if uncited_cnt:
+            noun = 'item' if uncited_cnt == 1 else 'items'
+            out.append(
+                f'+{uncited_cnt} live evidence {noun}'
+                f' - hq standing {slug} --kind evidence --grep <word>')
     if folded:
         out.append(f'hq standing {slug} <id> prints any item above whole')
     return '\n'.join(out)
@@ -1720,7 +1771,8 @@ def drain_unfiled(
     Notes
     -----
     - Accepted prefixes: ``- decision: ``, ``- constraint: ``,
-      ``- dead-end: ``.
+      ``- dead-end: ``. An ``- evidence: `` bullet is refused with
+      its own move.
     - The headline is the bold span when the content opens with one,
       else the first sentence as ``split_headline`` reads it: never
       ending inside an open quotation, and past a one- or two-word
@@ -1767,6 +1819,14 @@ def drain_unfiled(
                 kind = prefix
                 content = content[len(prefix) + 2:].lstrip()
                 break
+        # A claim needs its grade, so evidence takes its own move and is
+        # never relabeled as a decision to get past the refusal.
+        if kind is None and content.lower().startswith('evidence:'):
+            return (
+                [], cursor_text,
+                (f'untyped Unfiled bullet: {stripped!r}'
+                 ' - record evidence with hq note <slug> evidence --grade ...,'
+                 ' then delete the bullet'))
         if kind is None:
             return (
                 [], cursor_text,
@@ -1833,7 +1893,7 @@ def conservation(
     - A checkbox after the bullet marker (``[ ]``, ``[x]``) is structure:
       a Plan item ticked done still counts as carried.
     """
-    _standing_prefix = re.compile(r'^- \[[dcx]\d+\] \(c\d+\) ')
+    _standing_prefix = re.compile(r'^- \[[dcxe]\d+\] \(c\d+\) ')
     _kf_grade = re.compile(r'^(read now|reference only)\s*:\s*', re.IGNORECASE)
     _kf_label_only = re.compile(
         r'^(?:[-*+]\s+|#+\s*)?(?:read now|reference only)\s*:?\s*$', re.IGNORECASE)
@@ -2843,11 +2903,11 @@ def _parse_standing(text: str) -> tuple[list[dict], set[str]]:
         if not stripped.startswith('- '):
             continue
         content = stripped[2:]
-        sup_m = re.match(r'\(c\d+\)\s+([dcx]\d+)\s*->\s*(?:[dcx]\d+|-(?!\S))', content)
+        sup_m = re.match(r'\(c\d+\)\s+([dcxe]\d+)\s*->\s*(?:[dcxe]\d+|-(?!\S))', content)
         if sup_m:
             superseded_ids.add(sup_m.group(1))
             continue
-        id_pat = r'\[([dcx]\d+)\]\s+(?:\(c(\d+)\)\s+)?\*\*(.+?)\*\*\s*(.*)'
+        id_pat = r'\[([dcxe]\d+)\]\s+(?:\(c(\d+)\)\s+)?\*\*(.+?)\*\*\s*(.*)'
         id_m = re.match(id_pat, content)
         if id_m:
             items.append({
@@ -2881,12 +2941,12 @@ def _supersession_chains(
     successors = {
         m.group(2): (m.group(3), m.group(1))
         for m in re.finditer(
-            r'^\s*- \(c(\d+)\)\s+([dcx]\d+)\s*->\s*([dcx]\d+)', text, re.MULTILINE)
+            r'^\s*- \(c(\d+)\)\s+([dcxe]\d+)\s*->\s*([dcxe]\d+)', text, re.MULTILINE)
         }
     retirements = {
         m.group(2): (m.group(1), m.group(3).strip())
         for m in re.finditer(
-            r'^[ \t]*- \(c(\d+)\)[ \t]+([dcx]\d+)[ \t]*->[ \t]*-(?!\S)(.*)$', text, re.MULTILINE)
+            r'^[ \t]*- \(c(\d+)\)[ \t]+([dcxe]\d+)[ \t]*->[ \t]*-(?!\S)(.*)$', text, re.MULTILINE)
         }
     # standing.md is append-only and hand-editable, so the seen set
     # stops a cycle in the edges from looping here.
@@ -3471,9 +3531,12 @@ def _assemble_handoff(
     )
     s_items, s_sup = _parse_standing(standing_text)
     cited = set(_CITED_ID.findall(cursor_text))
+    # A cycle that records many claims would print them all at the next
+    # resume, so evidence expands only when cited.
     whole_ids = {
         item['id'] for item in s_items
-        if item['id'] in cited or item.get('cycle') == str(cycle)}
+        if item['id'] in cited
+        or (item.get('cycle') == str(cycle) and item['prefix'] != 'e')}
     standing_body = render_standing(s_items, s_sup, folder.name, whole_ids)
     _sh = '## Standing\n' + standing_body
     standing_block = (
@@ -5157,7 +5220,7 @@ def _note_line(
     standing_text : str
         Current text of standing.md, which fixes the ids in use.
     kind_str : str
-        Item kind: 'decision', 'constraint', or 'dead-end'.
+        Item kind: a key of ``_KIND_PREFIX``.
     headline : str
         Bold-span headline text for the item. A tab or a newline becomes
         a space.
@@ -5198,6 +5261,9 @@ def _do_note(
     kind_str: str,
     headline: str,
     body: str,
+    grade: str | None = None,
+    is_open: bool = False,
+    contradicts: str | None = None,
 ) -> int:
     """Append one standing item to standing.md.
 
@@ -5208,17 +5274,28 @@ def _do_note(
     anch : dict
         Anchors dict from anchors(); provides the current cycle number.
     kind_str : str
-        Item kind: 'decision', 'constraint', or 'dead-end'.
+        Item kind: a key of ``_KIND_PREFIX``.
     headline : str
         Bold-span headline text for the item.
     body : str
-        Body text following the headline; may be empty.
+        Body text following the headline; may be empty except for
+        evidence, whose body names its source.
+    grade : str | None, default None
+        Evidence only, and required there: measured, inferred, or
+        asserted. Written as ``<grade>: `` at the head of the headline.
+    is_open : bool, default False
+        Evidence only: the head becomes ``<grade>, open: ``.
+    contradicts : str | None, default None
+        Evidence only: a live standing id of any kind, appended to the
+        body as ``; contradicts [<id>]``.
 
     Returns
     -------
     int
-        0 on success, 2 on an unknown kind or an empty headline, writing
-        nothing in either case.
+        0 on success; 2 on an unknown kind, an empty headline, an
+        evidence flag on another kind, or evidence with no grade or no
+        body; 1 when ``contradicts`` names no live item. A refusal
+        writes nothing.
 
     Notes
     -----
@@ -5234,13 +5311,41 @@ def _do_note(
         standing_path.read_text(encoding='utf-8', errors='replace')
         if standing_path.exists() else ''
         )
-    line = _note_line(text, kind_str, headline, body, anch['cycle'])
-    if line is None:
-        print(f'hq note: kind must be decision, constraint, or dead-end; got {kind_str!r}')
+    if kind_str not in _KIND_PREFIX:
+        print(
+            'hq note: kind must be decision, constraint, dead-end, or evidence;'
+            f' got {kind_str!r}')
+        return 2
+    is_evidence = kind_str == 'evidence'
+    if not is_evidence and (grade is not None or is_open or contradicts is not None):
+        print(
+            'hq note: --grade, --open and --contradicts apply to evidence only'
+            ' - drop them or note evidence')
+        return 2
+    if is_evidence and grade not in {'measured', 'inferred', 'asserted'}:
+        print(
+            'hq note: evidence needs --grade measured, inferred, or asserted'
+            ' - add it and re-run')
         return 2
     if not re.search(r'\w', headline):
         print('hq note: --headline is required')
         return 2
+    if is_evidence and not re.search(r'\w', body):
+        print(
+            'hq note: evidence needs its source as the body - name the file,'
+            ' run, or wording it rests on and re-run')
+        return 2
+    if contradicts is not None:
+        items, not_live_ids = _parse_standing(text)
+        if contradicts not in {i['id'] for i in items} - not_live_ids:
+            print(
+                f'hq note: --contradicts names {contradicts}, which is not a live'
+                f' standing item - hq standing {folder.name} lists the ids')
+            return 1
+        body = f'{body.rstrip()}; contradicts [{contradicts}]'
+    if is_evidence:
+        headline = f'{grade}, open: {headline}' if is_open else f'{grade}: {headline}'
+    line = _note_line(text, kind_str, headline, body, anch['cycle'])
     _append_lines(standing_path, [line])
     item_id = _parse_standing(line)[0][0]['id']
     print(f'{item_id} recorded in c{anch["cycle"]}')
@@ -5257,7 +5362,8 @@ def _verb_note(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     anch : dict
         Anchors dict from anchors(); provides the current cycle number.
     argv : argparse.Namespace
-        Parsed note arguments: note_kind, headline, body, batch.
+        Parsed note arguments: note_kind, headline, body, batch, and the
+        evidence flags grade, open, contradicts.
 
     Returns
     -------
@@ -5269,7 +5375,9 @@ def _verb_note(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     - Under ``--batch`` the kind slot holds the batch marker ``-`` (or
       nothing) and each stdin line reads ``<kind> --headline <headline>
       <body>``: the headline quoted or one bare word, the body the rest
-      of the line verbatim. Prose is not shell: an apostrophe or a
+      of the line verbatim. ``--grade <word>``, ``--open`` and
+      ``--contradicts <id>`` may sit between the kind and ``--headline``,
+      in any order; after it they are body text. Prose is not shell: an apostrophe or a
       parenthesis in the body carries no meaning here, and a body
       wrapped whole in one pair of quotes loses only that pair.
     - A batch line that does not parse, names no known kind, or carries
@@ -5296,7 +5404,14 @@ def _verb_note(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
             if len(body) >= 2 and body[0] == body[-1] and body[0] in '"\'':
                 if body[0] not in body[1:-1]:
                     body = body[1:-1]
-            note_rc = _do_note(folder, anch, kind_str, headline, body.strip())
+            opts = match.group('opts')
+            grade_m = re.search(r'--grade\s+(\w+)', opts)
+            contradicts_m = re.search(r'--contradicts\s+(\w+)', opts)
+            note_rc = _do_note(
+                folder, anch, kind_str, headline, body.strip(),
+                grade_m.group(1) if grade_m else None,
+                re.search(r'--open\b', opts) is not None,
+                contradicts_m.group(1) if contradicts_m else None)
             if note_rc:
                 print(
                     f'hq note: batch line {line_no} refused: {line}'
@@ -5307,7 +5422,10 @@ def _verb_note(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
         folder, anch,
         getattr(argv, 'note_kind', '') or '',
         getattr(argv, 'headline', '') or '',
-        getattr(argv, 'body', '') or '')
+        getattr(argv, 'body', '') or '',
+        getattr(argv, 'grade', None),
+        getattr(argv, 'open', False),
+        getattr(argv, 'contradicts', None))
 
 
 def _verb_supersede(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int:
@@ -5758,7 +5876,7 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
         flags=re.MULTILINE | re.DOTALL)
     cited_at = [
         (m.start(1), m.group(1)) for m in _CITED_ID.finditer(cited_text)
-        if m.group(1)[0] == 'd'
+        if m.group(1)[0] in 'de'
         ]
     # hq spells a cycle as c12 and x86 is a common word, so a c or x id
     # counts only inside a bracket group.
@@ -5767,7 +5885,7 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
         if all(re.fullmatch(r'[A-Za-z]+\d+', token) for token in tokens):
             cited_at += [
                 (group_m.start(), token) for token in tokens
-                if re.fullmatch(r'[cdx]\d{2,}', token)
+                if re.fullmatch(r'[cdxe]\d{2,}', token)
                 ]
     chains = _supersession_chains(standing_text_new)
     not_live_ids = _parse_standing(standing_text_new)[1]
@@ -5790,6 +5908,29 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
         print(
             f'advisory: cited id superseded: {item_id} -> {current_id}'
             f' - cite {current_id} in its place')
+    # --- Advisory: live contradictions ---
+    standing_items_new = _parse_standing(standing_text_new)[0]
+    live_ids = {i['id'] for i in standing_items_new} - not_live_ids
+    older_pair_cnt = 0
+    pair_cnt = 0
+    for item in standing_items_new:
+        if item['prefix'] != 'e' or item['id'] not in live_ids:
+            continue
+        targets = re.findall(r'contradicts \[([dcxe]\d+)\]', item['body'])
+        for target in dict.fromkeys(t for t in targets if t in live_ids):
+            pair_cnt += 1
+            if item['cycle'] != str(anch['cycle']):
+                older_pair_cnt += 1
+                continue
+            print(
+                f'advisory: contradiction: {item["id"]} contradicts {target},'
+                ' both live - re-check both; supersede or retire one only if'
+                ' it no longer holds')
+    if older_pair_cnt:
+        noun = 'contradiction' if pair_cnt == 1 else 'contradictions'
+        print(
+            f'advisory: {pair_cnt} live {noun} - hq standing'
+            f' {folder.name} --kind evidence --grep "contradicts \\["')
     log_text = ' '.join((getattr(argv, 'log', '') or '').split())
     branch, sha7, dirty = anch['branch'], anch['sha'], anch['dirty']
     if branch != '-':
@@ -6218,10 +6359,10 @@ def _verb_open(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     _, superseded_ids = _parse_standing(standing_text)
     standing_live_lines: list[str] = []
     for line in standing_text.splitlines():
-        id_m = re.match(r'\s*- \[([dcx]\d+)\]', line)
+        id_m = re.match(r'\s*- \[([dcxe]\d+)\]', line)
         if id_m and id_m.group(1) in superseded_ids:
             continue
-        if re.match(r'\s*- \(c\d+\)\s+[dcx]\d+\s*->\s*-(?!\S)', line):
+        if re.match(r'\s*- \(c\d+\)\s+[dcxe]\d+\s*->\s*-(?!\S)', line):
             continue
         standing_live_lines.append(line)
     for name, scanned in (
@@ -6703,9 +6844,10 @@ def _verb_standing(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -
     -----
     - A named id outranks every filter: ``ids`` and ``--kind`` together
       print the named items, never their intersection.
-    - The block renders a decision or a dead end by its headline, and a
-      constraint by its headline and first sentence; the id form the
-      block names is where the rest of a body is read.
+    - The block renders a decision, a dead end, or a cited evidence
+      item by its headline, and a constraint by its headline and first
+      sentence; the id form the block names is where the rest of a body
+      is read.
     - A superseded item names the id now current and the cycle that
       made it current, never the first hop out of a chain whose own
       successor was superseded later.
@@ -7096,12 +7238,17 @@ def _build_parser() -> argparse.ArgumentParser:
     stmp.add_argument('--batch', action='store_true')
 
     _note_epilog = (
-        'Kinds are decision, constraint, dead-end. Each item prints the id it\n'
-        'was given. --headline is required and one line; the body follows it\n'
-        'as the last argument. --batch reads one note per stdin line: <kind>\n'
-        '--headline "<h>" <body>, the body taken verbatim to the end of the\n'
-        'line, quotes and apostrophes included; a body wrapped whole in one\n'
-        'pair of quotes loses the pair.'
+        'Kinds are decision, constraint, dead-end, evidence. Each item prints\n'
+        'the id it was given. --headline is required and one line; the body\n'
+        'follows it as the last argument. --batch reads one note per stdin\n'
+        'line: <kind> --headline "<h>" <body>, the body taken verbatim to the\n'
+        'end of the line, quotes and apostrophes included; a body wrapped\n'
+        'whole in one pair of quotes loses the pair.\n'
+        'Evidence takes --grade measured|inferred|asserted, required, written\n'
+        'at the head of the headline; --open marks a claim not yet settled;\n'
+        '--contradicts <id> names a live item it conflicts with. Its body,\n'
+        'required, names the source. In a batch line the three flags sit\n'
+        'between the kind and --headline.'
     )
     # The kind slot carries no choices: the batch marker '-' lands
     # here on 3.13 and later, and _verb_note names an unknown kind.
@@ -7114,6 +7261,9 @@ def _build_parser() -> argparse.ArgumentParser:
     nt.add_argument('body', nargs='?')
     nt.add_argument('--headline', default='')
     nt.add_argument('--batch', action='store_true')
+    nt.add_argument('--grade')
+    nt.add_argument('--open', action='store_true')
+    nt.add_argument('--contradicts')
 
     _supersede_epilog = (
         'Two ids of one kind, old then new: d17 d23. The old item leaves the\n'
@@ -7303,9 +7453,10 @@ def _build_parser() -> argparse.ArgumentParser:
         'standing.md prints hq standing: <id> not in standing.md and exits 1.\n'
         '--grep PATTERN keeps the items whose headline or body matches the\n'
         'pattern, case-insensitively, and exits 2 when the pattern is not a\n'
-        'regular expression; --kind constraint|decision|dead-end keeps one\n'
-        'kind; --in-cycle N keeps the items recorded in cycle N. The three\n'
-        'compose, and a named id outranks all of them.'
+        'regular expression; --kind constraint|decision|dead-end|evidence\n'
+        'keeps one kind; --in-cycle N keeps the items recorded in cycle N.\n'
+        'The three compose, and a named id outranks all of them.\n'
+        'A retired item prints [retired in cN: <why>].'
     )
     st = sub.add_parser(
         'standing',
