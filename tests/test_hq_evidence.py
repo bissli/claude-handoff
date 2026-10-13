@@ -196,6 +196,41 @@ def test_a_batch_flag_on_another_kind_is_refused(tmp_path, monkeypatch):
     assert _last_line(folder) == '- [d01] (c1) **Cap at 4** body'
 
 
+def test_a_batch_line_repeating_a_flag_is_refused(tmp_path, monkeypatch):
+    """Verify a batch line giving --grade twice is refused, the rest run.
+
+    Mutation: the repeat check dropped, so the first --grade wins and
+    'bogus' vanishes without a word.
+    Oracle: rc 2, the refusal naming --grade, and only line 2 stored.
+    """
+    folder = _begin(tmp_path, monkeypatch)
+    rc, out = _run(['note', _SLUG, '--batch'], stdin=(
+        'evidence --grade measured --grade bogus --headline "Cap holds" source: a\n'
+        'evidence --grade measured --headline "Cap is 3" source: b\n'))
+    assert rc == 2
+    assert out.startswith('hq note: --grade given twice - keep one and re-run\n')
+    assert _last_line(folder) == '- [e01] (c1) **measured: Cap is 3** source: b'
+
+
+def test_an_evidence_flag_beside_batch_is_refused_whole(tmp_path, monkeypatch):
+    """Verify --grade on the command line with --batch refuses every line.
+
+    Mutation: the command-line flag ignored, so the decision line gets
+    past the evidence-only refusal and is stored.
+    Oracle: rc 2, the refusal, and standing.md byte-identical.
+    """
+    folder = _begin(tmp_path, monkeypatch)
+    before = (folder / 'standing.md').read_bytes()
+    rc, out = _run(
+        ['note', _SLUG, '--batch', '--grade', 'measured'],
+        stdin='decision --headline "Cap at 3" body\n')
+    assert rc == 2
+    assert out == (
+        'hq note: --grade, --open and --contradicts go on each batch line'
+        ' - move them there and re-run\n')
+    assert (folder / 'standing.md').read_bytes() == before
+
+
 def test_an_evidence_unfiled_bullet_draws_its_own_refusal(tmp_path, monkeypatch):
     """Verify an '- evidence:' Unfiled bullet names hq note evidence.
 

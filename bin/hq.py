@@ -5377,13 +5377,22 @@ def _verb_note(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
       <body>``: the headline quoted or one bare word, the body the rest
       of the line verbatim. ``--grade <word>``, ``--open`` and
       ``--contradicts <id>`` may sit between the kind and ``--headline``,
-      in any order; after it they are body text. Prose is not shell: an apostrophe or a
+      in any order and once each; after it they are body text. On the
+      command line beside ``--batch`` they are refused, and nothing is
+      written. Prose is not shell: an apostrophe or a
       parenthesis in the body carries no meaning here, and a body
       wrapped whole in one pair of quotes loses only that pair.
     - A batch line that does not parse, names no known kind, or carries
       no headline is reported by number; the rest still run.
     """
     if getattr(argv, 'batch', False):
+        if (getattr(argv, 'grade', None) is not None
+            or getattr(argv, 'open', False)
+            or getattr(argv, 'contradicts', None) is not None):
+            print(
+                'hq note: --grade, --open and --contradicts go on each batch line'
+                ' - move them there and re-run')
+            return 2
         rc = 0
         for line_no, raw_line in enumerate(sys.stdin, 1):
             line = raw_line.strip()
@@ -5405,13 +5414,19 @@ def _verb_note(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
                 if body[0] not in body[1:-1]:
                     body = body[1:-1]
             opts = match.group('opts')
+            flags = re.findall(r'--(grade|open|contradicts)\b', opts)
+            repeated = next((flag for flag in flags if flags.count(flag) > 1), None)
             grade_m = re.search(r'--grade\s+(\w+)', opts)
             contradicts_m = re.search(r'--contradicts\s+(\w+)', opts)
-            note_rc = _do_note(
-                folder, anch, kind_str, headline, body.strip(),
-                grade_m.group(1) if grade_m else None,
-                re.search(r'--open\b', opts) is not None,
-                contradicts_m.group(1) if contradicts_m else None)
+            if repeated:
+                print(f'hq note: --{repeated} given twice - keep one and re-run')
+                note_rc = 2
+            else:
+                note_rc = _do_note(
+                    folder, anch, kind_str, headline, body.strip(),
+                    grade_m.group(1) if grade_m else None,
+                    re.search(r'--open\b', opts) is not None,
+                    contradicts_m.group(1) if contradicts_m else None)
             if note_rc:
                 print(
                     f'hq note: batch line {line_no} refused: {line}'
@@ -5500,6 +5515,11 @@ def _verb_supersede(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) 
         if len(chain) == 1 and retirement:
             print(
                 f'hq supersede: {old_id} was already retired in c{retirement[0]}'
+                f' - hq standing {folder.name} {old_id} shows it')
+        elif retirement:
+            print(
+                f'hq supersede: {old_id} was already superseded by {chain[-1]},'
+                f' retired in c{retirement[0]}'
                 f' - hq standing {folder.name} {old_id} shows it')
         else:
             print(
@@ -5896,8 +5916,9 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
             continue
         chain, _, retirement = chain_entry
         if retirement:
+            hops = f'{item_id} -> {chain[-1]}' if len(chain) > 1 else item_id
             print(
-                f'advisory: cited id retired: {chain[-1]} in c{retirement[0]}'
+                f'advisory: cited id retired: {hops} in c{retirement[0]}'
                 ' - drop the citation or cite what replaced it')
             continue
         # A chain that loops ends on a superseded id, so it has no live

@@ -202,7 +202,28 @@ def test_a_chain_ending_in_a_retirement_names_the_retired_end(
     rc, out = _run(['finish', _SLUG, '--log', 'c1'])
     assert rc == 0
     assert _advisories(out) == [
-        ('advisory: cited id retired: d02 in c1'
+        ('advisory: cited id retired: d01 -> d02 in c1'
+         ' - drop the citation or cite what replaced it')]
+
+
+def test_two_cited_ids_sharing_a_retired_end_each_name_themselves(
+        tmp_path, monkeypatch):
+    """Verify each cited id names itself when both chains end at one retirement.
+
+    Mutation: the cited id left out of the retired form, so two identical
+    lines name only d03 and the agent cannot tell which citation to drop.
+    Oracle: d01 -> d03 and d02 -> d03, d03 retired, d01 and d02 cited.
+    """
+    folder = _thread(
+        tmp_path, monkeypatch, 'decision', 3, [('d01', 'd03'), ('d02', 'd03')])
+    assert _run(['supersede', _SLUG, 'd03', '--reason', 'vendor dropped it'])[0] == 0
+    _set(folder, 'Now', 'Apply d01 and d02 to the poller.')
+    rc, out = _run(['finish', _SLUG, '--log', 'c1'])
+    assert rc == 0
+    assert _advisories(out) == [
+        ('advisory: cited id retired: d01 -> d03 in c1'
+         ' - drop the citation or cite what replaced it'),
+        ('advisory: cited id retired: d02 -> d03 in c1'
          ' - drop the citation or cite what replaced it')]
 
 

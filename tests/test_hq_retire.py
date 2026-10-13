@@ -123,6 +123,24 @@ def test_both_forms_refuse_an_old_id_already_superseded(
         'hq supersede: d01 was already superseded by d02 - supersede d02 instead\n')
 
 
+def test_an_old_id_whose_chain_ends_retired_names_the_retirement(
+        tmp_path, monkeypatch):
+    """Verify a superseded id whose successor retired draws no dead advice.
+
+    Mutation: the plain superseded refusal printed, which says to
+    supersede d02 when d02 refuses as already retired.
+    Oracle: d01 -> d02, d02 retired in c1, then d01 -> d03.
+    """
+    _thread(tmp_path, monkeypatch, 3)
+    assert _run(['supersede', _SLUG, 'd01', 'd02'])[0] == 0
+    assert _run(['supersede', _SLUG, 'd02', '--reason', 'gone'])[0] == 0
+    rc, out = _run(['supersede', _SLUG, 'd01', 'd03'])
+    assert rc == 1
+    assert out == (
+        'hq supersede: d01 was already superseded by d02, retired in c1'
+        f' - hq standing {_SLUG} d01 shows it\n')
+
+
 def test_a_retired_successor_is_refused_by_its_own_message(tmp_path, monkeypatch):
     """Verify a retired id named as successor draws the retired refusal.
 
