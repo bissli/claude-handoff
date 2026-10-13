@@ -1,4 +1,4 @@
-"""Tests for the finish advisory on cursor citations of superseded ids."""
+"""Tests for the finish advisory on cursor citations of ids no longer live."""
 
 import contextlib
 import io
@@ -169,3 +169,38 @@ def test_a_looping_chain_draws_nothing(tmp_path, monkeypatch):
     rc, out = _run(['finish', _SLUG, '--log', 'c1'])
     assert rc == 0
     assert _advisories(out) == []
+
+
+def test_a_cited_retired_id_takes_the_retired_form(tmp_path, monkeypatch):
+    """Verify a retired id draws the retired advisory with its cycle.
+
+    Mutation: the retired id skipped as superseded with no live end, so
+    no advisory prints.
+    Oracle: d01 retired in c1 by supersede --reason.
+    """
+    folder = _thread(tmp_path, monkeypatch, 'decision', 1, [])
+    assert _run(['supersede', _SLUG, 'd01', '--reason', 'vendor dropped it'])[0] == 0
+    _set(folder, 'Now', 'Apply d01 to the poller.')
+    rc, out = _run(['finish', _SLUG, '--log', 'c1'])
+    assert rc == 0
+    assert _advisories(out) == [
+        ('advisory: cited id retired: d01 in c1'
+         ' - drop the citation or cite what replaced it')]
+
+
+def test_a_chain_ending_in_a_retirement_names_the_retired_end(
+        tmp_path, monkeypatch):
+    """Verify a chain whose end is retired names the end in the retired form.
+
+    Mutation: the superseded form printed for a chain whose end is
+    retired, so the advisory says to cite an id that no longer holds.
+    Oracle: d01 -> d02, then d02 retired, both in c1.
+    """
+    folder = _thread(tmp_path, monkeypatch, 'decision', 2, [('d01', 'd02')])
+    assert _run(['supersede', _SLUG, 'd02', '--reason', 'vendor dropped it'])[0] == 0
+    _set(folder, 'Now', 'Apply d01 to the poller.')
+    rc, out = _run(['finish', _SLUG, '--log', 'c1'])
+    assert rc == 0
+    assert _advisories(out) == [
+        ('advisory: cited id retired: d02 in c1'
+         ' - drop the citation or cite what replaced it')]

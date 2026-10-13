@@ -2832,8 +2832,9 @@ def _parse_standing(text: str) -> tuple[list[dict], set[str]]:
         A pair of: all standing items and the set of superseded ids.
         Each item dict has keys ``id``, ``prefix`` (first character of
         the id), ``cycle``, ``headline``, and ``body``. The superseded-id
-        set holds every id that appears as the source in a supersession
-        line ``(c<n>) <old> -> <new>``.
+        set holds every id that is not live: the source of a supersession
+        line ``(c<n>) <old> -> <new>`` or of a retire line
+        ``(c<n>) <old> -> - <reason>``.
     """
     items: list[dict] = []
     superseded_ids: set[str] = set()
@@ -2842,7 +2843,7 @@ def _parse_standing(text: str) -> tuple[list[dict], set[str]]:
         if not stripped.startswith('- '):
             continue
         content = stripped[2:]
-        sup_m = re.match(r'\(c\d+\)\s+([dcx]\d+)\s*->\s*([dcx]\d+)', content)
+        sup_m = re.match(r'\(c\d+\)\s+([dcx]\d+)\s*->\s*(?:[dcx]\d+|-(?!\S))', content)
         if sup_m:
             superseded_ids.add(sup_m.group(1))
             continue
@@ -2859,8 +2860,9 @@ def _parse_standing(text: str) -> tuple[list[dict], set[str]]:
     return items, superseded_ids
 
 
-def _supersession_chains(text: str) -> dict[str, tuple[list[str], str]]:
-    """Each superseded id's chain to the id now current.
+def _supersession_chains(
+        text: str) -> dict[str, tuple[list[str], str, tuple[str, str] | None]]:
+    """Each superseded or retired id's chain to the id now current.
 
     Parameters
     ----------
@@ -2869,20 +2871,26 @@ def _supersession_chains(text: str) -> dict[str, tuple[list[str], str]]:
 
     Returns
     -------
-    dict[str, tuple[list[str], str]]
-        Per id with an outgoing supersession line: the chain from it to
-        the id now current, ``[old, mid, current]``, and the cycle of the
-        last hop. A chain that loops stops before the repeat, so its end
-        is itself a key. An id superseded onto itself has no entry.
+    dict[str, tuple[list[str], str, tuple[str, str] | None]]
+        Per id with an outgoing supersession or retire line: the chain
+        ``[old, mid, current]``, the last hop's cycle ('' when retired
+        directly), and the end id's (cycle, reason) retirement or None.
+        A looping chain stops before the repeat, so its end is itself a
+        key. An id superseded onto itself has no entry.
     """
     successors = {
         m.group(2): (m.group(3), m.group(1))
         for m in re.finditer(
             r'^\s*- \(c(\d+)\)\s+([dcx]\d+)\s*->\s*([dcx]\d+)', text, re.MULTILINE)
         }
+    retirements = {
+        m.group(2): (m.group(1), m.group(3).strip())
+        for m in re.finditer(
+            r'^[ \t]*- \(c(\d+)\)[ \t]+([dcx]\d+)[ \t]*->[ \t]*-(?!\S)(.*)$', text, re.MULTILINE)
+        }
     # standing.md is append-only and hand-editable, so the seen set
     # stops a cycle in the edges from looping here.
-    chains: dict[str, tuple[list[str], str]] = {}
+    chains: dict[str, tuple[list[str], str, tuple[str, str] | None]] = {}
     for start in successors:
         chain = [start]
         seen = {start}
@@ -2893,7 +2901,10 @@ def _supersession_chains(text: str) -> dict[str, tuple[list[str], str]]:
             seen.add(next_id)
             chain.append(next_id)
         if len(chain) > 1:
-            chains[start] = (chain, successors[chain[-2]][1])
+            chains[start] = (
+                chain, successors[chain[-2]][1], retirements.get(chain[-1]))
+    for retired_id, retirement in retirements.items():
+        chains.setdefault(retired_id, ([retired_id], '', retirement))
     return chains
 
 
@@ -5300,7 +5311,7 @@ def _verb_note(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
 
 
 def _verb_supersede(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int:
-    """Run supersede: append a supersession line to standing.md.
+    """Run supersede: append a supersession or retire line to standing.md.
 
     Parameters
     ----------
@@ -5309,31 +5320,43 @@ def _verb_supersede(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) 
     anch : dict
         Anchors dict from ``anchors()``; provides the current cycle.
     argv : argparse.Namespace
-        Parsed supersede arguments: old_id, new_id.
+        Parsed supersede arguments: old_id, and exactly one of new_id
+        (empty counts as absent) and ``--reason``, which retires old_id
+        with no successor. A newline in the reason becomes a space.
 
     Returns
     -------
     int
-        0 on success; 1 when either id is absent, the prefixes differ,
-        or the replacement was itself superseded.
+        0 on success; 1 on any refusal, with nothing written.
 
     Notes
     -----
-    - Appends one line to standing.md; writes nothing on refusal.
-    - A kind never empties: the replacement must be live, so every
-      supersession leaves at least one item in the block.
-    - Prints the superseded item as standing.md holds it: the item
-      leaves the block entirely, so a ruling still live inside its
-      body would otherwise go unseen.
+    - Prints the old item as standing.md holds it, since it leaves the
+      block and a ruling live in its body would otherwise go unseen.
     """
     old_id = getattr(argv, 'old_id', '')
-    new_id = getattr(argv, 'new_id', '')
-    if not old_id or not new_id or old_id[0] != new_id[0]:
+    new_id = getattr(argv, 'new_id', '') or ''
+    reason_raw = getattr(argv, 'reason', None)
+    if new_id and reason_raw is not None:
+        print(
+            'hq supersede: give a new id or --reason, not both'
+            ' - run hq supersede <slug> <old> <new>, or <old> --reason "<why>"')
+        return 1
+    if not new_id and reason_raw is None:
+        print(
+            'hq supersede: give a new id or --reason'
+            ' - run hq supersede <slug> <old> <new>, or <old> --reason "<why>"')
+        return 1
+    reason = ' '.join((reason_raw or '').split())
+    if reason_raw is not None and not re.search(r'\w', reason):
+        print('hq supersede: --reason needs a word - say why the item no longer holds')
+        return 1
+    if new_id and (not old_id or old_id[0] != new_id[0]):
         print(f'hq supersede: ids must share a prefix ({old_id!r} vs {new_id!r})')
         return 1
     # An id superseded by itself leaves no id now current for hq standing
     # to name, and drops the item from the block with nothing replacing it.
-    if old_id == new_id:
+    if new_id and old_id == new_id:
         print(
             f'hq supersede: {old_id} cannot supersede itself'
             ' - name the item that replaces it, or hq note one first')
@@ -5341,16 +5364,35 @@ def _verb_supersede(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) 
     standing_path = folder / 'standing.md'
     text = standing_path.read_text(encoding='utf-8') if standing_path.exists() else ''
     items, superseded_ids = _parse_standing(text)
+    chains = _supersession_chains(text)
     all_ids = {item['id'] for item in items}
     if old_id not in all_ids:
         print(
             f'hq supersede: {old_id!r} not found in standing.md'
             f'; run hq standing {folder.name} to list the ids')
         return 1
-    if new_id not in all_ids:
+    if new_id and new_id not in all_ids:
         print(
             f'hq supersede: {new_id!r} not found in standing.md'
             f'; run hq standing {folder.name} to list the ids')
+        return 1
+    # A second outgoing line would leave two ids to name as current.
+    if old_id in superseded_ids:
+        chain, _, retirement = chains.get(old_id, ([old_id], '', None))
+        if len(chain) == 1 and retirement:
+            print(
+                f'hq supersede: {old_id} was already retired in c{retirement[0]}'
+                f' - hq standing {folder.name} {old_id} shows it')
+        else:
+            print(
+                f'hq supersede: {old_id} was already superseded by {chain[-1]}'
+                f' - supersede {chain[-1]} instead')
+        return 1
+    new_chain = chains.get(new_id)
+    if new_chain and len(new_chain[0]) == 1 and new_chain[2]:
+        print(
+            f'hq supersede: {new_id} was retired in c{new_chain[2][0]}'
+            ' - record the replacement with a note, then supersede onto its id')
         return 1
     # render_standing drops every id named as a source, so a
     # replacement already superseded leaves the kind with no live item:
@@ -5362,7 +5404,7 @@ def _verb_supersede(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) 
             ' - record the replacement with a note, then supersede'
             ' onto its id')
         return 1
-    line = f'- (c{anch["cycle"]}) {old_id} -> {new_id}'
+    line = f'- (c{anch["cycle"]}) {old_id} -> {new_id or "- " + reason}'
     _append_lines(standing_path, [line])
     # The item leaves the block entirely, so a ruling still live inside
     # its body would go unseen; the item is echoed as standing.md holds
@@ -5708,7 +5750,7 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
             ' keeps each; carry back any a later session needs')
         for dropped in dropped_lines:
             print(f'  not carried: {dropped.strip()}')
-    # --- Advisory: cited ids superseded ---
+    # --- Advisory: cited ids superseded or retired ---
     # A Directives line changes only under --replace-directives, so an
     # advisory on one would repeat at every finish.
     cited_text = re.sub(
@@ -5732,11 +5774,19 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
     cited_ids = [item_id for _, item_id in sorted(cited_at, key=lambda pair: pair[0])]
     for item_id in dict.fromkeys(cited_ids):
         chain_entry = chains.get(item_id)
+        if not chain_entry:
+            continue
+        chain, _, retirement = chain_entry
+        if retirement:
+            print(
+                f'advisory: cited id retired: {chain[-1]} in c{retirement[0]}'
+                ' - drop the citation or cite what replaced it')
+            continue
         # A chain that loops ends on a superseded id, so it has no live
         # end to name.
-        if not chain_entry or chain_entry[0][-1] in not_live_ids:
+        if chain[-1] in not_live_ids:
             continue
-        current_id = chain_entry[0][-1]
+        current_id = chain[-1]
         print(
             f'advisory: cited id superseded: {item_id} -> {current_id}'
             f' - cite {current_id} in its place')
@@ -6153,9 +6203,9 @@ def _verb_open(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     # - Only the cursor and standing.md are scanned: the generated
     #   blocks are rewritten from standing.md at finish, and a notes
     #   sibling may quote where work used to live.
-    # - A superseded standing item is skipped: the file is append-only,
-    #   so the old wording stays on disk after the re-note, and counting
-    #   it would leave the line with no move that clears it.
+    # - A superseded or retired item and a retire line's reason are
+    #   skipped: the file is append-only, so counting them would leave
+    #   a line no move clears.
     # A work dir pinned under or inside a former name is a real place:
     # its per-thread paths are not stale, so that name leaves the scan.
     wd_value, _ = resolve_work_dir(folder)
@@ -6170,6 +6220,8 @@ def _verb_open(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     for line in standing_text.splitlines():
         id_m = re.match(r'\s*- \[([dcx]\d+)\]', line)
         if id_m and id_m.group(1) in superseded_ids:
+            continue
+        if re.match(r'\s*- \(c\d+\)\s+[dcx]\d+\s*->\s*-(?!\S)', line):
             continue
         standing_live_lines.append(line)
     for name, scanned in (
@@ -6659,6 +6711,8 @@ def _verb_standing(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -
       successor was superseded later.
     - The id form adds the whole chain, ``old -> mid -> current``,
       once it runs past one hop.
+    - A retired item prints ``[retired in c<n>: <reason>]``; one
+      superseded onto a later-retired item prints both marks.
     """
     standing_path = folder / 'standing.md'
     text = standing_path.read_text(encoding='utf-8') if standing_path.exists() else ''
@@ -6705,10 +6759,15 @@ def _verb_standing(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -
         chain_entry = chains.get(item['id'])
         sup = ''
         if chain_entry:
-            chain, sup_in = chain_entry
-            sup_by = chain[-1]
+            chain, sup_in, retirement = chain_entry
+            marks = []
+            if len(chain) > 1:
+                marks.append(f'superseded by {chain[-1]} in c{sup_in}')
+            if retirement:
+                retired_in, reason = retirement
+                marks.append(f'retired in c{retired_in}: {reason}')
             hops = f' - {" -> ".join(chain)}' if wanted and len(chain) > 2 else ''
-            sup = f' [superseded by {sup_by} in c{sup_in}{hops}]'
+            sup = f' [{", ".join(marks)}{hops}]'
         elif item['id'] in superseded_ids:
             sup = ' [superseded]'
         print(f'[{item["id"]}] (c{item["cycle"]}) **{item["headline"]}** {item["body"]}{sup}')
@@ -7059,7 +7118,11 @@ def _build_parser() -> argparse.ArgumentParser:
     _supersede_epilog = (
         'Two ids of one kind, old then new: d17 d23. The old item leaves the\n'
         'rendered Standing block and stays in standing.md. hq standing <slug>\n'
-        'lists the ids.'
+        'lists the ids.\n'
+        'One id and --reason "<why>" retires an item of any kind that no\n'
+        'longer holds and has no replacement: d17 --reason "the vendor\n'
+        'dropped the limit". hq standing <slug> d17 prints it with\n'
+        '[retired in cN: <why>].'
     )
     sp = sub.add_parser(
         'supersede',
@@ -7067,7 +7130,8 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter)
     sp.add_argument('slug')
     sp.add_argument('old_id')
-    sp.add_argument('new_id')
+    sp.add_argument('new_id', nargs='?', default='')
+    sp.add_argument('--reason')
 
     _finish_epilog = (
         '--log is the one line the Log keeps for this cycle and its whole\n'
