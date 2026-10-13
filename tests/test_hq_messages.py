@@ -402,7 +402,7 @@ def test_open_reports_a_label_the_ledger_moved_past_after_finish(
                  '--label', 'the first label'])[0] == 0
     assert _run(['finish', _SLUG, '--log', 'one'])[0] == 0
     rc, out, _ = _run(['open', _SLUG])
-    assert (rc, 'LEDGER BEHIND' in out) == (0, False)
+    assert (rc, 'LEDGER BEHIND' in _strip_read(out)) == (0, False)
 
     assert _run(['stamp', _SLUG, 'SPEC.md', '--label', 'the second label'])[0] == 0
 
@@ -415,7 +415,7 @@ def test_open_reports_a_label_the_ledger_moved_past_after_finish(
         in out.splitlines())
     assert _run(['begin', _SLUG])[0] == 0
     rc, out, _ = _run(['open', _SLUG])
-    assert (rc, 'LEDGER BEHIND' in out) == (0, False)
+    assert (rc, 'LEDGER BEHIND' in _strip_read(out)) == (0, False)
 
 
 def test_open_label_check_reads_an_abs_row_through_its_rendered_display(
@@ -483,7 +483,7 @@ def test_open_label_check_passes_over_a_display_the_block_prints_twice(
 
     rc, out, _ = _run(['open', _SLUG])
 
-    assert (rc, 'LEDGER BEHIND' in out) == (0, False), out
+    assert (rc, 'LEDGER BEHIND' in _strip_read(out)) == (0, False), out
 
 
 def test_open_label_check_passes_over_a_display_two_live_rows_share(
@@ -506,7 +506,7 @@ def test_open_label_check_passes_over_a_display_two_live_rows_share(
 
     rc, out, _ = _run(['open', _SLUG])
 
-    assert (rc, 'LEDGER BEHIND' in out) == (0, False), out
+    assert (rc, 'LEDGER BEHIND' in _strip_read(out)) == (0, False), out
 
 
 def test_open_label_check_survives_a_label_whose_trailing_space_the_block_drops(
@@ -528,7 +528,7 @@ def test_open_label_check_survives_a_label_whose_trailing_space_the_block_drops(
 
     rc, out, _ = _run(['open', _SLUG])
 
-    assert (rc, 'LEDGER BEHIND' in out) == (0, False), out
+    assert (rc, 'LEDGER BEHIND' in _strip_read(out)) == (0, False), out
 
 
 def test_open_label_check_speaks_for_a_cycle_another_session_left_unfinished(
@@ -553,7 +553,7 @@ def test_open_label_check_speaks_for_a_cycle_another_session_left_unfinished(
     assert _run(['stamp', _SLUG, 'doc.md', '--read-before', 'never',
                  '--label', 'second label'])[0] == 0
     rc, out, _ = _run(['open', _SLUG])
-    assert (rc, 'LEDGER BEHIND' in out) == (0, False), out
+    assert (rc, 'LEDGER BEHIND' in _strip_read(out)) == (0, False), out
 
     _lock(folder, 'session-other', '2026-09-09T11:00:00', cycle=2)
 

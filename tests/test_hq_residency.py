@@ -185,7 +185,8 @@ def test_open_stays_quiet_on_a_label_the_render_capped(tmp_path, monkeypatch, ca
     capsys.readouterr()
     monkeypatch.setenv('HQ_SESSION', 'session-xyz')
     assert hq.main(['open', _SLUG]) == 0
-    assert 'LEDGER BEHIND' not in capsys.readouterr().out
+    out = capsys.readouterr().out.replace(hq.HELP_TOPICS['read'] + '\n', '')
+    assert 'LEDGER BEHIND' not in out
 
 
 def test_standing_filters_select_and_a_named_id_outranks_them(
