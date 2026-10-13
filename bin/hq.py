@@ -2859,6 +2859,44 @@ def _parse_standing(text: str) -> tuple[list[dict], set[str]]:
     return items, superseded_ids
 
 
+def _supersession_chains(text: str) -> dict[str, tuple[list[str], str]]:
+    """Each superseded id's chain to the id now current.
+
+    Parameters
+    ----------
+    text : str
+        Raw text of ``standing.md``.
+
+    Returns
+    -------
+    dict[str, tuple[list[str], str]]
+        Per id with an outgoing supersession line: the chain from it to
+        the id now current, ``[old, mid, current]``, and the cycle of the
+        last hop. A chain that loops stops before the repeat, so its end
+        is itself a key. An id superseded onto itself has no entry.
+    """
+    successors = {
+        m.group(2): (m.group(3), m.group(1))
+        for m in re.finditer(
+            r'^\s*- \(c(\d+)\)\s+([dcx]\d+)\s*->\s*([dcx]\d+)', text, re.MULTILINE)
+        }
+    # standing.md is append-only and hand-editable, so the seen set
+    # stops a cycle in the edges from looping here.
+    chains: dict[str, tuple[list[str], str]] = {}
+    for start in successors:
+        chain = [start]
+        seen = {start}
+        while chain[-1] in successors:
+            next_id = successors[chain[-1]][0]
+            if next_id in seen:
+                break
+            seen.add(next_id)
+            chain.append(next_id)
+        if len(chain) > 1:
+            chains[start] = (chain, successors[chain[-2]][1])
+    return chains
+
+
 def _next_id(items: list[dict], prefix: str) -> str:
     """Return the next unused two-digit-minimum id for the given prefix.
     """
@@ -5670,6 +5708,38 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
             ' keeps each; carry back any a later session needs')
         for dropped in dropped_lines:
             print(f'  not carried: {dropped.strip()}')
+    # --- Advisory: cited ids superseded ---
+    # A Directives line changes only under --replace-directives, so an
+    # advisory on one would repeat at every finish.
+    cited_text = re.sub(
+        r'^## Directives[ \t]*$.*?(?=^## |\Z)', '', cursor_clean,
+        flags=re.MULTILINE | re.DOTALL)
+    cited_at = [
+        (m.start(1), m.group(1)) for m in _CITED_ID.finditer(cited_text)
+        if m.group(1)[0] == 'd'
+        ]
+    # hq spells a cycle as c12 and x86 is a common word, so a c or x id
+    # counts only inside a bracket group.
+    for group_m in re.finditer(r'\[([^\[\]]*)\]', cited_text):
+        tokens = [token.strip() for token in group_m.group(1).split(',')]
+        if all(re.fullmatch(r'[A-Za-z]+\d+', token) for token in tokens):
+            cited_at += [
+                (group_m.start(), token) for token in tokens
+                if re.fullmatch(r'[cdx]\d{2,}', token)
+                ]
+    chains = _supersession_chains(standing_text_new)
+    not_live_ids = _parse_standing(standing_text_new)[1]
+    cited_ids = [item_id for _, item_id in sorted(cited_at, key=lambda pair: pair[0])]
+    for item_id in dict.fromkeys(cited_ids):
+        chain_entry = chains.get(item_id)
+        # A chain that loops ends on a superseded id, so it has no live
+        # end to name.
+        if not chain_entry or chain_entry[0][-1] in not_live_ids:
+            continue
+        current_id = chain_entry[0][-1]
+        print(
+            f'advisory: cited id superseded: {item_id} -> {current_id}'
+            f' - cite {current_id} in its place')
     log_text = ' '.join((getattr(argv, 'log', '') or '').split())
     branch, sha7, dirty = anch['branch'], anch['sha'], anch['dirty']
     if branch != '-':
@@ -6593,28 +6663,7 @@ def _verb_standing(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -
     standing_path = folder / 'standing.md'
     text = standing_path.read_text(encoding='utf-8') if standing_path.exists() else ''
     items, superseded_ids = _parse_standing(text)
-    successors = {
-        m.group(2): (m.group(3), m.group(1))
-        for m in re.finditer(
-            r'^\s*- \(c(\d+)\)\s+([dcx]\d+)\s*->\s*([dcx]\d+)', text, re.MULTILINE)
-        }
-    # Notes:
-    # - A successor can itself be superseded, so the id now current
-    #   sits at the end of the walk and not one hop along it.
-    # - standing.md is append-only and hand-editable, so the seen set
-    #   stops a cycle in the edges from looping here.
-    chains: dict[str, list[str]] = {}
-    for start in successors:
-        chain = [start]
-        seen = {start}
-        while chain[-1] in successors:
-            next_id = successors[chain[-1]][0]
-            if next_id in seen:
-                break
-            seen.add(next_id)
-            chain.append(next_id)
-        if len(chain) > 1:
-            chains[start] = chain
+    chains = _supersession_chains(text)
     show_all = getattr(argv, 'all', False)
     wanted = list(getattr(argv, 'ids', None) or [])
     by_id = {item['id']: item for item in items}
@@ -6653,10 +6702,11 @@ def _verb_standing(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -
                 continue
         elif not show_all and item['id'] in superseded_ids:
             continue
-        chain = chains.get(item['id'])
+        chain_entry = chains.get(item['id'])
         sup = ''
-        if chain:
-            sup_by, sup_in = chain[-1], successors[chain[-2]][1]
+        if chain_entry:
+            chain, sup_in = chain_entry
+            sup_by = chain[-1]
             hops = f' - {" -> ".join(chain)}' if wanted and len(chain) > 2 else ''
             sup = f' [superseded by {sup_by} in c{sup_in}{hops}]'
         elif item['id'] in superseded_ids:
