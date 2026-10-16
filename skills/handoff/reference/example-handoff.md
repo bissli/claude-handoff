@@ -10,7 +10,7 @@ rendered file to this one line for line.
 ```markdown
 # Handoff: auth-refresh
 
-Written: 2026-08-26 | Cycle: 3 | master @ fcbab89 | dirty: scripts/auth.py
+Written: 2026-08-26 | Cycle: 3 | Last worked: 2026-08-26 | master @ fcbab89 | dirty: scripts/auth.py
 
 ## Task
 Refresh expired OAuth tokens in the poller instead of failing the run.

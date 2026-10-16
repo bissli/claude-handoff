@@ -98,6 +98,7 @@ _NOTE_BATCH_LINE = re.compile(
     r'(?:"(?P<dq>[^"]*)"|\'(?P<sq>[^\']*)\'|(?P<bare>[^"\'\s]\S*))'
     r'(?P<body>.*)$')
 _HEADER_PAT = re.compile(r'Written:\s*.+?\s*\|\s*Cycle:\s*(\d+)')
+_WORKED_PAT = re.compile(r'Last worked:\s*(\d{4}-\d{2}-\d{2}|-(?!\S))')
 _ATX_HEADING_PAT = re.compile(r'#{1,6}(?:[ \t]|$)')
 # Notes:
 # - A grading label under Key files may be written as its own heading;
@@ -162,7 +163,8 @@ for the heading numbered <n>.
   A row with no anchor, which only an older cycle can leave, shows
   (N lines, T tok), and the read is the whole file. A :? in place
   of the span means the anchor matches no heading. Read the whole
-  file, re-stamp with a --where that resolves, and re-run hq open.
+  file, re-stamp with a --where that resolves, and re-run the same
+  hq open.
   A ? that survives means the anchor is still wrong.
 - A section dropped from --where stays reachable. The read verb
   takes --section <anchor>, in this same grammar, for an anchor the
@@ -3523,7 +3525,8 @@ def _assemble_handoff(
         Cursor portion of the handoff (## Directives through ## Open
         questions).
     header_line : str
-        'Written: ... | Cycle: N | branch @ sha7 | clean' line.
+        'Written: ... | Cycle: N | Last worked: ... | branch @ sha7 | clean'
+        line.
     log_body : str
         Rendered log body from render_log.
     live : dict[str, Row]
@@ -4326,13 +4329,12 @@ def _verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
         }], folder.name)
     branch_a = anch['branch']
     sha7_a = anch['sha']
+    header_line_a = f'Written: {ts[:10]} | Cycle: {cycle}'
+    worked_m = _WORKED_PAT.search(parsed['header'])
+    if worked_m:
+        header_line_a += f' | Last worked: {worked_m.group(1)}'
     if branch_a != '-':
-        header_line_a = (
-            f'Written: {ts[:10]} | Cycle: {cycle}'
-            f' | {branch_a} @ {sha7_a}{_dirty_str(anch["dirty"])}'
-            )
-    else:
-        header_line_a = f'Written: {ts[:10]} | Cycle: {cycle}'
+        header_line_a += f' | {branch_a} @ {sha7_a}{_dirty_str(anch["dirty"])}'
     new_handoff = _assemble_handoff(
         folder, cursor_text, header_line_a, log_body_f,
         _reconcile_missing(folder, fresh_live), walk, fresh_standing_text,
@@ -4795,10 +4797,22 @@ def _verb_begin(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
             survived.append('the cycle manifest')
         if any((folder / 'cycles').glob('c*.md')):
             survived.append('archived cycles')
+        # A handoff created while the session works another live thread
+        # is a spin-off, which is housekeeping.
+        held = pathlib.Path(_worked_thread(str(anch['session'])) or folder)
+        if manifest_rows:
+            seed_worked = manifest_rows[-1]['written']
+        elif ((held / 'HANDOFF.md').is_file()
+                and not (held / _DONE_NAME).exists()
+                and not getattr(argv, 'worked', False)):
+            seed_worked = '-'
+        else:
+            seed_worked = anch['now'][:10]
         for name, seed in (
             ('HANDOFF.md',
              (f'# Handoff: {folder.name}\n\n'
-              f'Written: {anch["now"][:10]} | Cycle: 1\n\n'
+              f'Written: {anch["now"][:10]} | Cycle: 1'
+              f' | Last worked: {seed_worked}\n\n'
               '## Directives\n\n## Task\n\n## Now\n\n## Plan\n\n'
               '## State\n\n## Environment\n\n## Open questions\n\n'
               '## Log\n')),
@@ -4816,6 +4830,8 @@ def _verb_begin(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
                 f' run hq standing {folder.name} to read what survived')
         else:
             print(f'hq begin: created {folder}')
+            if seed_worked != '-':
+                _record_worked(str(anch['session']), folder)
     elif (folder / 'HANDOFF.md').exists() and not (folder / 'ledger.tsv').exists():
         rc = _verb_adopt(folder, anch, argv)
         if rc != 0:
@@ -5628,6 +5644,10 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
     - standing.md takes no preflight entry: it is written first, and
       only where a note drained, so a failure there half-writes
       nothing and the append reports for itself.
+    - ``Last worked`` is today only when this handoff is the session's
+      worked thread (``_record_worked``); otherwise it keeps the
+      previous header's value, else its ``Written`` date, else the last
+      cycle's, else ``-``.
     """
     if (folder / 'HANDOFF.md').is_dir():
         print('hq: HANDOFF.md is a directory - move the directory aside and re-run')
@@ -5988,14 +6008,23 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
             f'advisory: {pair_cnt} live {noun} - hq standing'
             f' {folder.name} --kind evidence --grep "contradicts \\["')
     log_text = ' '.join((getattr(argv, 'log', '') or '').split())
+    last_worked = anch['now'][:10]
+    if _worked_thread(str(session)) != str(folder.resolve()):
+        prior_m = (
+            _WORKED_PAT.search(parsed['header'])
+            or re.search(r'Written:\s*(\d{4}-\d{2}-\d{2})', parsed['header']))
+        if prior_m:
+            last_worked = prior_m.group(1)
+        elif manifest:
+            last_worked = manifest[-1]['written']
+        else:
+            last_worked = '-'
     branch, sha7, dirty = anch['branch'], anch['sha'], anch['dirty']
+    header_line = (
+        f'Written: {anch["now"][:10]} | Cycle: {anch["cycle"]}'
+        f' | Last worked: {last_worked}')
     if branch != '-':
-        header_line = (
-            f'Written: {anch["now"][:10]} | Cycle: {anch["cycle"]}'
-            f' | {branch} @ {sha7}{_dirty_str(dirty)}'
-            )
-    else:
-        header_line = f'Written: {anch["now"][:10]} | Cycle: {anch["cycle"]}'
+        header_line += f' | {branch} @ {sha7}{_dirty_str(dirty)}'
     repos = f'{branch}@{sha7}' if branch != '-' else '-'
     if dirty:
         repos += f' +{len(dirty)}'
@@ -6361,7 +6390,7 @@ def _verb_open(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
             print(
                 f'unresolved anchor in {row["path"]}: {anchor_str!r}'
                 ' - read the whole file; at write time re-stamp with a --where'
-                ' that resolves (hq help anchors), then re-run open')
+                ' that resolves (hq help anchors), then re-run the same open')
         # Report spans that moved since the stored read block, which
         # prints a path under the root or the pin relative to it.
         read_block_body = parsed.get('blocks', {}).get('read', '')
@@ -7068,10 +7097,12 @@ def _verb_list(root: pathlib.Path, argv: argparse.Namespace) -> int:
       marker no key=value reader can parse still hides its folder.
     - ``count`` caps what is shown, so ``hq list 5`` is the five most
       recent of whichever set the flag selects.
-    - Order is each ``HANDOFF.md``'s modification time, newest first,
-      the order ``ls -t`` gives; files changed in the same second list
-      A to Z by slug.
-    - The line is ``<slug>  <written>  c<N>  <open> open  <task>``,
+    - Order: newest ``Last worked``, else ``Written``, else mtime date;
+      then newer mtime; then slug A to Z. A header date counts only as
+      ``YYYY-MM-DD``. ``Last worked: -``, never worked, sorts below
+      every date.
+    - The line is ``<slug>  <worked>  c<N>  <open> open  <task>``,
+      ``<worked>`` the ``Last worked``, else ``Written``, else ``-``;
       ``<open>`` counting the ``- [ ]`` items: a done item moves out of
       the cursor, so a done count would read zero. A non-conforming
       header gives ``-`` for the date and the cycle; a Plan with no
@@ -7096,7 +7127,6 @@ def _verb_list(root: pathlib.Path, argv: argparse.Namespace) -> int:
         files = sorted(
             (path for path in handoffs.glob('*/HANDOFF.md') if path.is_file()),
             key=lambda path: path.parent.name)
-        files.sort(key=lambda path: path.stat().st_mtime, reverse=True)
     only_done = getattr(argv, 'done', False)
     done_cnt = sum((path.parent / _DONE_NAME).exists() for path in files)
     files = [
@@ -7114,19 +7144,29 @@ def _verb_list(root: pathlib.Path, argv: argparse.Namespace) -> int:
         else:
             print(f'hq list: no handoff under {handoffs}')
         return 0
-    rows: list[tuple[str, str, str, str, str]] = []
-    for path in files[:count]:
+    keyed_rows: list[tuple[tuple[str, float], tuple[str, str, str, str, str]]] = []
+    for path in files:
+        mtime, mtime_date = 0.0, ''
         try:
+            mtime = path.stat().st_mtime
+            mtime_date = datetime.date.fromtimestamp(mtime).isoformat()
             text = path.read_text(encoding='utf-8-sig', errors='replace')
         except OSError as exc:
             reason = exc.strerror or type(exc).__name__
-            rows.append((path.parent.name, '-', '-', '-', f'unreadable: {reason}'))
+            keyed_rows.append((
+                (mtime_date, mtime),
+                (path.parent.name, '-', '-', '-', f'unreadable: {reason}')))
             continue
         parsed = split_handoff(text)
         written = cycle = '-'
+        sort_date = mtime_date
         if parsed['cycle'] is not None:
-            written_match = re.search(r'Written:\s*(\S+)', parsed['header'])
-            written = written_match.group(1) if written_match else '-'
+            written_match = (
+                _WORKED_PAT.search(parsed['header'])
+                or re.search(r'Written:\s*(\d{4}-\d{2}-\d{2})', parsed['header']))
+            if written_match:
+                written = written_match.group(1)
+                sort_date = '' if written == '-' else written
             cycle = f'c{parsed["cycle"]}'
         task = '-'
         open_cnt = total = 0
@@ -7146,8 +7186,12 @@ def _verb_list(root: pathlib.Path, argv: argparse.Namespace) -> int:
                     total += 1
                     open_cnt += box.group(1) == ' '
         progress = f'{open_cnt} open' if total else '-'
-        rows.append((path.parent.name, written, cycle, progress, task))
-    headers = ('SLUG', 'WRITTEN', 'CYCLE', 'PROGRESS')
+        keyed_rows.append((
+            (sort_date, mtime),
+            (path.parent.name, written, cycle, progress, task)))
+    keyed_rows.sort(key=lambda pair: pair[0], reverse=True)
+    rows = [row for _, row in keyed_rows[:count]]
+    headers = ('SLUG', 'LAST WORKED', 'CYCLE', 'PROGRESS')
     col_widths = [
         max(*(len(row[i]) for row in rows), len(headers[i]))
         for i in range(4)
@@ -7236,7 +7280,10 @@ def _build_parser() -> argparse.ArgumentParser:
         'field in HANDOFF.md: finish rewrites that field last, so it reads\n'
         'the previous cycle for the whole write. The cycle= field of\n'
         '.hq.lock carries the same number. Every note, stamp, and cursor\n'
-        'line this session writes belongs to it.'
+        'line this session writes belongs to it.\n'
+        "--worked makes the handoff this session's worked thread, so its\n"
+        'finish moves Last worked: pass it when the session did the\n'
+        "thread's task without hq open. Filing into a thread never passes it."
     )
     beg = sub.add_parser(
         'begin',
@@ -7244,6 +7291,7 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter)
     beg.add_argument('slug')
     beg.add_argument('--force', action='store_true')
+    beg.add_argument('--worked', action='store_true')
 
     _stamp_epilog = (
         'The path is relative to the handoff folder: ./SPEC.md and\n'
@@ -7400,7 +7448,9 @@ def _build_parser() -> argparse.ArgumentParser:
     _open_epilog = (
         '--not-carried lists every cursor line from the last finished\n'
         'cycle that the file on disk, standing.md, a live label, and the\n'
-        'stamped siblings no longer carry, and writes nothing.'
+        'stamped siblings no longer carry, and writes nothing.\n'
+        "--housekeeping reads the thread without making it the session's\n"
+        "worked thread, so its finish keeps the thread's Last worked date."
     )
     op = sub.add_parser(
         'open',
@@ -7408,6 +7458,7 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter)
     op.add_argument('slug')
     op.add_argument('--not-carried', action='store_true')
+    op.add_argument('--housekeeping', action='store_true')
 
     _read_epilog = (
         "The row's anchored spans, or the whole file where the row has no\n"
@@ -7534,14 +7585,15 @@ def _build_parser() -> argparse.ArgumentParser:
     st.add_argument('--in-cycle')
 
     _list_epilog = (
-        'One line per folder under .handoff/ holding a HANDOFF.md, newest\n'
-        "first by that file's mtime: <slug>  <Written date>  c<N>\n"
-        '<N> open  <Task line>. <N> open counts the - [ ] items under ## Plan\n'
-        "alone, '-' when the Plan has no checkbox item; a file with no\n"
-        "conforming header shows '-' for the date and the cycle; an\n"
-        "unreadable file shows '-  -  -  unreadable: <reason>'. Ties in the\n"
-        'same second list A to Z by slug. A bare list shows every one;\n'
-        'list 5 the five most recent.\n'
+        'One line per folder under .handoff/ holding a HANDOFF.md:\n'
+        '<slug>  <last worked>  c<N>  <N> open  <Task line>. Newest first\n'
+        'by the Last worked date, else Written, else mtime; then newer\n'
+        'mtime; then slug A to Z. A date counts only as YYYY-MM-DD, and\n'
+        "Last worked '-', a thread never worked, sorts below every date.\n"
+        "<N> open counts the - [ ] items under ## Plan alone, '-' when the\n"
+        "Plan has none; a missing date or cycle shows '-'; an unreadable\n"
+        "file shows '-  -  -  unreadable: <reason>'. A bare list shows\n"
+        'every one; list 5 the five most recent.\n'
         'A folder marked by hq done is left out, and a closing line counts\n'
         'them: --done lists those folders instead, the open ones left out,\n'
         'and prints no count line. A count caps whichever set is shown.'
@@ -7608,6 +7660,37 @@ def _thread_record(session: str) -> pathlib.Path:
     safe = session.replace('/', '_')
     state_dir = pathlib.Path(os.environ.get('HQ_STATE_DIR', STATE_DIR))
     return state_dir / f'{safe}.thread'
+
+
+def _record_worked(session: str, folder: pathlib.Path) -> None:
+    """Make folder the session's one worked thread, whose finish moves
+    ``Last worked``.
+
+    Parameters
+    ----------
+    session : str
+        Session id, as ``anchors`` resolved it. An empty or 'unknown'
+        id records nothing, since every shell without an id shares it.
+    folder : pathlib.Path
+        Handoff folder, stored resolved.
+    """
+    if session in {'', 'unknown'}:
+        return
+    path = _thread_record(session).with_suffix('.worked')
+    with contextlib.suppress(OSError):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f'{folder.resolve()}\n', encoding='utf-8')
+
+
+def _worked_thread(session: str) -> str:
+    """Resolved folder ``_record_worked`` holds for session, '' for none.
+    """
+    if session in {'', 'unknown'}:
+        return ''
+    with contextlib.suppress(OSError):
+        return _thread_record(session).with_suffix('.worked').read_text(
+            encoding='utf-8', errors='replace').strip()
+    return ''
 
 
 def _record_thread(session: str, slug: str) -> None:
@@ -7775,6 +7858,10 @@ def main(argv: list[str]) -> int:
         if result == 0:
             if verb in _THREAD_VERBS:
                 _record_thread(str(anch['session']), folder.name)
+            if ((verb == 'open' and not getattr(args, 'not_carried', False)
+                    and not getattr(args, 'housekeeping', False))
+                    or (verb == 'begin' and getattr(args, 'worked', False))):
+                _record_worked(str(anch['session']), folder)
             elif verb == 'done' and not getattr(args, 'undo', False):
                 _clear_thread(str(anch['session']), folder.name)
         return result

@@ -144,6 +144,9 @@ required.
    (review, fix, cleanup), a date, a version, a round, or a ticket id.
    Those go in the Task line. The slug is unique under `.handoff/`.
 
+When rule 2 or 3 picked the target, step 1 below runs
+`hq begin <slug> --worked`. Rules 1 and 4 never pass it.
+
 What the target holds decides how `begin` starts. The write path below
 is the same in every case.
 
@@ -166,7 +169,7 @@ rules it is written by (`hq help write`).
 ```markdown
 # Handoff: auth-refresh
 
-Written: 2026-08-26 | Cycle: 3 | master @ fcbab89 | dirty: scripts/auth.py
+Written: 2026-08-26 | Cycle: 3 | Last worked: 2026-08-26 | master @ fcbab89 | dirty: scripts/auth.py
 
 ## Task
 Refresh expired OAuth tokens in the poller instead of failing the run.
@@ -342,13 +345,13 @@ item wanted. Never re-read the whole store.
 
 ## check
 
-Resolve the slug as read does. Run `hq open <slug>` and follow the
-printed reading steps only through the reads: `HANDOFF.md` and each
-`## Read first` line that shows a span. Then stop. A check neither
-drift-checks nor executes Now, and open questions do not stop it. A
-target with no conforming header is converted by
-`reference/adoption.md`, and the check stops there. Otherwise run the
-write path:
+Resolve the slug as read does. Run `hq open <slug> --housekeeping`
+and follow the printed reading steps only through the reads:
+`HANDOFF.md` and each `## Read first` line that shows a span. Then
+stop. A check neither drift-checks nor executes Now, and open
+questions do not stop it. A target with no conforming header is
+converted by `reference/adoption.md`, and the check stops there.
+Otherwise run the write path:
 
 1. `begin`.
 2. Steps 2 to 4 of the write path, for findings alone: what `open`
