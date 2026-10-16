@@ -98,7 +98,7 @@ _NOTE_BATCH_LINE = re.compile(
     r'(?:"(?P<dq>[^"]*)"|\'(?P<sq>[^\']*)\'|(?P<bare>[^"\'\s]\S*))'
     r'(?P<body>.*)$')
 _HEADER_PAT = re.compile(r'Written:\s*.+?\s*\|\s*Cycle:\s*(\d+)')
-_WORKED_PAT = re.compile(r'Last worked:\s*(\d{4}-\d{2}-\d{2}|-(?!\S))')
+_WORKED_PAT = re.compile(r'Last worked:\s*(\d{4}-\d{2}-\d{2})')
 _ATX_HEADING_PAT = re.compile(r'#{1,6}(?:[ \t]|$)')
 # Notes:
 # - A grading label under Key files may be written as its own heading;
@@ -4800,14 +4800,12 @@ def _verb_begin(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
         # A handoff created while the session works another live thread
         # is a spin-off, which is housekeeping.
         held = pathlib.Path(_worked_thread(str(anch['session'])) or folder)
+        spin_off = (
+            (held / 'HANDOFF.md').is_file()
+            and not (held / _DONE_NAME).exists())
+        seed_worked = anch['now'][:10]
         if manifest_rows:
             seed_worked = manifest_rows[-1]['written']
-        elif ((held / 'HANDOFF.md').is_file()
-                and not (held / _DONE_NAME).exists()
-                and not getattr(argv, 'worked', False)):
-            seed_worked = '-'
-        else:
-            seed_worked = anch['now'][:10]
         for name, seed in (
             ('HANDOFF.md',
              (f'# Handoff: {folder.name}\n\n'
@@ -4830,7 +4828,7 @@ def _verb_begin(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
                 f' run hq standing {folder.name} to read what survived')
         else:
             print(f'hq begin: created {folder}')
-            if seed_worked != '-':
+            if not spin_off:
                 _record_worked(str(anch['session']), folder)
     elif (folder / 'HANDOFF.md').exists() and not (folder / 'ledger.tsv').exists():
         rc = _verb_adopt(folder, anch, argv)
@@ -5647,7 +5645,7 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
     - ``Last worked`` is today only when this handoff is the session's
       worked thread (``_record_worked``); otherwise it keeps the
       previous header's value, else its ``Written`` date, else the last
-      cycle's, else ``-``.
+      cycle's, else today.
     """
     if (folder / 'HANDOFF.md').is_dir():
         print('hq: HANDOFF.md is a directory - move the directory aside and re-run')
@@ -6017,8 +6015,6 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
             last_worked = prior_m.group(1)
         elif manifest:
             last_worked = manifest[-1]['written']
-        else:
-            last_worked = '-'
     branch, sha7, dirty = anch['branch'], anch['sha'], anch['dirty']
     header_line = (
         f'Written: {anch["now"][:10]} | Cycle: {anch["cycle"]}'
@@ -7099,15 +7095,13 @@ def _verb_list(root: pathlib.Path, argv: argparse.Namespace) -> int:
       recent of whichever set the flag selects.
     - Order: newest ``Last worked``, else ``Written``, else mtime date;
       then newer mtime; then slug A to Z. A header date counts only as
-      ``YYYY-MM-DD``. ``Last worked: -``, never worked, sorts below
-      every date.
+      ``YYYY-MM-DD``.
     - The line is ``<slug>  <worked>  c<N>  <open> open  <task>``,
-      ``<worked>`` the ``Last worked``, else ``Written``, else ``-``;
-      ``<open>`` counting the ``- [ ]`` items: a done item moves out of
-      the cursor, so a done count would read zero. A non-conforming
-      header gives ``-`` for the date and the cycle; a Plan with no
-      checkbox item, or no Plan, gives ``-`` for the progress; a missing
-      Task line gives ``-``.
+      ``<worked>`` the date it sorts by; ``<open>`` counting the
+      ``- [ ]`` items: a done item moves out of the cursor, so a done
+      count would read zero. A non-conforming header gives ``-`` for
+      the cycle; a Plan with no checkbox item, or no Plan, gives ``-``
+      for the progress; a missing Task line gives ``-``.
     - On a terminal, a Task wider than the columns left of the terminal
       width is cut to fit and ends in ``...``, so no row wraps. Piped
       output keeps the whole Task.
@@ -7158,15 +7152,14 @@ def _verb_list(root: pathlib.Path, argv: argparse.Namespace) -> int:
                 (path.parent.name, '-', '-', '-', f'unreadable: {reason}')))
             continue
         parsed = split_handoff(text)
-        written = cycle = '-'
+        cycle = '-'
         sort_date = mtime_date
         if parsed['cycle'] is not None:
-            written_match = (
+            date_match = (
                 _WORKED_PAT.search(parsed['header'])
                 or re.search(r'Written:\s*(\d{4}-\d{2}-\d{2})', parsed['header']))
-            if written_match:
-                written = written_match.group(1)
-                sort_date = '' if written == '-' else written
+            if date_match:
+                sort_date = date_match.group(1)
             cycle = f'c{parsed["cycle"]}'
         task = '-'
         open_cnt = total = 0
@@ -7188,7 +7181,7 @@ def _verb_list(root: pathlib.Path, argv: argparse.Namespace) -> int:
         progress = f'{open_cnt} open' if total else '-'
         keyed_rows.append((
             (sort_date, mtime),
-            (path.parent.name, written, cycle, progress, task)))
+            (path.parent.name, sort_date, cycle, progress, task)))
     keyed_rows.sort(key=lambda pair: pair[0], reverse=True)
     rows = [row for _, row in keyed_rows[:count]]
     headers = ('SLUG', 'LAST WORKED', 'CYCLE', 'PROGRESS')
@@ -7588,12 +7581,12 @@ def _build_parser() -> argparse.ArgumentParser:
         'One line per folder under .handoff/ holding a HANDOFF.md:\n'
         '<slug>  <last worked>  c<N>  <N> open  <Task line>. Newest first\n'
         'by the Last worked date, else Written, else mtime; then newer\n'
-        'mtime; then slug A to Z. A date counts only as YYYY-MM-DD, and\n'
-        "Last worked '-', a thread never worked, sorts below every date.\n"
-        "<N> open counts the - [ ] items under ## Plan alone, '-' when the\n"
-        "Plan has none; a missing date or cycle shows '-'; an unreadable\n"
-        "file shows '-  -  -  unreadable: <reason>'. A bare list shows\n"
-        'every one; list 5 the five most recent.\n'
+        'mtime; then slug A to Z. A date counts only as YYYY-MM-DD. The\n'
+        'date shown is the one it sorts by. <N> open counts the - [ ]\n'
+        "items under ## Plan alone, '-' when the Plan has none; a missing\n"
+        "cycle shows '-'; an unreadable file shows\n"
+        "'-  -  -  unreadable: <reason>'. A bare list shows every one;\n"
+        'list 5 the five most recent.\n'
         'A folder marked by hq done is left out, and a closing line counts\n'
         'them: --done lists those folders instead, the open ones left out,\n'
         'and prints no count line. A count caps whichever set is shown.'

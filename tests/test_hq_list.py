@@ -205,11 +205,13 @@ def test_list_no_plan_checkboxes_prints_dash(tmp_path, monkeypatch, capsys):
     assert progress == ['0 open', '-', '-']
 
 
-def test_list_non_conforming_file_prints_dashes(tmp_path, monkeypatch, capsys):
-    """List prints '-  -' for date and cycle on a non-conforming HANDOFF.md.
+def test_list_non_conforming_file_prints_mtime_date(tmp_path, monkeypatch, capsys):
+    """List prints the mtime date and '-' for the cycle on a non-conforming
+    HANDOFF.md.
 
-    Mutation: skipping non-conforming folders entirely.
-    Oracle: the slug still appears with '-' for both date and cycle.
+    Mutation: skipping non-conforming folders entirely, or showing '-'
+    for the date.
+    Oracle: the slug still appears, dated by a hand-set 2026-10-10 mtime.
     """
     root = _new_root(tmp_path, monkeypatch)
     handoff_root = root / '.handoff'
@@ -221,6 +223,8 @@ def test_list_non_conforming_file_prints_dashes(tmp_path, monkeypatch, capsys):
     (folder / 'HANDOFF.md').write_text(
         '# Legacy CSV importer\n\n## Summary\n\nOld work.\n',
         encoding='utf-8')
+    oct_10 = datetime.datetime(2026, 10, 10, 12).timestamp()
+    os.utime(folder / 'HANDOFF.md', (oct_10, oct_10))
 
     rc, out, _ = _run(['list'], capsys)
     assert rc == 0
@@ -228,7 +232,7 @@ def test_list_non_conforming_file_prints_dashes(tmp_path, monkeypatch, capsys):
     data_line = out.splitlines()[2]
     assert data_line.startswith(slug)
     parts = [p.strip() for p in data_line.split('  ') if p.strip()]
-    assert parts[1] == '-', f'expected - for date: {data_line!r}'
+    assert parts[1] == '2026-10-10', f'expected mtime date: {data_line!r}'
     assert parts[2] == '-', f'expected - for cycle: {data_line!r}'
 
 
@@ -342,7 +346,8 @@ def test_list_reports_an_unreadable_handoff_and_goes_on(
     root = _new_root(tmp_path, monkeypatch)
     handoff_root = root / '.handoff'
     handoff_root.mkdir()
-    for slug, stamp in (('locked', 2000000), ('open-one', 1000000)):
+    oct_10 = datetime.datetime(2026, 10, 10, 12).timestamp()
+    for slug, stamp in (('locked', oct_10 + 1000), ('open-one', oct_10)):
         (handoff_root / slug).mkdir()
         h = handoff_root / slug / 'HANDOFF.md'
         h.write_text('# x\n', encoding='utf-8')
@@ -361,7 +366,7 @@ def test_list_reports_an_unreadable_handoff_and_goes_on(
         'SLUG      LAST WORKED  CYCLE  PROGRESS  TASK',
         '--------------------------------------------',
         'locked    -            -      -         unreadable: Permission denied',
-        'open-one  -            -      -         -',
+        'open-one  2026-10-10   -      -         -',
         ]
 
 
@@ -426,12 +431,12 @@ def test_list_truncates_task_to_terminal_width(tmp_path, monkeypatch, capsys):
 
 def test_list_orders_by_last_worked_then_written_then_mtime(
         tmp_path, monkeypatch, capsys):
-    """List sorts by the Last worked date, falls back to Written, puts a
-    never-worked thread last, and shows the date it sorts by.
+    """List sorts by the Last worked date, falls back to Written for a
+    missing or '-' Last worked, and shows the date it sorts by.
 
     Mutation: sorting by mtime or by the Written date, a header with no
-    Last worked falling through to mtime, or 'Last worked: -' falling
-    through to Written.
+    Last worked falling through to mtime, or 'Last worked: -' sorting
+    last.
     Oracle: hand-set dates whose mtime order is the reverse of the
     expected order.
     """
@@ -457,10 +462,10 @@ def test_list_orders_by_last_worked_then_written_then_mtime(
     assert rc == 0
     rows = [ln.split()[:2] for ln in out.splitlines()[2:]]
     assert rows == [
+        ['spun-off', '2026-10-16'],
         ['own-work', '2026-10-05'],
         ['legacy', '2026-10-03'],
         ['filed-into', '2026-10-01'],
-        ['spun-off', '-'],
         ]
 
 
@@ -489,11 +494,11 @@ def test_list_count_keeps_the_newest_by_date_then_mtime(
 def test_list_skips_a_header_value_that_is_not_a_date(
         tmp_path, monkeypatch, capsys):
     """A non-date Last worked falls back to Written; a non-date Written
-    shows '-' and sorts by its mtime date.
+    shows and sorts by its mtime date.
 
     Mutation: any token accepted as the date, so letters sort above
-    every real date; '-x' read as never worked; a header with no date
-    sorted last instead of by mtime.
+    every real date; a header with no date sorted last instead of by
+    mtime, or showing '-'.
     Oracle: hand-set headers, and a 2026-10-10 mtime on the dateless
     one.
     """
@@ -513,7 +518,7 @@ def test_list_skips_a_header_value_that_is_not_a_date(
         os.utime(h, (mtime, mtime))
     _, out, _ = _run(['list'], capsys)
     assert [ln.split()[:2] for ln in out.splitlines()[2:]] == [
-        ['bad-both', '-'],
+        ['bad-both', '2026-10-10'],
         ['good', '2026-10-05'],
         ['dash-junk', '2026-10-03'],
         ['bad-worked', '2026-10-01'],
@@ -688,12 +693,13 @@ def test_a_housekeeping_open_keeps_the_worked_thread(
     assert header == 'Written: 2026-10-05 | Cycle: 2 | Last worked: 2026-10-05'
 
 
-def test_spin_off_handoffs_are_never_worked(tmp_path, monkeypatch, capsys):
-    """A session that opens X and writes two new handoffs leaves them
-    never worked, and still moves X's date on its return.
+def test_spin_off_handoffs_keep_their_creation_date(
+        tmp_path, monkeypatch, capsys):
+    """A session that opens X and writes two new handoffs dates them by
+    creation, and still moves X's date on its return.
 
     Mutation: a creation replacing the worked thread, or a spin-off
-    seeded with today.
+    seeded '-'.
     Oracle: X created on 10-01 by another session, worked on 10-05.
     """
     root = _new_root(tmp_path, monkeypatch)
@@ -712,7 +718,8 @@ def test_spin_off_handoffs_are_never_worked(tmp_path, monkeypatch, capsys):
             (root / '.handoff' / slug / 'HANDOFF.md').read_text())['header']
         for slug in ('spin-a', 'spin-b')
         ]
-    assert spin_headers == ['Written: 2026-10-03 | Cycle: 1 | Last worked: -'] * 2
+    assert spin_headers == [
+        'Written: 2026-10-03 | Cycle: 1 | Last worked: 2026-10-03'] * 2
     assert header == 'Written: 2026-10-05 | Cycle: 2 | Last worked: 2026-10-05'
 
 
@@ -748,8 +755,8 @@ def test_done_frees_the_session_for_new_work(tmp_path, monkeypatch, capsys):
 
     Mutation: a done thread still counted as the session's live worked
     thread.
-    Oracle: the worker opens X, ends it with done, and creates Y on
-    10-05.
+    Oracle: the worker opens X, ends it with done, creates Y on 10-05,
+    and finishes Y on 10-06.
     """
     root = _new_root(tmp_path, monkeypatch)
     _cycle(root, '01', 'creator', monkeypatch)
@@ -758,11 +765,12 @@ def test_done_frees_the_session_for_new_work(tmp_path, monkeypatch, capsys):
     assert hq.main(['done', _SLUG]) == 0
     monkeypatch.setenv('HQ_NOW', '2026-10-05T12:00:00')
     assert hq.main(['begin', 'other']) == 0
+    monkeypatch.setenv('HQ_NOW', '2026-10-06T12:00:00')
     assert hq.main(['finish', 'other', '--log', 'new work']) == 0
     capsys.readouterr()
     header = hq.split_handoff(
         (root / '.handoff' / 'other' / 'HANDOFF.md').read_text())['header']
-    assert header == 'Written: 2026-10-05 | Cycle: 1 | Last worked: 2026-10-05'
+    assert header == 'Written: 2026-10-06 | Cycle: 1 | Last worked: 2026-10-06'
 
 
 def test_begin_worked_claims_a_thread_the_session_never_opened(
@@ -792,12 +800,12 @@ def test_begin_worked_claims_a_thread_the_session_never_opened(
     assert header == 'Written: 2026-10-05 | Cycle: 2 | Last worked: 2026-10-05'
 
 
-def test_a_filing_finish_with_no_date_anywhere_writes_never_worked(
+def test_a_filing_finish_with_no_date_anywhere_writes_today(
         tmp_path, monkeypatch, capsys):
     """A filer finishing a first cycle whose header has no parseable date
-    writes '-'.
+    writes today.
 
-    Mutation: the fallback chain ending at today.
+    Mutation: the fallback chain ending at '-'.
     Oracle: a hand-garbled cycle-1 header and an empty manifest.
     """
     root = _new_root(tmp_path, monkeypatch)
@@ -812,7 +820,8 @@ def test_a_filing_finish_with_no_date_anywhere_writes_never_worked(
     assert hq.main(['finish', _SLUG, '--log', 'filed']) == 0
     capsys.readouterr()
     header = hq.split_handoff(handoff.read_text())['header']
-    assert header.endswith('| Last worked: -')
+    written = header.split(' | ')[0].removeprefix('Written: ')
+    assert header.endswith(f'| Last worked: {written}')
 
 
 def test_same_slug_in_another_project_is_not_the_worked_thread(
@@ -865,8 +874,8 @@ def test_begin_after_a_lost_ledger_keeps_last_worked(
 
     Mutation: adopt writing its header without Last worked, so list and
     finish fall back to the adopt day.
-    Oracle: a spin-off ('-') and a thread worked on 10-01, both adopted
-    on 10-07.
+    Oracle: a spin-off and a thread, both dated 10-01, adopted on
+    10-07.
     """
     root = _new_root(tmp_path, monkeypatch)
     _cycle(root, '01', 'creator', monkeypatch)
@@ -882,17 +891,18 @@ def test_begin_after_a_lost_ledger_keeps_last_worked(
         headers.append(
             hq.split_handoff((folder / 'HANDOFF.md').read_text())['header'])
     capsys.readouterr()
-    assert [h.split(' | Last worked: ')[1] for h in headers] == ['2026-10-01', '-']
+    assert [h.split(' | Last worked: ')[1] for h in headers] == ['2026-10-01', '2026-10-01']
 
 
 def test_begin_worked_overrides_the_spin_off_seed(
         tmp_path, monkeypatch, capsys):
     """A new handoff begun with --worked while the session works another
-    is seeded today, never as a spin-off.
+    becomes the worked thread, never a spin-off.
 
-    Mutation: --worked left out of the spin-off test.
-    Oracle: X created on 10-01; the worker opens X and begins Y with
-    --worked on 10-05.
+    Mutation: begin --worked skipping the worked-thread record for a
+    handoff it creates.
+    Oracle: X created on 10-01; the worker opens X, begins Y with
+    --worked on 10-05, and finishes Y on 10-06.
     """
     root = _new_root(tmp_path, monkeypatch)
     _cycle(root, '01', 'creator', monkeypatch)
@@ -900,10 +910,12 @@ def test_begin_worked_overrides_the_spin_off_seed(
     assert hq.main(['open', _SLUG]) == 0
     monkeypatch.setenv('HQ_NOW', '2026-10-05T12:00:00')
     assert hq.main(['begin', 'other', '--worked']) == 0
+    monkeypatch.setenv('HQ_NOW', '2026-10-06T12:00:00')
+    assert hq.main(['finish', 'other', '--log', 'new work']) == 0
     capsys.readouterr()
     header = hq.split_handoff(
         (root / '.handoff' / 'other' / 'HANDOFF.md').read_text())['header']
-    assert header == 'Written: 2026-10-05 | Cycle: 1 | Last worked: 2026-10-05'
+    assert header == 'Written: 2026-10-06 | Cycle: 1 | Last worked: 2026-10-06'
 
 
 def test_a_deleted_worked_thread_is_not_live(tmp_path, monkeypatch, capsys):
@@ -912,7 +924,7 @@ def test_a_deleted_worked_thread_is_not_live(tmp_path, monkeypatch, capsys):
 
     Mutation: the HANDOFF.md check dropped from the spin-off test.
     Oracle: the worker opens X, X's folder is removed, the worker creates
-    Y on 10-05.
+    Y on 10-05 and finishes it on 10-06.
     """
     root = _new_root(tmp_path, monkeypatch)
     _cycle(root, '01', 'creator', monkeypatch)
@@ -921,7 +933,9 @@ def test_a_deleted_worked_thread_is_not_live(tmp_path, monkeypatch, capsys):
     shutil.rmtree(root / '.handoff' / _SLUG)
     monkeypatch.setenv('HQ_NOW', '2026-10-05T12:00:00')
     assert hq.main(['begin', 'other']) == 0
+    monkeypatch.setenv('HQ_NOW', '2026-10-06T12:00:00')
+    assert hq.main(['finish', 'other', '--log', 'new work']) == 0
     capsys.readouterr()
     header = hq.split_handoff(
         (root / '.handoff' / 'other' / 'HANDOFF.md').read_text())['header']
-    assert header == 'Written: 2026-10-05 | Cycle: 1 | Last worked: 2026-10-05'
+    assert header == 'Written: 2026-10-06 | Cycle: 1 | Last worked: 2026-10-06'
