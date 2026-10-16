@@ -249,6 +249,40 @@ in each:
   that recorded the item.
 - Log line: <branch>@<sha> +N, where N counts the paths git reported
   dirty when that cycle finished.""",
+    'merge': """\
+hq help merge - carrying one thread into another
+
+Two threads that hold one task become one. The keeper stays; the
+source ends. Nothing in the source moves or changes: its ids, ledger,
+and cycles stay whole, and every read verb still answers on it.
+
+- Ask the user which thread is the keeper. Never pick it.
+- Finish any open cycle on the source, then hq begin the keeper.
+- Run hq standing <source>. Re-record each item that still holds
+  with hq note on the keeper, --batch for many. Evidence keeps its
+  --grade and --open, and drops the '<grade>, open:' prefix standing
+  prints on its headline, since note writes the prefix again.
+- A copied body drops its '; contradicts [<id>]' tail. Re-record
+  the contradicted item first and pass --contradicts its keeper id,
+  or name the item in the body by slug and headline.
+- A note body or cursor line names the source slug, never a source
+  id. The keeper reads every c, d, x, or e id as its own.
+- Carry the source cursor: each Directive word for word, each open
+  Plan step into Plan, each open question into Open questions, each
+  Environment line still true. A Directive that cites a source id is
+  the user's to reword: ask first. Past the keeper's first cycle, a
+  changed Directives section needs finish --replace-directives
+  "<why>". Task names the source slug once, as where its history
+  lives.
+- Stamp each source file the keeper still needs by its path,
+  .handoff/<source>/notes/<file>, with --kind notes. Add
+  --read-before edit when the cursor points at it. A source spec
+  takes no --kind and a --where <heading>: R1 refuses --kind notes
+  on it, and the refused row still gates. The row stores the path
+  whole, as for any file outside the folder, so a repo move needs a
+  re-stamp.
+- After finish, tell the user to run /handoff done <source>. Never
+  run it yourself.""",
     'read': """\
 hq help read - the steps that follow hq open, in order
 
@@ -7167,7 +7201,7 @@ def _build_parser() -> argparse.ArgumentParser:
         'receipt row. Exit 2 means a usage error. All output goes to\n'
         'stdout, one fact per line.\n'
         'Reference: hq help write | read | anchors | kinds | rules |\n'
-        'stale-path.'
+        'stale-path | merge.'
     )
     p = argparse.ArgumentParser(
         prog='hq',

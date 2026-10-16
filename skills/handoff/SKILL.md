@@ -405,4 +405,5 @@ this file.
 - `hq help kinds`: kinds, tiers, and ledger fields.
 - `hq help rules`: R1 to W2 in full.
 - `hq help stale-path`: fixing a folder path under a former directory.
+- `hq help merge`: carrying one thread into another.
 - `hq <verb> --help`: each verb's columns and flags.
