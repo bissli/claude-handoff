@@ -780,6 +780,7 @@ def test_stop_reports_when_handoff_sha_differs_from_manifest(monkeypatch,
     handoff = folder / 'HANDOFF.md'
     _finished(folder, '1', 'aaaaaaaaaaaa')
     _finished(folder, '2', hq._sha12_path(handoff))
+    hq._record_thread('P1', _SLUG)
     handoff.write_text('# Handoff\n\n## Task\n\nWonk.\n', encoding='utf-8')
     out = _run(monkeypatch, capsys, handoff_stop, _stop_payload(root, 'P1'))
     assert json.loads(out) == {'systemMessage': (
@@ -805,6 +806,8 @@ def test_stop_compares_against_the_rewrite_an_adopt_row_records(
     handoff = folder / 'HANDOFF.md'
     _finished(folder, '3', 'aaaaaaaaaaaa',
               rewrite_sha=hq._sha12_path(handoff))
+    for session in ('R1', 'R2'):
+        hq._record_thread(session, _SLUG)
     assert _run(monkeypatch, capsys, handoff_stop,
                 _stop_payload(root, 'R1')) == ''
     handoff.write_text('# Handoff\n\n## Task\n\nOther.\n', encoding='utf-8')
@@ -828,6 +831,8 @@ def test_stop_silent_when_it_matches(monkeypatch, capsys, tmp_path):
     handoff = folder / 'HANDOFF.md'
     _finished(folder, '1', 'aaaaaaaaaaaa')
     _finished(folder, '2', hq._sha12_path(handoff))
+    for session in ('Q1', 'Q2', 'Q3'):
+        hq._record_thread(session, _SLUG)
     assert _run(monkeypatch, capsys, handoff_stop,
                 _stop_payload(root, 'Q1')) == ''
     (folder / '.hq.lock').write_text(f'slug={_SLUG}\ncycle=2\n',
@@ -856,6 +861,8 @@ def test_stop_reports_once_per_session_with_flag_set_or_not(monkeypatch,
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     handoff = folder / 'HANDOFF.md'
     _finished(folder, '1', hq._sha12_path(handoff))
+    for session in ('R1', 'R2'):
+        hq._record_thread(session, _SLUG)
     handoff.write_text('# Handoff\n\n## Task\n\nFirst edit.\n',
                        encoding='utf-8')
     assert 'HANDOFF.md' in _run(monkeypatch, capsys, handoff_stop,
@@ -899,6 +906,7 @@ def test_stop_keeps_the_band_message(monkeypatch, capsys, tmp_path):
     before = band.read_bytes()
     handoff = folder / 'HANDOFF.md'
     _finished(folder, '1', 'aaaaaaaaaaaa')
+    hq._record_thread('B1', _SLUG)
     assert 'HANDOFF.md' in _run(monkeypatch, capsys, handoff_stop,
                                 _stop_payload(root, 'B1'))
     assert band.read_bytes() == before
@@ -916,10 +924,57 @@ def test_stop_ignores_subagents(monkeypatch, capsys, tmp_path):
     root, folder = _handoff_root(tmp_path)
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     _finished(folder, '1', 'aaaaaaaaaaaa')
+    for session in ('T1', 'T2'):
+        hq._record_thread(session, _SLUG)
     assert 'HANDOFF.md' in _run(monkeypatch, capsys, handoff_stop,
                                 _stop_payload(root, 'T1'))
     assert _run(monkeypatch, capsys, handoff_stop,
                 _stop_payload(root, 'T2', agent_id='agent-9')) == ''
+
+
+def test_stop_silent_for_a_session_on_no_thread(monkeypatch, capsys, tmp_path):
+    """Verify a drifted handoff says nothing to a session that never opened it.
+
+    Mutation: falling back to every folder under .handoff when the session
+    holds no thread record, which nags each session in the project.
+    Oracle: a spy on stdout - the same drifted folder is silent with no
+    record and reports once hq._record_thread puts the session on it.
+    """
+    root, folder = _handoff_root(tmp_path)
+    monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
+    _finished(folder, '1', 'aaaaaaaaaaaa')
+    assert _run(monkeypatch, capsys, handoff_stop,
+                _stop_payload(root, 'N1')) == ''
+    hq._record_thread('N1', _SLUG)
+    assert 'HANDOFF.md' in _run(monkeypatch, capsys, handoff_stop,
+                                _stop_payload(root, 'N1'))
+
+
+def test_stop_names_only_the_sessions_thread(monkeypatch, capsys, tmp_path):
+    """Verify drift in a sibling thread is not named to the session.
+
+    Mutation: checking every folder under .handoff rather than the one the
+    thread record names, so a session on a clean thread hears about a
+    sibling it never opened.
+    Oracle: a spy on stdout - the session's clean thread is silent beside a
+    drifted sibling, and the sibling alone is named once the session's own
+    file drifts too.
+    """
+    root, folder = _handoff_root(tmp_path)
+    monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
+    handoff = folder / 'HANDOFF.md'
+    _finished(folder, '1', hq._sha12_path(handoff))
+    sibling = root / '.handoff' / 'other-slug'
+    sibling.mkdir()
+    (sibling / 'HANDOFF.md').write_text('# Handoff\n', encoding='utf-8')
+    _finished(sibling, '1', 'aaaaaaaaaaaa')
+    hq._record_thread('M1', _SLUG)
+    assert _run(monkeypatch, capsys, handoff_stop,
+                _stop_payload(root, 'M1')) == ''
+    handoff.write_text('# Handoff\n\n## Task\n\nEdited.\n', encoding='utf-8')
+    out = _run(monkeypatch, capsys, handoff_stop, _stop_payload(root, 'M1'))
+    assert f'{_SLUG}/HANDOFF.md' in out
+    assert 'other-slug' not in out
 
 
 def test_gate_resolves_escaped_semicolon_in_where(monkeypatch, capsys, tmp_path):

@@ -244,6 +244,8 @@ def test_the_stop_hook_leaves_a_marked_folder_alone(
     folder = root / '.handoff' / _SLUG
     _cycle(_SLUG)
     (folder / 'HANDOFF.md').write_text('# Handoff\n\n## Task\n\nEdited.\n')
+    for session in ('S1', 'S2'):
+        hq._record_thread(session, _SLUG)
     capsys.readouterr()
 
     payload = {

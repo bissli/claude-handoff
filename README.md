@@ -230,10 +230,10 @@ session chose.)
   file, each path once. A read is the Read tool, the path as an
   argument of the `cat`, `head`, `tail`, `less`, or `sed -n` that
   names it, or an `hq read` receipt. At the end of a turn, a Stop hook
-  says so when `HANDOFF.md` was written by hand since its last
-  recorded cycle. Neither blocks; `HQ_GATE=0` in the environment turns
-  the first off, and `HQ_GATE_DENY=1` makes it deny the write instead
-  of reporting.
+  says so when the `HANDOFF.md` of the thread the session is on was
+  written by hand since its last recorded cycle. Neither blocks;
+  `HQ_GATE=0` in the environment turns the first off, and
+  `HQ_GATE_DENY=1` makes it deny the write instead of reporting.
 - Every line `hq` prints that calls for a move names it, and
   `hq help <topic>` (anchors, kinds, read, rules, stale-path, write) and
   `hq <verb> --help` carry the reference detail the skill file points

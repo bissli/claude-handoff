@@ -187,6 +187,7 @@ def test_stop_silent_on_unreadable_handoff(monkeypatch, capsys, tmp_path):
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     handoff = folder / 'HANDOFF.md'
     _finished(folder, '1', hq._sha12_path(handoff))
+    hq._record_thread('U1', _SLUG)
     handoff.chmod(0o000)
     try:
         out = _run(monkeypatch, capsys, handoff_stop, _stop_payload(root, 'U1'))

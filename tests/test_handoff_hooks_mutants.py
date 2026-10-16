@@ -1204,105 +1204,6 @@ def test_report_or_condition_checks_both_manifest_and_handoff(
     assert out == ''
 
 
-def test_report_continue_on_lock_not_break(monkeypatch, capsys, tmp_path):
-    """Verify continue (not break) keeps checking folders after a locked one.
-
-    Mutation: x_report__mutmut_53 (no manifest/handoff) and
-    x_report__mutmut_57 (.hq.lock) - break exits the folder loop;
-    subsequent folders are never checked.
-    Oracle: two folders; first has .hq.lock, second drifted - the second
-    is reported with continue and silent with break.
-    """
-    root = tmp_path / 'proj6'
-    (root / '.handoff').mkdir(parents=True)
-    monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
-
-    # First folder: locked (active cycle) - should be skipped.
-    locked = root / '.handoff' / 'aaa-slug'
-    locked.mkdir()
-    (locked / 'HANDOFF.md').write_text('# H\n', encoding='utf-8')
-    (locked / '.hq.lock').write_text('slug=aaa-slug\ncycle=1\n',
-                                     encoding='utf-8')
-    _finished(locked, '1', 'aaaaaaaaaaaaa')
-
-    # Second folder: drifted (HANDOFF.md changed after last cycle).
-    drifted_f = root / '.handoff' / 'bbb-slug'
-    drifted_f.mkdir()
-    (drifted_f / 'HANDOFF.md').write_text('# Original\n', encoding='utf-8')
-    _finished(drifted_f, '1', hq._sha12_path(drifted_f / 'HANDOFF.md'))
-    (drifted_f / 'HANDOFF.md').write_text('# Changed\n', encoding='utf-8')
-
-    out = _run(monkeypatch, capsys, handoff_stop, _stop_payload(root, 'ck53'))
-    # continue: locked folder skipped, drifted folder reported.
-    # break: locked folder causes break, drifted folder never reached.
-    assert 'bbb-slug' in out
-    assert 'aaa-slug' not in out
-
-
-def test_report_continue_on_empty_rows_not_break(monkeypatch, capsys,
-                                                 tmp_path):
-    """Verify continue (not break) keeps checking after a folder with no rows.
-
-    Mutation: x_report__mutmut_64 - break exits loop when rows is empty.
-    Oracle: a folder with no manifest rows followed by a drifted folder;
-    the drifted folder is reported with continue.
-    """
-    root = tmp_path / 'proj7'
-    (root / '.handoff').mkdir(parents=True)
-    monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
-
-    # First folder: has manifest.tsv but it is empty.
-    empty_f = root / '.handoff' / 'aaa-empty'
-    empty_f.mkdir()
-    (empty_f / 'HANDOFF.md').write_text('# H\n', encoding='utf-8')
-    (empty_f / 'cycles').mkdir()
-    (empty_f / 'cycles' / 'manifest.tsv').write_text('', encoding='utf-8')
-
-    # Second folder: drifted.
-    drifted_f = root / '.handoff' / 'bbb-drifted'
-    drifted_f.mkdir()
-    (drifted_f / 'HANDOFF.md').write_text('# Start\n', encoding='utf-8')
-    _finished(drifted_f, '1', hq._sha12_path(drifted_f / 'HANDOFF.md'))
-    (drifted_f / 'HANDOFF.md').write_text('# Changed\n', encoding='utf-8')
-
-    out = _run(monkeypatch, capsys, handoff_stop,
-               _stop_payload(root, 'er64'))
-    assert 'bbb-drifted' in out
-
-
-def test_report_continue_on_matching_sha_not_break(monkeypatch, capsys,
-                                                   tmp_path):
-    """Verify continue (not break) keeps checking after a matching SHA.
-
-    Mutation: x_report__mutmut_72 - break exits loop when current SHA
-    matches the last manifest row. Subsequent folders with drifted shas
-    are never checked.
-    Oracle: two folders; first sha matches (no drift), second drifted -
-    the second is reported with continue.
-    """
-    root = tmp_path / 'proj8'
-    (root / '.handoff').mkdir(parents=True)
-    monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
-
-    # First folder: sha matches -> no drift, loop should continue.
-    ok_f = root / '.handoff' / 'aaa-ok'
-    ok_f.mkdir()
-    (ok_f / 'HANDOFF.md').write_text('# Match\n', encoding='utf-8')
-    _finished(ok_f, '1', hq._sha12_path(ok_f / 'HANDOFF.md'))
-
-    # Second folder: drifted.
-    drift_f = root / '.handoff' / 'bbb-drift'
-    drift_f.mkdir()
-    (drift_f / 'HANDOFF.md').write_text('# Original\n', encoding='utf-8')
-    _finished(drift_f, '1', hq._sha12_path(drift_f / 'HANDOFF.md'))
-    (drift_f / 'HANDOFF.md').write_text('# Edited\n', encoding='utf-8')
-
-    out = _run(monkeypatch, capsys, handoff_stop,
-               _stop_payload(root, 'sm72'))
-    assert 'bbb-drift' in out
-    assert 'aaa-ok' not in out
-
-
 def test_report_returns_zero_when_no_drift(monkeypatch, tmp_path):
     """Verify report() returns 0 when no folder has drifted.
 
@@ -1364,6 +1265,7 @@ def test_report_mkdir_creates_nested_state_dir(monkeypatch, tmp_path):
     state = tmp_path / 'new2' / 'nested' / 'statedir'
     monkeypatch.setenv('HQ_STATE_DIR', str(state))
     _finished(folder, '1', 'deadbeefaaaa')
+    hq._record_thread('mk136', _SLUG)
     payload = _stop_payload(root, 'mk136')
     # Raises FileNotFoundError under mutant; succeeds here.
     assert handoff_stop.report(payload) == 0
@@ -1382,6 +1284,7 @@ def test_report_returns_zero_at_end_after_printing(monkeypatch, tmp_path):
     state.mkdir()
     monkeypatch.setenv('HQ_STATE_DIR', str(state))
     _finished(folder, '1', 'aaaaaaaaaaaa')
+    hq._record_thread('end157', _SLUG)
     result = handoff_stop.report(_stop_payload(root, 'end157'))
     assert result == 0
 
@@ -1654,42 +1557,6 @@ def test_gate_relative_read_path_resolved_before_opened_check(
     assert out == ''
 
 
-def test_report_continue_on_missing_manifest_not_break(monkeypatch, capsys,
-                                                       tmp_path):
-    """Verify continue (not break) keeps iterating after a folder with no files.
-
-    Mutation: x_report__mutmut_53, x_report__mutmut_57,
-    x_report__mutmut_64, x_report__mutmut_72 - apply_mutant places break at
-    the 'not manifest.is_file() or not handoff.is_file()' guard (the first
-    12-space continue). A folder that lacks its manifest triggers the guard;
-    the break exits the for loop before reaching subsequent drifted folders.
-    Oracle: two folders; first lacks manifest.tsv, second is drifted - the
-    second folder is reported with continue and missed with break.
-    """
-    root = tmp_path / 'proj9'
-    (root / '.handoff').mkdir(parents=True)
-    monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
-
-    # First folder: HANDOFF.md but no cycles/manifest.tsv -> triggers line 78.
-    no_manifest = root / '.handoff' / 'aaa-nomanifest'
-    no_manifest.mkdir()
-    (no_manifest / 'HANDOFF.md').write_text('# H\n', encoding='utf-8')
-
-    # Second folder: drifted (HANDOFF.md changed after last cycle).
-    drifted_f = root / '.handoff' / 'bbb-drifted'
-    drifted_f.mkdir()
-    (drifted_f / 'HANDOFF.md').write_text('# Original\n', encoding='utf-8')
-    _finished(drifted_f, '1', hq._sha12_path(drifted_f / 'HANDOFF.md'))
-    (drifted_f / 'HANDOFF.md').write_text('# Changed\n', encoding='utf-8')
-
-    out = _run(monkeypatch, capsys, handoff_stop,
-               _stop_payload(root, 'nm53'))
-    # With continue: aaa-nomanifest skipped, bbb-drifted reported.
-    # With break: aaa-nomanifest triggers break, bbb-drifted never reached.
-    assert 'bbb-drifted' in out
-    assert 'aaa-nomanifest' not in out
-
-
 def test_report_session_fallback_is_lowercase(monkeypatch, tmp_path):
     """Verify the missing-session fallback is 'unknown', not 'UNKNOWN'.
 
@@ -1705,6 +1572,7 @@ def test_report_session_fallback_is_lowercase(monkeypatch, tmp_path):
     (folder / 'HANDOFF.md').write_text('# H\n', encoding='utf-8')
     _finished(folder, '1', hq._sha12_path(folder / 'HANDOFF.md'))
     (folder / 'HANDOFF.md').write_text('# Changed\n', encoding='utf-8')
+    hq._record_thread('unknown', _SLUG)
     # No session_id -> fallback to 'unknown'.
     payload = _stop_payload(root, None)
     handoff_stop.report(payload)
@@ -1725,6 +1593,8 @@ def test_report_state_dir_default_fires_without_env(monkeypatch, tmp_path):
     monkeypatch.delenv('HQ_STATE_DIR', raising=False)
     monkeypatch.setattr(handoff_stop, 'STATE_DIR',
                         str(tmp_path / 'default_state'))
+    monkeypatch.setattr(hq, 'STATE_DIR', str(tmp_path / 'default_state'))
+    hq._record_thread('sd99', _SLUG)
     (folder / 'HANDOFF.md').write_text('# H\n', encoding='utf-8')
     _finished(folder, '1', hq._sha12_path(folder / 'HANDOFF.md'))
     (folder / 'HANDOFF.md').write_text('# Changed\n', encoding='utf-8')

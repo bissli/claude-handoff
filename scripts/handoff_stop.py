@@ -6,8 +6,10 @@ on. An agent that writes the file directly - the habit the skill exists
 to replace - leaves that digest behind, and nothing says so until the
 next ``hq open`` prints LEDGER BEHIND, often a session later.
 
-This hook compares the file against the last recorded digest at the end
-of every turn and names the cycle the folder is now behind.
+This hook compares the file of the thread the session is on - the slug
+``hq open``, ``begin``, or ``adopt`` records - against its last recorded
+digest at the end of every turn, and names the cycle it is now behind.
+A session on no thread hears nothing, and no other thread is named.
 
 Notes
 -----
@@ -43,7 +45,8 @@ STATE_DIR = os.path.expanduser('~/.claude/cache/claude-handoff')
 
 
 def report(payload: dict[str, Any]) -> int:
-    """Name every handoff whose file has drifted from its last cycle.
+    """Name the session's thread when its HANDOFF.md has drifted from its
+    last cycle.
 
     Parameters
     ----------
@@ -66,40 +69,36 @@ def report(payload: dict[str, Any]) -> int:
     """
     if payload.get('agent_id') or payload.get('stop_hook_active'):
         return 0
+    session = str(payload.get('session_id') or 'unknown').replace('/', '_')
+    try:
+        slug = hq._thread_record(session).read_text(encoding='utf-8').strip()
+    except OSError:
+        return 0
+    if not slug:
+        return 0
     name = hq.HANDOFF_DIRNAME
     start = pathlib.Path(str(payload.get('cwd') or '') or '.')
-    root = None
+    folder = None
     for candidate in [start, *start.parents]:
-        if next((candidate / name).glob('*/cycles/manifest.tsv'), None):
-            root = candidate
+        if (candidate / name / slug / 'cycles' / 'manifest.tsv').is_file():
+            folder = candidate / name / slug
             break
-    if root is None:
+    if folder is None:
         return 0
 
-    drifted: list[tuple[str, str, str]] = []
-    for folder in sorted((root / name).iterdir()):
-        handoff = folder / 'HANDOFF.md'
-        manifest = folder / 'cycles' / 'manifest.tsv'
-        if not manifest.is_file() or not handoff.is_file():
-            continue
-        if (folder / '.hq.lock').exists():
-            continue
-        # A thread hq done has closed is no longer anyone's to file.
-        if (folder / hq._DONE_NAME).exists():
-            continue
-        rows = hq._read_tsv(manifest, hq.MANIFEST_FIELDS)
-        if not rows:
-            continue
-        current = hq._sha12_path(handoff)
-        if current == '-':
-            continue
-        if current == hq.live_sha(rows[-1]):
-            continue
-        drifted.append((folder.name, current, rows[-1]['cycle']))
-    if not drifted:
+    handoff = folder / 'HANDOFF.md'
+    if not handoff.is_file() or (folder / '.hq.lock').exists():
+        return 0
+    # A thread hq done has closed is no longer anyone's to file.
+    if (folder / hq._DONE_NAME).exists():
+        return 0
+    rows = hq._read_tsv(folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS)
+    if not rows:
+        return 0
+    current = hq._sha12_path(handoff)
+    if current in {'-', hq.live_sha(rows[-1])}:
         return 0
 
-    session = str(payload.get('session_id') or 'unknown').replace('/', '_')
     state_dir = pathlib.Path(os.environ.get('HQ_STATE_DIR', STATE_DIR))
     state_path = state_dir / f'{session}.handoff.json'
     try:
@@ -109,24 +108,22 @@ def report(payload: dict[str, Any]) -> int:
     if not isinstance(state, dict):
         state = {}
     announced = (state.get('stop') or {}).get('reported') or {}
-    fresh = [item for item in drifted if announced.get(item[0]) != item[1]]
-    if not fresh:
+    if announced.get(slug) == current:
         return 0
 
-    for slug, sha, _ in fresh:
-        announced[slug] = sha
+    announced[slug] = current
     state['stop'] = {'reported': announced}
     try:
         state_dir.mkdir(parents=True, exist_ok=True)
         state_path.write_text(json.dumps(state), encoding='utf-8')
     except OSError:
         pass
-    clauses = '; '.join(
-        f'{name}/{slug}/HANDOFF.md was written by hand since cycle {cycle} '
-        f'finished; run hq begin {slug}, then hq finish {slug} '
-        f'--log "...", or the next open reports LEDGER BEHIND'
-        for slug, _, cycle in fresh)
-    json.dump({'systemMessage': f'handoff: {clauses}'}, sys.stdout)
+    cycle = rows[-1]['cycle']
+    message = (
+        f'handoff: {name}/{slug}/HANDOFF.md was written by hand since cycle'
+        f' {cycle} finished; run hq begin {slug}, then hq finish {slug}'
+        ' --log "...", or the next open reports LEDGER BEHIND')
+    json.dump({'systemMessage': message}, sys.stdout)
     return 0
 
 
