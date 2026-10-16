@@ -977,6 +977,23 @@ def test_stop_names_only_the_sessions_thread(monkeypatch, capsys, tmp_path):
     assert 'other-slug' not in out
 
 
+def test_stop_finds_the_thread_from_a_subdirectory(monkeypatch, capsys, tmp_path):
+    """Verify a session whose cwd is below the project root still hears.
+
+    Mutation: searching cwd alone rather than cwd and its parents, which
+    silences every session that cd'd into the source tree.
+    Oracle: a spy on stdout - the drifted thread is named with cwd at
+    root/src, two levels below the folder's .handoff.
+    """
+    root, folder = _handoff_root(tmp_path)
+    monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
+    _finished(folder, '1', 'aaaaaaaaaaaa')
+    hq._record_thread('W1', _SLUG)
+    out = _run(monkeypatch, capsys, handoff_stop,
+               _stop_payload(root / 'src', 'W1'))
+    assert f'{_SLUG}/HANDOFF.md' in out
+
+
 def test_gate_resolves_escaped_semicolon_in_where(monkeypatch, capsys, tmp_path):
     r"""Verify a heading whose text contains a semicolon resolves correctly.
 

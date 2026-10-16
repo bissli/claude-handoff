@@ -1137,108 +1137,41 @@ def test_report_returns_zero_for_subagent_stop(monkeypatch, tmp_path):
     assert handoff_stop.report(payload) == 0
 
 
-def test_report_root_none_not_string_sentinel(monkeypatch, tmp_path):
-    """Verify root=None (not '') is the sentinel for no manifest found.
+def test_report_returns_zero_when_thread_folder_missing(monkeypatch, tmp_path):
+    """Verify report() returns 0 when the thread's folder is not found.
 
-    Mutation: x_report__mutmut_19 - root="" means 'if root is None'
-    does not fire; the code proceeds with "" as a pathlib base.
-    Oracle: report() returns 0 for a bare directory with no manifest.
-    """
-    monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
-    bare = tmp_path / 'barereport'
-    bare.mkdir()
-    payload = _stop_payload(bare, 'rn0')
-    assert handoff_stop.report(payload) == 0
-
-
-def test_report_next_without_default_raises_on_empty_dir(
-        monkeypatch, tmp_path):
-    """Verify next(..., None) survives a .handoff/ with no manifest.
-
-    Mutation: x_report__mutmut_22 - removes None sentinel from next(),
-    raising StopIteration when .handoff/ has no manifest.tsv.
-    Oracle: report() returns 0 even when .handoff/ is empty.
-    """
-    monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
-    bare = tmp_path / 'emptydir'
-    bare.mkdir()
-    (bare / '.handoff').mkdir()
-    payload = _stop_payload(bare, 'rn22')
-    assert handoff_stop.report(payload) == 0
-
-
-def test_report_returns_zero_when_no_manifest_root(monkeypatch, tmp_path):
-    """Verify report() returns 0 when no folder with manifest.tsv exists.
-
-    Mutation: x_report__mutmut_32 - return 0 -> return 1 after root-not-
-    found check. The hook must fail open when no project is found.
+    Mutation: return 0 -> return 1 after the no-folder check. The hook
+    must fail open when cwd holds no folder for the session's thread.
     Oracle: direct report() return value.
     """
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
+    hq._record_thread('rr32', _SLUG)
     payload = _stop_payload(tmp_path, 'rr32')
     assert handoff_stop.report(payload) == 0
 
 
-def test_report_or_condition_checks_both_manifest_and_handoff(
-        monkeypatch, capsys, tmp_path):
-    """Verify or (not and) skips folder when EITHER file is missing.
-
-    Mutation: x_report__mutmut_50 - changes or to and. A folder with
-    a manifest but NO HANDOFF.md (missing one file) would be processed
-    rather than skipped, causing an error or false report.
-    Oracle: a folder with manifest but no HANDOFF.md is silent.
-    """
-    root, folder = _handoff_root(tmp_path)
-    monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
-    # Create cycles/manifest.tsv so root is found, but no HANDOFF.md.
-    (folder / 'HANDOFF.md').unlink()
-    (folder / 'cycles').mkdir(exist_ok=True)
-    row = dict.fromkeys(hq.MANIFEST_FIELDS, '-')
-    row.update({'cycle': '1', 'written': _NOW, 'handoff_sha': 'aaa'})
-    hq._append_tsv(folder / 'cycles' / 'manifest.tsv',
-                   hq.MANIFEST_FIELDS, row, _MANIFEST_HEADER)
-    payload = _stop_payload(root, 'or50')
-    out = _run(monkeypatch, capsys, handoff_stop, payload)
-    # With or: HANDOFF.md missing -> skip -> no output.
-    # With and: only skips if BOTH missing -> tries to sha a missing file.
-    assert out == ''
-
-
 def test_report_returns_zero_when_no_drift(monkeypatch, tmp_path):
-    """Verify report() returns 0 when no folder has drifted.
+    """Verify report() returns 0 when the thread's file has not drifted.
 
-    Mutation: x_report__mutmut_79 - return 0 -> return 1 after the
-    empty-drifted check. A clean project must fail open.
-    Oracle: direct report() return value when all SHAs match.
+    Mutation: return 0 -> return 1 after the digest-match check. A clean
+    thread must fail open.
+    Oracle: direct report() return value when the SHAs match.
     """
     root, folder = _handoff_root(tmp_path)
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     handoff = folder / 'HANDOFF.md'
     _finished(folder, '1', hq._sha12_path(handoff))
+    hq._record_thread('nd79', _SLUG)
     payload = _stop_payload(root, 'nd79')
-    assert handoff_stop.report(payload) == 0
-
-
-def test_report_state_dir_env_fallback_default(monkeypatch, tmp_path):
-    """Verify report() uses STATE_DIR when HQ_STATE_DIR is unset.
-
-    Mutation: x_report__mutmut_99 - removes STATE_DIR default so
-    os.environ.get() returns None, causing pathlib.Path(None) TypeError.
-    Oracle: report() returns 0 with HQ_STATE_DIR unset.
-    """
-    monkeypatch.delenv('HQ_STATE_DIR', raising=False)
-    payload = _stop_payload(tmp_path, 'env99')
-    # No manifest root -> early return. Must not raise.
     assert handoff_stop.report(payload) == 0
 
 
 def test_report_returns_zero_when_all_already_announced(monkeypatch,
                                                         tmp_path):
-    """Verify report() returns 0 when all drifted folders are already known.
+    """Verify report() returns 0 when the drift is already announced.
 
-    Mutation: x_report__mutmut_127 - return 0 -> return 1 after the
-    empty-fresh check. A session that has already reported must still
-    fail open (exit 0).
+    Mutation: return 0 -> return 1 after the already-announced check. A
+    session that has already reported must still fail open (exit 0).
     Oracle: direct report() return value on second call with same drift.
     """
     root, folder = _handoff_root(tmp_path)
@@ -1247,6 +1180,7 @@ def test_report_returns_zero_when_all_already_announced(monkeypatch,
     monkeypatch.setenv('HQ_STATE_DIR', str(state))
     handoff = folder / 'HANDOFF.md'
     _finished(folder, '1', 'aaaaaaaaaaaa')
+    hq._record_thread('an127', _SLUG)
     # First call reports the drift.
     handoff_stop.report(_stop_payload(root, 'an127'))
     # Second call: same drift, already announced -> must return 0.
