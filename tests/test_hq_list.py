@@ -639,7 +639,7 @@ def test_finish_survives_a_corrupt_worked_record(
     monkeypatch.setenv('HQ_NOW', '2026-10-01T12:00:00')
     monkeypatch.setenv('HQ_SESSION', 'creator')
     assert hq.main(['begin', _SLUG]) == 0
-    (pathlib.Path(tmp_path) / 'creator.worked').write_bytes(b'\xff\n')
+    (root / '.handoff' / _SLUG / '.hq.worked').write_bytes(b'\xff\n')
     header = _cycle(root, '02', 'creator', monkeypatch)
     capsys.readouterr()
     assert header == 'Written: 2026-10-02 | Cycle: 1 | Last worked: 2026-10-01'
@@ -865,6 +865,67 @@ def test_open_succeeds_when_the_state_dir_is_unwritable(
     monkeypatch.setenv('HQ_STATE_DIR', str(blocker / 'state'))
     monkeypatch.setenv('HQ_SESSION', 'worker')
     assert hq.main(['open', _SLUG]) == 0
+
+
+def test_an_unwritable_state_dir_still_moves_last_worked(
+        tmp_path, monkeypatch, capsys):
+    """A session whose state dir is unwritable, as under a Bash sandbox,
+    still moves the date of the thread it works.
+
+    Mutation: the worked record kept under HQ_STATE_DIR.
+    Oracle: X created on 10-01; the worker, with HQ_STATE_DIR under a
+    regular file, opens X and cycles it on 10-05.
+    """
+    root = _new_root(tmp_path, monkeypatch)
+    _cycle(root, '01', 'creator', monkeypatch)
+    blocker = pathlib.Path(tmp_path) / 'blocker'
+    blocker.write_text('')
+    monkeypatch.setenv('HQ_STATE_DIR', str(blocker / 'state'))
+    monkeypatch.setenv('HQ_SESSION', 'worker')
+    assert hq.main(['open', _SLUG]) == 0
+    monkeypatch.setenv('HQ_CYCLE', '2')
+    header = _cycle(root, '05', 'worker', monkeypatch)
+    capsys.readouterr()
+    assert header == 'Written: 2026-10-05 | Cycle: 2 | Last worked: 2026-10-05'
+
+
+def test_a_repeat_claim_leaves_the_worked_record_untouched(
+        tmp_path, monkeypatch, capsys):
+    """A second open by the session already holding the thread writes
+    nothing, so a synced folder sees no change.
+
+    Mutation: the held-already early return dropped, so every open
+    rewrites the record.
+    Oracle: the record's mtime set to the epoch before the second open.
+    """
+    root = _new_root(tmp_path, monkeypatch)
+    _cycle(root, '01', 'creator', monkeypatch)
+    monkeypatch.setenv('HQ_SESSION', 'worker')
+    assert hq.main(['open', _SLUG]) == 0
+    record = root / '.handoff' / _SLUG / '.hq.worked'
+    os.utime(record, (0, 0))
+    assert hq.main(['open', _SLUG]) == 0
+    capsys.readouterr()
+    assert record.stat().st_mtime == 0
+
+
+def test_open_reports_a_worked_record_it_cannot_write(
+        tmp_path, monkeypatch, capsys):
+    """Open on a read-only record still exits 0 and names the failure.
+
+    Mutation: the write left unguarded, so open exits 1 after printing
+    its brief, or the failure passed over in silence.
+    Oracle: the creator's record set read-only before a worker opens.
+    """
+    root = _new_root(tmp_path, monkeypatch)
+    _cycle(root, '01', 'creator', monkeypatch)
+    record = root / '.handoff' / _SLUG / '.hq.worked'
+    record.chmod(0o444)
+    monkeypatch.setenv('HQ_SESSION', 'worker')
+    rc, out, _ = _run(['open', _SLUG], capsys)
+    record.chmod(0o644)
+    assert rc == 0
+    assert 'advisory: worked record not written' in out
 
 
 def test_begin_after_a_lost_ledger_keeps_last_worked(

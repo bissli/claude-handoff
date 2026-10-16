@@ -114,6 +114,7 @@ _SPEC_PATS = ['SPEC*', 'DESIGN*', 'PROPOSAL*', '*-DECLARATION*']
 _DRAFT_EXTS = {'.py', '.sql', '.js', '.ts', '.ps1'}
 _WORK_PIN_NAME = 'work-dir'
 _DONE_NAME = '.hq.done'
+_WORKED_NAME = '.hq.worked'
 _TEMP_DIRS = (
     pathlib.Path(os.path.abspath(tempfile.gettempdir())), pathlib.Path('/tmp'))
 _KIND_DIRS = {'specs': 'spec', 'drafts': 'draft', 'notes': 'notes', 'outputs': 'other'}
@@ -4799,7 +4800,7 @@ def _verb_begin(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
             survived.append('archived cycles')
         # A handoff created while the session works another live thread
         # is a spin-off, which is housekeeping.
-        held = pathlib.Path(_worked_thread(str(anch['session'])) or folder)
+        held = pathlib.Path(_worked_thread(str(anch['session']), folder) or folder)
         spin_off = (
             (held / 'HANDOFF.md').is_file()
             and not (held / _DONE_NAME).exists())
@@ -6007,7 +6008,7 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
             f' {folder.name} --kind evidence --grep "contradicts \\["')
     log_text = ' '.join((getattr(argv, 'log', '') or '').split())
     last_worked = anch['now'][:10]
-    if _worked_thread(str(session)) != str(folder.resolve()):
+    if _worked_thread(str(session), folder) != str(folder.resolve()):
         prior_m = (
             _WORKED_PAT.search(parsed['header'])
             or re.search(r'Written:\s*(\d{4}-\d{2}-\d{2})', parsed['header']))
@@ -7665,24 +7666,38 @@ def _record_worked(session: str, folder: pathlib.Path) -> None:
         Session id, as ``anchors`` resolved it. An empty or 'unknown'
         id records nothing, since every shell without an id shares it.
     folder : pathlib.Path
-        Handoff folder, stored resolved.
+        Handoff folder. Its ``.hq.worked`` takes the id over any other
+        session's, and a sibling's record of this id is removed.
     """
     if session in {'', 'unknown'}:
         return
-    path = _thread_record(session).with_suffix('.worked')
-    with contextlib.suppress(OSError):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(f'{folder.resolve()}\n', encoding='utf-8')
+    held = _worked_thread(session, folder)
+    if held == str(folder.resolve()):
+        return
+    # The verb already succeeded: a read-only folder costs the date,
+    # never the exit code.
+    try:
+        if held:
+            (pathlib.Path(held) / _WORKED_NAME).unlink(missing_ok=True)
+        (folder / _WORKED_NAME).write_text(f'{session}\n', encoding='utf-8')
+    except OSError as exc:
+        print(
+            f'advisory: worked record not written: {exc.filename}:'
+            f" {exc.strerror} - this session's finish keeps Last worked")
 
 
-def _worked_thread(session: str) -> str:
-    """Resolved folder ``_record_worked`` holds for session, '' for none.
+def _worked_thread(session: str, folder: pathlib.Path) -> str:
+    """Resolved path of folder or the sibling whose ``.hq.worked`` holds
+    session; '' for none.
     """
     if session in {'', 'unknown'}:
         return ''
-    with contextlib.suppress(OSError):
-        return _thread_record(session).with_suffix('.worked').read_text(
-            encoding='utf-8', errors='replace').strip()
+    for sibling in folder.parent.iterdir():
+        record = sibling / _WORKED_NAME
+        if not record.is_file():
+            continue
+        if record.read_text(encoding='utf-8', errors='replace').strip() == session:
+            return str(sibling.resolve())
     return ''
 
 
