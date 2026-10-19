@@ -1,14 +1,32 @@
 # claude-handoff
 
-A Claude Code plugin that tells you, in session and while there is still
-room, that the conversation has grown expensive enough to hand off.
+**A Claude Code plugin that says, in session and while there is still room, when a conversation has grown expensive enough to hand off, and ships the `/handoff` skill that hands it off.**
+
+Claude Code re-sends the whole conversation on every API call, so each turn costs more than the one before it. At the end of each turn the plugin reads the session transcript, prices the cycle, and warns at the context where handing off costs less than carrying on. `/handoff` writes the session's state to `.handoff/<slug>/`, and a fresh session reads it back and resumes.
 
 ```
 218K/256K [========--] handoff in 2  ~$0.38/t opus-5-5 myproject
 262K/256K [==========] handoff now  ~$0.46/t opus-5-5 myproject
 310K/256K  1.2x over  ~$0.55/t opus-5-5 myproject
-218K/256K [========--] handoff in 2  ~$0.38/t opus-5-5 myproject:auth-token
 ```
+
+## The problem
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/resend-dark.svg">
+  <img alt="Stacked columns of tokens sent per turn. Each turn adds about 17K new tokens on top of everything before it, and the whole stack is re-sent every turn, reaching about 270K by turn 12." src="docs/resend-light.svg">
+</picture>
+
+Each turn adds about 17K tokens and re-sends everything before it.
+
+Prompt caching makes the re-read cheap: a cached token costs a twentieth of a fresh one on Opus 5.5 and a fortieth on Fable 5.1. It does nothing about the count of tokens re-read, which grows every turn. The cost of a turn climbs in a straight line, so the cost of a session climbs as its square.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/session-cost-dark.svg">
+  <img alt="Cumulative cost of a 40-turn session, growing 17K a turn. On Opus 5.5, running on reaches $28 while handing off at 352K holds it to $14. On Fable 5.1, running on reaches $35 while handing off at 282K holds it to $15." src="docs/session-cost-light.svg">
+</picture>
+
+Forty turns growing 17K a turn. Running on costs $28 on Opus 5.5 and $35 on Fable 5.1. Handing off at the target holds it to $14 and $15.
 
 ## Install
 
@@ -17,505 +35,52 @@ room, that the conversation has grown expensive enough to hand off.
 /plugin install claude-handoff@claude-handoff
 ```
 
-The first command registers this repo as a plugin source (a
-"marketplace"); the second installs the hooks and the `/handoff`
-command from it. It needs `python3` 3.11 or later on `PATH` and nothing
-else. The status line takes one manual step, described
-[below](#status-line-optional-one-manual-step).
+The first command registers the repo as a plugin marketplace. The second installs the hooks, the `/handoff` skill, and the `hq` command. The plugin needs `python3` 3.11 or later on `PATH`. The status line takes one manual step ([Status line](#status-line)).
 
-## The problem
+## Usage
 
-Claude Code talks to a stateless API: every request re-sends the whole
-conversation. A turn - one prompt from you, plus everything Claude does
-before it waits for you again - is about 9 requests, one per tool call,
-and every one of them re-sends everything that came before it.
+The Stop hook prints each of these once, as the session crosses the line:
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/resend-dark.svg">
-  <img alt="Stacked columns of tokens sent per turn. Each turn adds about
-17K new tokens on top of everything before it, and the whole stack is
-re-sent every turn, reaching about 270K by turn 12."
-src="docs/resend-light.svg">
-</picture>
+> Context 283K, at the 277K handoff point for this cycle, growing 20K a turn - a good point to run /handoff.
 
-Prompt caching is what makes this affordable at all: a token re-read
-from the cache costs a twentieth of a fresh one on Opus 5.5 and a
-fortieth on Fable 5.1. The two models this matters most for are Opus
-5.5, Claude Code's default, and Fable 5.1, the top tier, which bills
-two and a half times as much for a fresh token. Sonnet 5 re-reads
-history at Opus 5.5's price, so it is gauged the same way.
+> Context 310K, 33K past the 277K handoff point, where a handoff begun there would have finished. Every further turn raises the cost of each call of work. Run /handoff.
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/cache-discount-dark.svg">
-  <img alt="Two panels comparing the cost of one turn as context grows to
-500K. On Opus 5.5 the turn costs $17.60 at full price and $0.88 through
-the cache. On Fable 5.1 it costs $44.00 at full price and $1.10 through
-the cache."
-src="docs/cache-discount-light.svg">
-</picture>
+The second also sends a desktop notification through the terminal.
 
-But the discount is not a cure. The cache lowers the price of each
-re-read token; it does nothing about the number of tokens re-read, which
-grows every turn and never shrinks. Zoom in on the cached lines above
-and the climb is still there:
+`/handoff` with no verb decides between write and read by content. A session holding anything a fresh session needs that the repo does not hold writes. A session that has only looked something up reads. Where the verb or the target is ambiguous, it lists the candidates and stops.
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/cost-per-turn-dark.svg">
-  <img alt="Cost of one turn against context, at cache-read prices.
-Both lines climb straight from zero: Fable 5.1 reaches $2.20 a turn at
-1M tokens, Opus 5.5 reaches $1.76."
-src="docs/cost-per-turn-light.svg">
-</picture>
+| Command                 | Action                                       |
+| ----------------------- | -------------------------------------------- |
+| `/handoff`              | write or read, decided by content            |
+| `/handoff <slug>`       | the same, against `.handoff/<slug>/`         |
+| `/handoff write [slug]` | write, skipping the decision                 |
+| `/handoff read [slug]`  | read one back and resume its plan            |
+| `/handoff list`         | every open handoff in the repo, newest first |
+| `/handoff check [slug]` | review one handoff in place and fix it       |
+| `/handoff done <slug>`  | end the thread; `--undo` reopens it          |
+| `/handoff --no-check`   | write without the reviewer pass              |
 
-So the plugin warns where a cycle's cost per call of work is lowest,
-not at a fixed dollar or token line. Carrying on re-reads a growing
-context on every call. Handing off pays a cycle's fixed overhead again:
-the resume, the write, the cache writes of the floor, and the output
-the resume and the write bill. The point between the two moves with
-the resume, the growth rate, and the prices of a cache write and of
-output against a read. [The handoff point](#the-handoff-point)
-has the arithmetic.
+A write ends with a reviewer pass: a fresh agent reads the file cold and reports what a resuming session could not act on. Only the user's `--no-check` skips it. After the write, the session is killed and a fresh one runs the printed `resume:` line.
 
-Every figure below already includes the cache discount. The bill being
-discussed is the discounted one.
-
-## What a turn costs, point by point
-
-One turn costs `context x cache-read rate x 8.8 calls`. The tables show
-that cost at each context size and what the same turn would have cost
-without the cache. Neither model holds a fixed dollar line: [the
-handoff point](#the-handoff-point) moves with the session's own resume
-and growth rate, not with a row in this table.
-
-**Opus 5.5** - cache read $0.20 per million tokens:
-
-| context | one turn | without cache | cache saved |
-| ------- | --------: | -------------: | -----------: |
-| 100K    | $0.18    | $3.52         | $3.34       |
-| 200K    | $0.35    | $7.04         | $6.69       |
-| 400K    | $0.70    | $14.08        | $13.38      |
-| 500K    | $0.88    | $17.60        | $16.72      |
-| 700K    | $1.23    | $24.64        | $23.41      |
-| 1M      | $1.76    | $35.20        | $33.44      |
-
-**Fable 5.1** - cache read $0.25 per million tokens:
-
-| context | one turn | without cache | cache saved |
-| ------- | --------: | -------------: | -----------: |
-| 100K    | $0.22    | $8.80         | $8.58       |
-| 282K    | $0.62    | $24.82        | $24.20      |
-| 400K    | $0.88    | $35.20        | $34.32      |
-| 500K    | $1.10    | $44.00        | $42.90      |
-| 700K    | $1.54    | $61.60        | $60.06      |
-| 1M      | $2.20    | $88.00        | $85.80      |
-
-Read the Fable 5.1 row at 500K: a session parked there pays $1.10 for
-every further turn, and the cache is already saving it $42.90 a turn.
-Both columns grow together, because both are the same line at
-different prices.
-
-## What a whole session costs
-
-Per-turn cost climbs in a straight line, so a session's total climbs as
-its square: each new turn costs more than the one before it. Handing off
-resets the line; running on rides it up.
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/session-cost-dark.svg">
-  <img alt="Cumulative cost of a 40-turn session, growing 17K a turn.
-On Opus 5.5, running on reaches $28 while handing off at 352K holds it
-to $14. On Fable 5.1, running on reaches $35 while handing off at 282K
-holds it to $15."
-src="docs/session-cost-light.svg">
-</picture>
-
-Forty turns, growing 17K a turn, starting at the 69K fresh-session
-floor, restarting at 72K after each handoff. Writing a handoff spends
-about two of those turns, so the held column also buys a little less
-finished work, not only fewer dollars:
-
-| 40 turns on | hand off at target | run on to 732K | held vs run on |
-| ----------- | ------------------: | --------------: | --------------: |
-| Opus 5.5    | $14                | $28            | -52%           |
-| Fable 5.1   | $15                | $35            | -57%           |
-
-The cache and the handoff attack different halves of the bill. On the
-run-on Fable 5.1 session the cache already turned a would-be $1,410 into
-$35; handing off is what turns the $35 into $15. Neither substitutes
-for the other.
-
-## The exit: /handoff
-
-The warnings point at `/handoff`, a command the plugin installs. It
-writes the session's state - plan, key files with line anchors, settled
-decisions, dead ends - to `.handoff/<task-name>/HANDOFF.md`, the folder
-named after the task, and a fresh session reads it back and resumes. A
-handoff file is 2-5K, exact rather than summarized, and starts a
-session that carries nothing else beyond the ~69K floor - the system
-prompt, tool schemas, and instruction files every session re-sends in
-full.
-
-Using it:
+A thread's folder, `.handoff/<slug>/`, holds:
 
 ```
-/handoff                       writes or updates the handoff, checks it
-  (kill the session, start fresh)
-/handoff auth-refresh          reads that handoff back, resumes its plan
-/handoff list                  every handoff here, with plan progress
-/handoff check auth-refresh    re-reviews one in place
-/handoff done auth-refresh     marks the thread finished
-/handoff --no-check            writes without the reviewer pass
+HANDOFF.md      the cursor: task, next step, plan, state, open questions
+ledger.tsv      append-only record of the thread's artifacts
+standing.md     append-only decisions, constraints, dead ends, evidence
+cycles/         each finished HANDOFF.md verbatim
+specs/ drafts/ notes/ outputs/   what the thread made, by kind
 ```
 
-(`auth-refresh` stands for whatever folder name the writing
-session chose.)
+`hq`, which the plugin puts on the agent's `PATH`, writes the ledger and the standing items, renders the generated blocks of `HANDOFF.md`, and refuses the edits that lose work across cycles. `hq help` lists its reference topics, and `hq <verb> --help` each verb's flags. `.handoff/` goes in the project's `.gitignore` where handoffs stay untracked.
 
-- A write cycle ends with a reviewer pass: a fresh agent reads the
-  finished file cold and reports what a resuming session could not act
-  on. `--no-check` skips the pass, and only the person invoking the
-  command may pass that flag. A writing session never rules its own
-  cycle too small to review.
-- There is no verb to type. A session that edited a file or settled a
-  decision holds something worth telling a fresh session, so `/handoff`
-  writes; one that only looked something up reads a handoff back
-  instead. Where either the verb or the target is ambiguous, it lists
-  the candidates and stops rather than guessing.
-- The folder outlives any one file. `.handoff/<task-name>/` holds the
-  hand-written cursor - task, next step, plan, state, open questions -
-  in `HANDOFF.md`; an append-only ledger of the thread's artifacts in
-  `ledger.tsv` (which spec, draft, or notes file matters, and whether
-  it must be read before the next edit); the settled decisions,
-  constraints, dead ends, and graded evidence the work rests on in
-  `standing.md`, append-only; and every
-  finished cycle verbatim under `cycles/`. A small script, `hq.py`,
-  which the plugin puts on the agent's PATH as `hq` while it is
-  enabled, writes the ledger, renders the generated blocks of
-  `HANDOFF.md` from it, and refuses the three edits that lose work over
-  many cycles: lowering a spec's or a draft's tier without naming its
-  successor, grading a whole file as the contract with no anchor, and
-  rewriting a recorded line in place. What the thread made sits in the
-  thread folder under `specs/`, `drafts/`, `notes/`, or `outputs/`,
-  never loose at its top level, and the ledger points at it. A thread
-  whose spec and experiments already live in a project directory pins
-  that directory once with `hq work-dir`, and its specs, drafts, and
-  outputs go there instead; a pin is the thread's own, and no global
-  setting moves every thread at once.
-- Run again a session later, it updates the same folder: the cursor
-  rewritten, the plan ticked off, decisions, dead ends, and evidence
-  appended, the previous cycle archived. An item that stops holding is
-  superseded by its replacement, or retired with
-  `hq supersede <task-name> <id> --reason "<why>"` when none exists.
-  What is no longer live is counted, not printed, and what is read at
-  resume is a spec's anchored span, its size beside it, never a whole
-  file. The file grows with what stays
-  live, not with the cycle count: a thread that supersedes as it goes
-  holds its size, and one that accumulates distinct live items pays
-  about 58 tokens a cycle for them.
-- A thread ends with `/handoff done <task-name>`. The folder survives
-  whole and every query verb still answers it, but `/handoff list`
-  stops showing it and the next `hq begin` refuses it. `hq list --done`
-  names the finished threads, and `hq done <task-name> --undo` reopens
-  one. A task leaves the list without its folder being deleted.
-- Each write ends with a reviewer pass that must reconstruct the task
-  from the file alone. Reading starts with `hq open`, which reports
-  drift - a moved commit, a gated file edited since its stamp, a
-  heading an anchor no longer finds, a label a re-stamp moved past the
-  rendered block - then reads the spans the ledger
-  gates and executes the file's next step without re-litigating
-  settled decisions.
-- Two advisory hooks back it. Once a handoff is opened, at a write in
-  reach - under the project root or the thread's pinned work dir - a
-  PreToolUse hook names each gated file the session has not read: a
-  spec's span at the first such write, a draft at a write to that
-  file, each path once. A read is the Read tool, the path as an
-  argument of the `cat`, `head`, `tail`, `less`, or `sed -n` that
-  names it, or an `hq read` receipt. At the end of a turn, a Stop hook
-  says so when the `HANDOFF.md` of the thread the session is on was
-  written by hand since its last recorded cycle. Neither blocks;
-  `HQ_GATE=0` in the environment turns the first off, and
-  `HQ_GATE_DENY=1` makes it deny the write instead of reporting.
-- Every line `hq` prints that calls for a move names it, and
-  `hq help <topic>` (anchors, kinds, read, rules, stale-path, write) and
-  `hq <verb> --help` carry the reference detail the skill file points
-  at, so the skill stays short enough to survive a re-attach whole.
-- `/handoff when`, `diff`, `artifacts`, and `standing` query the
-  ledger: one path's history by any spelling of the path, the cursor
-  change between two cycles by section, every live artifact, every
-  standing item or one item in full by its id.
+### The handoff point
 
-Every artifact the ledger records carries a tier, `read_before`, that
-says when a session loads it. A spec is the contract and seeds
-`always`; a draft seeds `edit`; a note or an output is graded by the
-writing session when the cursor points at it.
+The warning sits at the context where a cycle's cost per call of work is lowest, priced from the session's own transcript: the fresh-session floor, the resume it read, the measured growth rate, and the cache TTL. Running on re-reads a growing context on every call. Handing off pays the resume and the write again. A longer resume, faster growth, or a dearer cache write moves the point out, and the dollar price of a model never moves it. The point never sits closer than one handoff write to the context where Claude Code compacts on its own. `scripts/budget.py` holds the formula and the price table. The hook says nothing on a Haiku session. [Design](docs/design.md) covers the cost model, the formula, the detection rules, and the nudge.
 
-| tier      | means                     | loaded when                    |
-| --------- | ------------------------- | ------------------------------ |
-| `always`  | the contract              | every resume, an anchored span |
-| `edit`    | read before you change it | the gate, at a write to it     |
-| `mention` | know it exists            | on demand, `hq read`           |
-| `never`   | on the record             | `hq artifacts`, `hq when`      |
+## Status line
 
-`.handoff/` belongs in the project's gitignore when handoffs should stay
-untracked. Versions before 0.3.0 wrote to `working/`, and before 0.2.2
-to `scratch/`; move each old folder to `.handoff/<task-name>/` once.
-After the move, `hq open` names every cursor line and standing item
-that still says `working/<task-name>/` or `scratch/<task-name>/`, unless
-that directory is the thread's own pinned work dir, where the paths are
-current.
-
-## What you see
-
-At the end of a turn, once as each line is crossed - the handoff point,
-then one handoff write past it:
-
-> Context 283K, at the 277K handoff point for this cycle, growing 20K a
-> turn - a good point to run /handoff.
-
-> Context 310K, 33K past the 277K handoff point, where a handoff begun
-> there would have finished. Every further turn raises the cost of each
-> call of work. Run /handoff.
-
-The second also raises a desktop notification.
-
-## The handoff point
-
-The warning sits at the context where a cycle's cost per call of work
-is lowest. A cycle runs from a session's first call, or from the first
-call after a restart in place, to the handoff that ends it. Every call
-bills its whole context at the cache-read price. A token written to the
-cache bills m - 1 read prices more, on top of the read its own call
-already counts, and an output token bills r. Counted in those
-read-token units:
-
-```
-F   billed context of the cycle's first call
-Fw  tokens that first call writes to the cache
-C0  billed context at the resume end, call j0
-S0  billed context summed over the resume's calls up to and including j0
-Or  output tokens the resume's calls before j0 bill, thinking included
-g   tokens added per call of work, measured from j0 on
-w   calls a handoff write takes: 2 turns x 8.8 = 17.6
-W   tokens a handoff write adds: 29,000
-Ow  output tokens a handoff write bills: 20,000
-m   cache-write price / cache-read price
-r   output price / cache-read price
-
-A  = S0 + w x (C0 + W/2) + (m - 1) x (Fw + C0 - F + W) + r x (Or + Ow)
-H* = min(C0 + sqrt(2 x g x A), 967,000 - W)
-```
-
-A is what a cycle pays whatever its length: the resume, the handoff
-write re-reading the context, the cache writes of the floor, the
-resume, and the write, and the output of the resume and the write. T
-calls of work re-read `g x T^2 / 2` tokens on top of C0, so one call of
-work costs `K + g x T / 2 + A / T`, where K does not depend on T. That
-is lowest at `T = sqrt(2 x A / g)`, where the context reaches H*. At
-that point the next call of work costs as much as a call of work
-averages over a fresh cycle, so A is the next cycle's overhead, and
-the current cycle's measurements stand in for it. The dollar price
-cancels, and only the ratios m and r remain. The cap lets a write
-begun at H* finish before 967,000, where Claude Code compacts a session
-on its own: the 1M window every priced model has, less a 20,000-token
-output reserve and a 13,000-token buffer.
-
-W and Ow are fixed. A handoff write prints the handoff rules and writes
-one document, and neither grows with the work before it, so a session
-reading large files writes a handoff the same size as a quiet one.
-
-The resume starts at the cycle's first `hq open`, with `--root` or
-`--session` allowed ahead of the verb. It runs through every following
-call whose tool uses are all a Read of any path, a Skill or ToolSearch
-call, or a Bash command naming `.handoff`, `HANDOFF`, an hq read verb
-(`open`, `read`, `standing`, `artifacts`, `when`, `arc`, `list`, `help`),
-or one of the two drift checks `hq open` prints (`git log <sha>..HEAD`
-and `git status --porcelain`). j0 is the first call after those: the
-first to use any other tool, or the first to answer a prompt a person
-typed after the open. A person's prompt is a user record whose origin
-kind is human. A headless transcript records no origin, so there the
-resume ends on tool uses alone. j0 is the first call of work: its
-context closes the resume, so C0 and S0 count it, and its output is
-work, so Or stops at the call before it. A cycle still reading its
-handoff back has j0 at its last call, which Or counts. A cycle with no
-`hq open` has j0 at its first call, so C0 and S0 are both F and Or is
-0.
-
-A session that works first and opens a handoff later starts its resume
-at the run of such calls that ends at the open, reaching back at most
-to the call that answers the last prompt before it, whatever that
-call's tools. The growth of the work before that run comes out of C0
-and out of every call of S0, so the resume is priced from the floor, as
-the next cycle will pay it. A session opened for its handoff has that
-run reach its first call, and nothing comes out.
-
-m and r come from the model and the cache TTL. A write costs 1.25 times
-the base input price at the 5-minute TTL and 2 times at the 1-hour TTL,
-on every model. The TTL is the one that carried more of the cycle's
-cache writes in each call's `usage.cache_creation` breakdown, and the
-1-hour one Claude Code itself writes at when no call carries a
-breakdown.
-
-| model                     | cache read  | m, 5-minute | m, 1-hour |   r |
-| ------------------------- | ----------- | ----------: | --------: | --: |
-| Opus 5.5                  | 0.05x input |          25 |        40 | 100 |
-| Fable 5.1                 | 0.025x      |          50 |        80 | 200 |
-| Opus 5, Fable 5, Sonnet 5 | 0.1x        |        12.5 |        20 |  50 |
-
-Worked values on Opus 5.5 at the 1-hour TTL, with F 62,000, Fw 50,000,
-g 2,300, and Or 3,000, so m is 40 and r is 100:
-
-| C0      | S0        | A          | H*      |
-| ------- | --------- | ---------- | ------- |
-| 80,000  | 700,000   | 8,446,200  | 277,110 |
-| 150,000 | 1,060,000 | 12,768,200 | 392,350 |
-| 200,000 | 1,300,000 | 15,838,200 | 469,918 |
-
-What moves the point:
-
-- A longer resume moves it out, and the room past it, H* - C0, grows
-  too: each resume token adds w + m - 1 to A directly, plus one more
-  through its own weight in S0, the sum that already counts it once
-  as the resume-end call's own context. A fixed warning point would
-  instead take every resume token out of the work room, so each
-  handoff's larger resume would shorten the next cycle.
-- Faster growth moves it out in tokens and in by calls: A does not
-  depend on g, so the room grows as the square root of g, and the
-  count of work calls falls as one over that root.
-- A dearer cache write or dearer output moves it out, through m and r:
-  the 1-hour TTL writes at 1.6 times the 5-minute price.
-- The dollar price of a model never moves it.
-
-Band 1 sits W past the handoff point, where a handoff begun at band 0
-would have finished. Once band 0 has fired, both points are latched for
-the rest of the cycle: either may fall, and neither rises, because
-context only grows and a point that moved outward would walk the gauge
-backwards. Before band 0 fires, the point follows the measured rate
-both ways, so the fallback rate of a cycle's first calls cannot pin it
-low. A restart in place releases both latches. Haiku has no entry in
-the price table, so the hook says nothing on a Haiku session.
-
-## Pushing the agent to hand off (optional)
-
-The warnings above reach the terminal, not the agent: a Stop hook
-writes its message for whoever reads the screen, so a session runs past
-its handoff point while the agent driving it never learns.
-
-Creating `~/.claude/.nudge-handoff` changes that. While the file
-exists, a `UserPromptSubmit` hook names the context and the handoff
-point to the agent at the top of each turn. It asks for a handoff at
-the next natural stopping point rather than at once, and only when work
-remains for a later session. A task that is finished and committed, with
-nothing left open or unrecorded, needs none. The top of a turn is the
-one moment an instruction redirects a turn without interrupting work
-already under way.
-
-```
-touch ~/.claude/.nudge-handoff    # arm
-rm -f ~/.claude/.nudge-handoff    # disarm
-ls ~/.claude/.nudge-handoff       # present means armed
-```
-
-Presence alone is the switch and it takes effect at the next prompt, so
-nothing sticks armed. The hook ignores the contents, which leaves room
-for a line recording what the file is for. The nudge keeps no state of
-its own. It measures the context from the transcript rather than
-trusting the figure the Stop hook stored, because `/clear` leaves that
-figure behind it, and it stays silent below the handoff point and
-inside an open cycle.
-
-## The math
-
-Anthropic list prices (September 2026), per million tokens:
-
-| model     | input  | cache read | 5-minute write | 1-hour write | output |
-| --------- | ------: | ----------: | --------------: | ------------: | ------: |
-| Opus 5.5  | $4.00  | $0.20      | $5.00          | $8.00        | $20.00 |
-| Fable 5.1 | $10.00 | $0.25      | $12.50         | $20.00       | $50.00 |
-| Sonnet 5  | $2.00  | $0.20      | $2.50          | $4.00        | $10.00 |
-
-A cache read is a multiple of the input price, and the multiple is not
-the same everywhere: 0.05 on Opus 5.5 and 0.025 on Fable 5.1, against
-the 0.1 Sonnet 5 and every earlier model charge. The plugin stores each
-model's own input, cache-read, and output prices, so a model matched to
-its family rather than its own generation is priced at up to four
-times what it bills.
-
-The cost of one turn, which the status line prints beside the gauge:
-
-```
-one turn = context x cache-read price x calls per turn
-         = context / 1M x cache-read $/M x 8.8
-```
-
-Worked examples:
-
-```
-Opus 5.5  at 400K:  0.400 x $0.20 x 8.8 = $0.70 a turn
-Fable 5.1 at 400K:  0.400 x $0.25 x 8.8 = $0.88 a turn
-```
-
-That figure leaves out cache writes and output. The handoff point
-takes both in, through m and r; [The handoff point](#the-handoff-point)
-gives the formula.
-
-The defaults, measured from a month of the author's usage - sessions
-with different tool habits will measure differently, which is why the
-hook re-measures growth per session:
-
-- **8.8** assistant calls per user turn
-- **1,900** tokens of growth per call (~17K a turn) until a cycle has
-  run five calls of work to measure its own rate
-- **69,000** billed tokens for a fresh session, **123,000** after a
-  restart in place
-
-## Glossary
-
-| term             | meaning                                                                                                                  |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| turn             | one prompt from you plus everything Claude does before waiting again                                                     |
-| call             | one API request; each tool use is one, ~9 per turn                                                                       |
-| context          | everything re-sent with every call: system prompt, tools, conversation                                                   |
-| billed context   | `cache_read + cache_creation + uncached_input` on the last call                                                          |
-| cache read       | a re-sent token served from the prompt cache, at 5% of input price on Opus 5.5, 2.5% on Fable 5.1, 10% elsewhere         |
-| cache write      | a new token added to the cache, at 125% of input price for the 5-minute TTL, 200% for the 1-hour TTL                     |
-| cycle            | a session's calls from its first, or from a restart in place, to the handoff that ends it                                |
-| resume           | a cycle's calls from `hq open` through its last handoff read; ends at j0, or at a person's next prompt                   |
-| handoff point    | context where a cycle's cost per call of work is lowest, H*; the gauge's 100% and band 0                                 |
-| escalation       | one handoff write's growth past the handoff point, where a handoff begun there would finish; band 1                      |
-| floor            | what a session is billed before any conversation: ~69K                                                                   |
-| handoff          | write state to a file, start fresh; restarts at floor + file                                                             |
-| restart in place | a big drop in billed context inside one session - a `/clear` - that rearms growth measurement and the latched thresholds |
-
-## How it decides
-
-- Growth is measured from the billed-context series itself, not by
-  counting turns - a headless transcript does not mark which records a
-  person typed, and a turn's call count varies widely, while the series
-  has neither problem. Growth is measured over the calls from j0 on.
-  That leaves out the drop at a restart in place, which would read as
-  negative growth, and the resume's own reading, which grows the
-  context far faster than work does and which C0 already counts.
-- The warning sits at the handoff point, priced from the cycle's floor,
-  its resume, its growth rate, and its cache TTL, and never closer to
-  the point where Claude Code compacts on its own than one handoff
-  write. Band 1 sits one handoff write past it.
-- Once band 0 has fired, both points latch downward; only a restart in
-  place releases them. The countdowns still track the live rate - "two
-  turns left" is meant to react - but the thresholds hold still.
-- Sidechain records are skipped: they carry a subagent's context, not
-  the session's.
-- A restart in place is a drop that frees at least half of what one
-  restarts a session at; smaller dips (an expired cache block, a tool
-  result leaving the window) do not reset the growth measurement.
-- A failed API call is written to the transcript with a zeroed usage
-  block; it is skipped, not read as a context of zero.
-- Subagents are skipped: their context is short-lived and never
-  restarts in place, so a warning there gives you nothing to act on.
-
-## Status line (optional, one manual step)
-
-A plugin cannot set the status line - that setting lives in your
-personal config - so this one is wired by hand. Add to
-`~/.claude/settings.json`:
+A plugin cannot set the status line, so this block goes into `~/.claude/settings.json` by hand:
 
 ```json
 {
@@ -526,24 +91,25 @@ personal config - so this one is wired by hand. Add to
 }
 ```
 
-An installed plugin lives at
-`~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/` - the
-version is in the path, so the glob keeps the line working across an
-upgrade, and `sort -V` keeps 0.10.0 ahead of 0.9.0. Running the plugin
-from a git clone instead? Point the command at
-`/path/to/clone/scripts/statusline.py`. The status line reads the growth rate
-and both points from a file the hook writes each turn, so the two never
-disagree; without the hook it prices a fresh cycle at a default rate and
-still works. The directory it names is the one Claude Code started in, so a
-`cd` deeper in the tree - into the handoff folder itself, say - leaves
-the field alone. Once the session enters a handoff thread - `hq
-adopt`, `hq begin`, or `hq open`, each counted only when it succeeds -
-the line names that thread's slug after the directory,
-`myproject:auth-token`. It holds until the session enters another
-thread or `hq done` finishes that one. The slug is keyed by session
-id, so two sessions in one checkout each show their own thread, and it
-sits last on the line because it is the field a narrow pane can most
-afford to cut.
+The glob follows the installed copy across upgrades, and `sort -V` picks the newest version. For a git clone, the command names `/path/to/clone/scripts/statusline.py` instead. The line reads the growth rate and both thresholds from the file the Stop hook writes each turn, so the gauge and the warning agree. It turns amber at the handoff point and red one handoff write past it. Once the session enters a handoff thread, the thread's slug follows the directory: `myproject:login-timeout`.
+
+## Hooks
+
+| Event              | Script              | Effect                                                                             |
+| ------------------ | ------------------- | ---------------------------------------------------------------------------------- |
+| `Stop`             | `context_budget.py` | warns at the handoff point and once more one handoff write past it                 |
+| `Stop`             | `handoff_stop.py`   | names a `HANDOFF.md` written by hand since its last finished cycle                 |
+| `PreToolUse`       | `handoff_gate.py`   | after `hq open`, names each gated handoff file a write has not read                |
+| `UserPromptSubmit` | `handoff_nudge.py`  | while `~/.claude/.nudge-handoff` exists, asks the agent to hand off past the point |
+
+By default none blocks a tool call. `HQ_GATE=0` turns the gate off, and `HQ_GATE_DENY=1` makes it deny the write instead of reporting it.
+
+The Stop hook's warning reaches the terminal and never the agent. The nudge puts the same fact in front of the agent at the top of each turn past the handoff point, and asks for a handoff at the next natural stopping point when work remains for a later session. Presence of the file is the switch, and it takes effect at the next prompt:
+
+```
+touch ~/.claude/.nudge-handoff    # arm
+rm -f ~/.claude/.nudge-handoff    # disarm
+```
 
 ## Update
 
@@ -551,12 +117,7 @@ afford to cut.
 /plugin marketplace update claude-handoff
 ```
 
-That updates the plugin source. The plugin itself runs from a copy
-taken at install time under `~/.claude/plugins/cache/`, so the clone is
-the source and the copy is what executes. There is no migration either
-way: the state under `~/.claude/cache/claude-handoff/` is per session
-and disposable, and handoff folders are plain markdown and tab-separated
-text.
+A session open during the update loses `hq` until `/reload-plugins`. Handoff folders are plain Markdown and tab-separated text and need no migration.
 
 ## Uninstall
 
@@ -565,28 +126,17 @@ text.
 /plugin marketplace remove claude-handoff
 ```
 
-Two things outlive it: the `statusLine` block above (remove it from
-settings.json) and the cache directory
-(`rm -rf ~/.claude/cache/claude-handoff`). Handoffs under `.handoff/`
-belong to the project, not the plugin.
+Three things outlive it: the `statusLine` block in `settings.json`, the state under `~/.claude/cache/claude-handoff/`, and `~/.claude/.nudge-handoff` where it was created. Handoff folders under `.handoff/` belong to the project.
 
 ## Development
 
 ```
 python3 -m pytest -q
 poetry run mutmut run
+python3 docs/charts.py
 ```
 
-The suite runs under python3.11 and python3; mutmut mutates `hq.py` and
-the two handoff hooks against the tests `pyproject.toml` selects, with
-results under `mutants/`. State lives under
-`~/.claude/cache/claude-handoff/`: `<session>.json` for the gauge,
-`<session>.handoff.json` for the two handoff hooks, and
-`hq-reads-<session>.txt` for read receipts; all of it is safe to delete.
-Where a sandboxed shell leaves that directory read-only, `hq read`
-writes the receipt to `.hq.reads-<session>` in the handoff folder
-instead, and the gate reads both.
-The README's charts are generated by `python3 docs/charts.py`.
+mutmut mutates `bin/hq.py` and the two handoff hooks against the tests `pyproject.toml` selects. Per-session state lives under `~/.claude/cache/claude-handoff/`: `<session>.json` for the gauge, `<session>.handoff.json` for the gate and Stop hooks, `<session>.thread` for the status line, and `hq-reads-<session>.txt` for read receipts. All of it is disposable. `docs/charts.py` regenerates the charts in this README and in `docs/design.md`.
 
 ## License
 
