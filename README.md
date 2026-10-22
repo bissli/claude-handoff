@@ -79,6 +79,7 @@ specs/ drafts/ notes/ outputs/   what the thread made, by kind
 `hq run <slug>` starts `claude "/handoff <slug>"` at the project root. The plugin puts `hq` on the agent's `PATH` alone, so a shell reaches it through a function in `~/.bashrc`. The function runs the `hq` on `PATH` where there is one, so an agent session keeps the plugin's own, and the newest installed version otherwise. `bin/hq-completion.bash` gives Tab completion of the verb, then of the open slugs in the current repo:
 
 ```bash
+unalias hq 2>/dev/null
 hq() {
     local bin
     bin=$(type -P hq) || bin=$(ls -d ~/.claude/plugins/cache/claude-handoff/claude-handoff/*/bin/hq | sort -V | tail -1)
