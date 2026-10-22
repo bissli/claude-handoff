@@ -7623,8 +7623,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
     _run_epilog = (
         'Starts claude at the project root on /handoff <slug>. The slug is\n'
-        'the exact folder name: a prefix of one exits 2. Where no claude is\n'
-        'on PATH, it prints hq run: no claude on PATH and exits 1.')
+        'the exact folder name: a prefix of one exits 2. HQ_CLAUDE_CMD,\n'
+        'split as a shell splits it, replaces claude, and /handoff <slug>\n'
+        'goes last; a value that does not split exits 2. Where the\n'
+        'command is not on PATH, it prints hq run: no <command> on PATH\n'
+        'and exits 1.')
     rn = sub.add_parser(
         'run',
         epilog=_run_epilog,
@@ -7856,11 +7859,17 @@ def main(argv: list[str]) -> int:
                     f'hq run: no folder named {slug!r} under {folder.parent}'
                     '; run hq list to see what exists')
                 return 2
+            try:
+                command = shlex.split(
+                    os.environ.get('HQ_CLAUDE_CMD', '')) or ['claude']
+            except ValueError as exc:
+                print(f'hq run: HQ_CLAUDE_CMD: {exc}')
+                return 2
             os.chdir(root)
             try:
-                os.execvp('claude', ['claude', f'/handoff {folder.name}'])
+                os.execvp(command[0], [*command, f'/handoff {folder.name}'])
             except FileNotFoundError:
-                print('hq run: no claude on PATH')
+                print(f'hq run: no {command[0]} on PATH')
                 return 1
         anch = anchors(folder, args)
         if verb in _CYCLE_WRITE_VERBS:

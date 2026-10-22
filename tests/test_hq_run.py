@@ -26,7 +26,8 @@ def _root_with_threads(tmp_path: pathlib.Path, monkeypatch: Any) -> pathlib.Path
     tmp_path : pathlib.Path
         Pytest temporary path; the root is its ``root`` child.
     monkeypatch : Any
-        Active pytest monkeypatch fixture; HQ_ROOT is set to the root.
+        Active pytest monkeypatch fixture; HQ_ROOT is set to the root
+        and HQ_CLAUDE_CMD is unset.
 
     Returns
     -------
@@ -38,6 +39,7 @@ def _root_with_threads(tmp_path: pathlib.Path, monkeypatch: Any) -> pathlib.Path
         (root / '.handoff' / slug).mkdir(parents=True)
     (root / '.handoff' / 'auth-legacy' / '.hq.done').write_text('')
     monkeypatch.setenv('HQ_ROOT', str(root))
+    monkeypatch.delenv('HQ_CLAUDE_CMD', raising=False)
     return root
 
 
@@ -64,6 +66,46 @@ def test_run_execs_claude_on_the_resolved_slug_at_the_root(
         hq.main(['run', 'auth-refresh'])
     assert calls == [
         ('claude', ['claude', '/handoff auth-refresh'], str(root))]
+
+
+def test_run_execs_hq_claude_cmd_with_the_prompt_last(tmp_path, monkeypatch):
+    """Verify HQ_CLAUDE_CMD replaces claude, split by shell rules.
+
+    Mutation: the value passed whole as one argv entry, split on
+    whitespace so the quoted script breaks apart, or the prompt put
+    ahead of the command's own arguments.
+    Oracle: a stub execvp that records its argv; the expected argv is
+    the value split by hand.
+    """
+    _root_with_threads(tmp_path, monkeypatch)
+    monkeypatch.setenv('HQ_CLAUDE_CMD', """bash -ic 'claude "$@"' bash""")
+    calls = []
+
+    def fake_execvp(file, args):
+        calls.append((file, args))
+        raise _Execed
+
+    monkeypatch.setattr(hq.os, 'execvp', fake_execvp)
+    with pytest.raises(_Execed):
+        hq.main(['run', 'auth-refresh'])
+    assert calls == [
+        ('bash',
+         ['bash', '-ic', 'claude "$@"', 'bash', '/handoff auth-refresh'])]
+
+
+def test_run_with_unsplittable_hq_claude_cmd_exits_2(
+        tmp_path, monkeypatch, capsys):
+    """Verify an unclosed quote in HQ_CLAUDE_CMD prints one line, exits 2.
+
+    Mutation: the ValueError handler dropped, so shlex's traceback
+    escapes main.
+    Oracle: shlex's own message for an unclosed quote.
+    """
+    _root_with_threads(tmp_path, monkeypatch)
+    monkeypatch.setenv('HQ_CLAUDE_CMD', "claude 'oops")
+    assert hq.main(['run', 'auth-refresh']) == 2
+    assert capsys.readouterr().out == (
+        'hq run: HQ_CLAUDE_CMD: No closing quotation\n')
 
 
 def test_run_without_claude_on_path_exits_1(tmp_path, monkeypatch, capsys):
