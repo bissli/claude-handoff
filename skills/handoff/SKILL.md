@@ -372,7 +372,8 @@ unchanged: `hq list [n]` or `hq list --done`, `hq when <slug> <path>`,
 `hq artifacts <slug>`, `hq standing <slug> [<id> ...]`. None writes.
 No output from `hq diff` means the two cursors, or the named section,
 are identical. Each verb's `--help` names its columns and filter
-flags.
+flags. `hq run <slug>` is for the user's terminal. A session never
+runs it.
 
 ## done
 

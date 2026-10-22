@@ -74,6 +74,19 @@ specs/ drafts/ notes/ outputs/   what the thread made, by kind
 
 `hq`, which the plugin puts on the agent's `PATH`, writes the ledger and the standing items, renders the generated blocks of `HANDOFF.md`, and refuses the edits that lose work across cycles. `hq help` lists its reference topics, and `hq <verb> --help` each verb's flags. `.handoff/` goes in the project's `.gitignore` where handoffs stay untracked.
 
+### Terminal launch
+
+`hq run <slug>` starts `claude "/handoff <slug>"` at the project root. The plugin puts `hq` on the agent's `PATH` alone, so a shell reaches it through a function in `~/.bashrc`. The function runs the `hq` on `PATH` where there is one, so an agent session keeps the plugin's own, and the newest installed version otherwise. `bin/hq-completion.bash` gives Tab completion of the verb, then of the open slugs in the current repo:
+
+```bash
+hq() {
+    local bin
+    bin=$(type -P hq) || bin=$(ls -d ~/.claude/plugins/cache/claude-handoff/claude-handoff/*/bin/hq | sort -V | tail -1)
+    "$bin" "$@"
+}
+source "$(ls -d ~/.claude/plugins/cache/claude-handoff/claude-handoff/*/bin/hq-completion.bash | sort -V | tail -1)"
+```
+
 ### The handoff point
 
 The warning sits at the context where a cycle's cost per call of work is lowest, priced from the session's own transcript: the fresh-session floor, the resume it read, the measured growth rate, and the cache TTL. Running on re-reads a growing context on every call. Handing off pays the resume and the write again. A longer resume, faster growth, or a dearer cache write moves the point out, and the dollar price of a model never moves it. The point never sits closer than one handoff write to the context where Claude Code compacts on its own. `scripts/budget.py` holds the formula and the price table. The hook says nothing on a Haiku session. [Design](docs/design.md) covers the cost model, the formula, the detection rules, and the nudge.

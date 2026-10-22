@@ -7621,6 +7621,16 @@ def _build_parser() -> argparse.ArgumentParser:
     wd.add_argument('dir', nargs='?')
     wd.add_argument('--clear', action='store_true')
 
+    _run_epilog = (
+        'Starts claude at the project root on /handoff <slug>. The slug is\n'
+        'the exact folder name: a prefix of one exits 2. Where no claude is\n'
+        'on PATH, it prints hq run: no claude on PATH and exits 1.')
+    rn = sub.add_parser(
+        'run',
+        epilog=_run_epilog,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    rn.add_argument('slug')
+
     hlp = sub.add_parser('help')
     hlp.add_argument('topic', nargs='?')
 
@@ -7837,9 +7847,21 @@ def main(argv: list[str]) -> int:
             return _verb_list(root, args)
         slug = getattr(args, 'slug', '')
         is_begin = verb == 'begin'
-        folder = _find_folder(root, slug, missing_ok=is_begin)
+        folder = _find_folder(root, slug, missing_ok=is_begin or verb == 'run')
         if verb == 'work-dir':
             return _verb_work_dir(folder, args)
+        if verb == 'run':
+            if not folder.is_dir():
+                print(
+                    f'hq run: no folder named {slug!r} under {folder.parent}'
+                    '; run hq list to see what exists')
+                return 2
+            os.chdir(root)
+            try:
+                os.execvp('claude', ['claude', f'/handoff {folder.name}'])
+            except FileNotFoundError:
+                print('hq run: no claude on PATH')
+                return 1
         anch = anchors(folder, args)
         if verb in _CYCLE_WRITE_VERBS:
             refusal = _lock_refusal(folder, anch, False, verb)
