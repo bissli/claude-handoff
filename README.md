@@ -35,7 +35,7 @@ Forty turns growing 17K a turn. Running on costs $28 on Opus 5.5 and $35 on Fabl
 /plugin install claude-handoff@claude-handoff
 ```
 
-The first command registers the repo as a plugin marketplace. The second installs the hooks, the `/handoff` skill, and the `hq` command. The plugin needs `python3` 3.11 or later on `PATH`. The status line takes one manual step ([Status line](#status-line)).
+The first command registers the repo as a plugin marketplace. The second installs the hooks, the `/handoff` skill, and the `hq` command. The plugin needs `python3` 3.11 or later on `PATH`. The status line takes one manual step ([Status line](#status-line)), and so does `hq run` from a terminal ([Terminal launch](#terminal-launch)).
 
 ## Usage
 
