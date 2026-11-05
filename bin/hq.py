@@ -130,7 +130,9 @@ _TIER_SEED = {'spec': 'always', 'draft': 'edit'}
 _TWO_HOURS = 7200
 LOOP_RULE = """\
 No one reads this session's questions, and this rule outranks every
-reading step below. Stop only for a question about a step the user
+reading step below. The loop driver types each /handoff read,
+/handoff write, and nudge in this session, so a typed /handoff read
+is no sign that someone is watching. Stop only for a question about a step the user
 did not ask for that would weaken security or stability: it changes
 who or what can reach or act on a system (a password, key, token,
 permission, tool approval, or network rule), reveals a secret, or
