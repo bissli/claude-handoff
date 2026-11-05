@@ -2319,6 +2319,28 @@ def _resolve_root(argv: argparse.Namespace) -> pathlib.Path:
     return cwd
 
 
+def _claude_command(verb: str) -> list[str] | None:
+    """Command that hq run and hq loop start claude with.
+
+    Parameters
+    ----------
+    verb : str
+        Verb named in the error line.
+
+    Returns
+    -------
+    list[str] | None
+        HQ_CLAUDE_CMD split as a shell splits it, ``['claude']`` where it
+        is unset or blank, or None after printing one error line for a
+        value that does not split.
+    """
+    try:
+        return shlex.split(os.environ.get('HQ_CLAUDE_CMD', '')) or ['claude']
+    except ValueError as exc:
+        print(f'hq {verb}: HQ_CLAUDE_CMD: {exc}')
+        return None
+
+
 def _git_state(root: pathlib.Path) -> tuple[str, str, list[str]]:
     """Return (branch, sha7, dirty_paths) from git; hyphens on error.
 
@@ -7634,6 +7656,26 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter)
     rn.add_argument('slug')
 
+    _loop_epilog = (
+        'hq loop <slug> starts claude in the current tmux pane at the\n'
+        'project root, with a driver pane below it. The driver types\n'
+        '/handoff read <slug>, then a write when the context notice asks\n'
+        'for one, /clear, and the read again, up to --max-cycles cycles\n'
+        '(default 10). It stops for the user when the thread is done, a\n'
+        'question waits on an answer, or a cycle fails to finish.\n'
+        'hq loop stop <slug> has the running loop write the next handoff\n'
+        'and end. HQ_CLAUDE_CMD replaces claude as it does for hq run,\n'
+        'with --settings <file> last in place of /handoff <slug>; a value\n'
+        'that does not split exits 2. Needs bash 4 or later, tmux, jq,\n'
+        'and the command on PATH.')
+    lp = sub.add_parser(
+        'loop',
+        usage='hq loop [--max-cycles N] slug | hq loop stop slug',
+        epilog=_loop_epilog,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    lp.add_argument('words', nargs='+', metavar='[stop] slug')
+    lp.add_argument('--max-cycles', default='10')
+
     hlp = sub.add_parser('help')
     hlp.add_argument('topic', nargs='?')
 
@@ -7848,6 +7890,21 @@ def main(argv: list[str]) -> int:
         root = _resolve_root(args)
         if verb == 'list':
             return _verb_list(root, args)
+        if verb == 'loop':
+            words = args.words
+            if len(words) == 2 and words[0] == 'stop':
+                script_args = words
+            elif len(words) == 1:
+                command = _claude_command(verb)
+                if command is None:
+                    return 2
+                script_args = ['launch', args.max_cycles, words[0], *command]
+            else:
+                print('hq loop: takes <slug> or stop <slug>')
+                return 2
+            script = str(pathlib.Path(__file__).resolve().parent / 'hq-loop')
+            os.chdir(root)
+            os.execv(script, [script, *script_args])
         slug = getattr(args, 'slug', '')
         is_begin = verb == 'begin'
         folder = _find_folder(root, slug, missing_ok=is_begin or verb == 'run')
@@ -7859,11 +7916,8 @@ def main(argv: list[str]) -> int:
                     f'hq run: no folder named {slug!r} under {folder.parent}'
                     '; run hq list to see what exists')
                 return 2
-            try:
-                command = shlex.split(
-                    os.environ.get('HQ_CLAUDE_CMD', '')) or ['claude']
-            except ValueError as exc:
-                print(f'hq run: HQ_CLAUDE_CMD: {exc}')
+            command = _claude_command(verb)
+            if command is None:
                 return 2
             os.chdir(root)
             try:

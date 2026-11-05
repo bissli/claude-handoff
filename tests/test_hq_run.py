@@ -1,4 +1,4 @@
-"""Tests for the hq run verb and bin/hq-completion.bash."""
+"""Tests for the hq run and hq loop verbs and bin/hq-completion.bash."""
 
 import os
 import pathlib
@@ -206,3 +206,117 @@ def test_completion_verbs_match_the_parser():
         action for action in parser._subparsers._group_actions
         ).choices
     assert _complete(['hq', ''], COMPLETION.parent) == sorted(verbs)
+
+
+def _record_execv(monkeypatch: Any) -> list[tuple[str, list[str], str]]:
+    """Stub hq's os.execv to record each call and stop the verb.
+
+    Parameters
+    ----------
+    monkeypatch : Any
+        Active pytest monkeypatch fixture.
+
+    Returns
+    -------
+    list[tuple[str, list[str], str]]
+        File, argv and cwd of each call, appended as the calls happen.
+    """
+    calls = []
+
+    def fake_execv(file, args):
+        calls.append((file, args, os.getcwd()))
+        raise _Execed
+
+    monkeypatch.setattr(hq.os, 'execv', fake_execv)
+    return calls
+
+
+def test_loop_execs_launch_and_stop_at_the_root(tmp_path, monkeypatch):
+    """Verify loop names the script's subcommand and runs it at the root.
+
+    Mutation: the chdir to the root dropped, the --max-cycles default
+    lost, stop sent as launch, or claude left off the launch argv.
+    Oracle: a stub execv that records its argv and the cwd it ran in.
+    """
+    root = _root_with_threads(tmp_path, monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    script = str(ROOT / 'bin' / 'hq-loop')
+    calls = _record_execv(monkeypatch)
+    for argv in (
+            ['loop', 'auth-refresh'],
+            ['loop', '--max-cycles', '3', 'auth-refresh'],
+            ['loop', 'stop', 'billing-ledger'],
+            ['loop', 'stop']):
+        with pytest.raises(_Execed):
+            hq.main(argv)
+    assert calls == [
+        (script, [script, 'launch', '10', 'auth-refresh', 'claude'], str(root)),
+        (script, [script, 'launch', '3', 'auth-refresh', 'claude'], str(root)),
+        (script, [script, 'stop', 'billing-ledger'], str(root)),
+        (script, [script, 'launch', '10', 'stop', 'claude'], str(root))]
+
+
+def test_loop_launches_hq_claude_cmd_split_by_shell_rules(
+        tmp_path, monkeypatch):
+    """Verify HQ_CLAUDE_CMD reaches the script as separate words.
+
+    Mutation: the value passed whole as one word, or split on whitespace
+    so the quoted script breaks apart.
+    Oracle: a stub execv that records its argv; the expected words are
+    the value split by hand.
+    """
+    _root_with_threads(tmp_path, monkeypatch)
+    monkeypatch.setenv('HQ_CLAUDE_CMD', """bash -ic 'claude "$@"' bash""")
+    calls = _record_execv(monkeypatch)
+    with pytest.raises(_Execed):
+        hq.main(['loop', 'auth-refresh'])
+    assert calls[0][1][1:] == [
+        'launch', '10', 'auth-refresh', 'bash', '-ic', 'claude "$@"', 'bash']
+
+
+@pytest.mark.parametrize(('argv', 'claude_cmd', 'expected'), [
+    (['loop', 'auth-refresh', 'billing-ledger'], None,
+     'hq loop: takes <slug> or stop <slug>\n'),
+    (['loop', 'stop', 'auth-refresh', 'billing-ledger'], None,
+     'hq loop: takes <slug> or stop <slug>\n'),
+    (['loop', 'auth-refresh'], "claude 'oops",
+     'hq loop: HQ_CLAUDE_CMD: No closing quotation\n'),
+    ])
+def test_loop_refuses_extra_words_and_an_unsplittable_command(
+        tmp_path, monkeypatch, capsys, argv, claude_cmd, expected):
+    """Verify loop exits 2 with one line and never execs the script.
+
+    Mutation: extra words passed through so the script keeps only one
+    slug, or the None from the HQ_CLAUDE_CMD split left unchecked.
+    Oracle: a stub execv that records any call; shlex's own message for
+    an unclosed quote.
+    """
+    _root_with_threads(tmp_path, monkeypatch)
+    if claude_cmd is not None:
+        monkeypatch.setenv('HQ_CLAUDE_CMD', claude_cmd)
+    calls = _record_execv(monkeypatch)
+    assert hq.main(argv) == 2
+    assert calls == []
+    assert capsys.readouterr().out == expected
+
+
+@pytest.mark.parametrize(('words', 'expected'), [
+    (['hq', 'loop', ''], ['auth-refresh', 'billing-ledger', 'stop']),
+    (['hq', 'loop', 'stop', 'b'], ['billing-ledger']),
+    (['hq', 'loop', 'auth-refresh', ''], []),
+    (['hq', 'loop', '--max-cycles', '3', ''],
+     ['auth-refresh', 'billing-ledger', 'stop']),
+    (['hq', 'loop', '--max-cycles', ''], []),
+    (['hq', 'loop', 'stop', 'auth-refresh', ''], []),
+    ])
+def test_completion_offers_stop_then_slugs_after_loop(
+        tmp_path, monkeypatch, words, expected):
+    """Verify loop completes stop or a slug, then a slug after stop only.
+
+    Mutation: stop left out of the loop candidates, --max-cycles and its
+    value counted as words, slugs offered for the flag's value, or slugs
+    offered after a slug.
+    Oracle: the hand-built root - two open threads and one marked done.
+    """
+    _root_with_threads(tmp_path, monkeypatch)
+    assert _complete(words, tmp_path) == expected

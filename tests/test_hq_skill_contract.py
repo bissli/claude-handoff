@@ -32,7 +32,8 @@ _FOREIGN_FLAGS = {
 _USAGE_ONLY_PRINTS = {
     'hq: HQ_CYCLE must be an integer',
     'hq: HQ_NOW must be an ISO 8601 timestamp',
-    'hq run: HQ_CLAUDE_CMD:',
+    ': HQ_CLAUDE_CMD:',
+    'hq loop: takes <slug> or stop <slug>',
     'hq: root is not a directory',
     'hq: ambiguous slug',
     'hq stamp: path is required',

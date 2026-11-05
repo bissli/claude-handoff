@@ -88,7 +88,9 @@ hq() {
 source "$(ls -d ~/.claude/plugins/cache/claude-handoff/claude-handoff/*/bin/hq-completion.bash | sort -V | tail -1)"
 ```
 
-`HQ_CLAUDE_CMD` replaces `claude` as the command `hq run` starts, split as a shell splits it, with `/handoff <slug>` as the last argument. A shell function named `claude` is out of reach of a child process, so a wrapper defined that way takes `HQ_CLAUDE_CMD="bash -ic 'claude \"\$@\"' bash"`, which reads `~/.bashrc` on each run.
+`hq loop <slug>` runs a thread over many cycles with no one typing. Inside a tmux pane, it starts claude at the project root and opens a small driver pane below it. The driver types `/handoff read <slug>`. When the context notice asks for a write, it types `/handoff write <slug>`, then `/clear`, then the read again. It stops for the user when the thread is done, when the session asks a question, when a write does not finish, or after `--max-cycles` cycles (default 10). `hq loop stop <slug>` has the running loop write one more handoff and end. The loop needs bash 4 or later, `tmux` and `jq`.
+
+`HQ_CLAUDE_CMD` replaces `claude` as the command both verbs start, split as a shell splits it. `hq run` adds `/handoff <slug>` as the last argument, and `hq loop` adds `--settings <file>`. A shell function named `claude` is out of reach of a child process, so a wrapper defined that way takes `HQ_CLAUDE_CMD="bash -ic 'claude \"\$@\"' bash"`, which reads `~/.bashrc` on each run.
 
 ### The handoff point
 

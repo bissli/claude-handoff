@@ -1,0 +1,375 @@
+#!/usr/bin/env bash
+# Run one handoff thread in an interactive claude session in the current
+# tmux pane, with a small driver pane below it.
+# When the context-budget notice fires, write the handoff, clear, and
+# read it back. Stops for the user when the thread is done.
+# Usage: hq loop [--max-cycles N] <slug>
+#        hq loop stop <slug>   (write the next handoff, then end the loop)
+# hq loop runs this script at the project root.
+
+set -euo pipefail
+
+# read -t returns a status above 128 on a timeout only from bash 4 on.
+((BASH_VERSINFO[0] >= 4)) || { echo "hq loop: needs bash 4 or later" >&2; exit 1; }
+
+DEBOUNCE=2
+CLEAR_TIMEOUT=20
+SETTLE=2
+MAX_NUDGES=2
+MAX_IDLE_NUDGES=3
+LOCK_ALERT_MIN=30
+NUDGE_TEXT="Continue with the next Plan step. Run /handoff when the context notice asks for it. If the work is finished, say so and give the /handoff done command. If you need a decision from me, ask and stop."
+BUDGET_STATE_DIR="$HOME/.claude/cache/claude-handoff"
+
+die() {
+    echo "hq loop: $*" >&2
+    exit 1
+}
+
+# One short line per event is a single O_APPEND write, so the driver
+# never reads half a line. A field never prints empty, because read
+# would collapse it. The last three fields read the closing 800
+# characters of the final message: a mention of /handoff write or a
+# question about /handoff, a closing question mark (markdown may
+# follow it), and a pointer to /handoff done.
+hook() {
+    local dir=$1
+    jq -r '[.hook_event_name,
+            ([.source, .notification_type]
+             | map(select(. != null and . != "")) | first // "-"),
+            (.session_id // "-"),
+            ((.background_tasks | arrays | length) // 0),
+            (((.last_assistant_message | strings) // "") as $m
+             | $m[-800:] as $tail
+             | (if ($tail | test("/handoff write|/handoff(?! done)[^?.!]*[?]"))
+                then 1 else 0 end),
+               (if ($m | test("[?][*_`)\\]\"\u0027]*\\s*$")) then 1 else 0 end),
+               (if ($tail | test("/handoff done")) then 1 else 0 end))
+           ] | join(" ")' \
+        >>"$dir/events" || true
+    exit 0
+}
+
+drive() {
+    local dir=$1 slug=$2 max=$3 target=$4 hq_bin=$5 launcher=$6
+    local folder=".handoff/$slug"
+    local event src sid bg ask endsq dh ev id bgn askn endsqn dhn rc skip
+    local base sent=-1 nudges=0 idle=0 idle_nudges=0 cycles=0 cycle open budget band ctx hp ep near
+    local last_sid='' last_ask=0 last_endsq=0 last_dh=0 last_bg=0
+
+    # The trap runs after this function returns, when its locals are gone.
+    # shellcheck disable=SC2064
+    trap "rm -rf -- $(printf %q "$dir")" EXIT
+    exec 3< <(tail -n +1 -F "$dir/events")
+
+    # The loop ends with the launcher, which a SIGKILL leaves no chance
+    # to close this pane.
+    alive() { tmux list-panes -t "$target" >/dev/null 2>&1 && kill -0 "$launcher" 2>/dev/null; }
+
+    alert() {
+        echo "hq loop $slug: $1"
+        tmux display-message -d 10000 -t "$target" "hq loop $slug: $1" || true
+    }
+
+    finish() {
+        alert "$1"
+        read -r -p "Press Enter to close this window. "
+        exit 0
+    }
+
+    # A mouse scroll leaves the pane in copy mode, which swallows every
+    # key sent to it. In vim editing mode, i returns the box to insert
+    # mode. Elsewhere it types one letter that C-u removes with the rest
+    # of the line. C-e first, because C-u keeps any text after the
+    # cursor. Enter follows after a pause so the slash-command menu has
+    # closed.
+    type_line() {
+        last_sid=
+        if ! { tmux copy-mode -q -t "$target" &&
+            tmux send-keys -t "$target" i C-e C-u &&
+            tmux send-keys -t "$target" -l -- "$1" &&
+            sleep 0.3 &&
+            tmux send-keys -t "$target" Enter; }; then
+            finish "could not type into the claude pane"
+        fi
+    }
+
+    # A timeout of 0 waits until the pane closes. Status above 128 is
+    # read timing out, and any other failure is the stream ending.
+    wait_session_start() {
+        local want=$1 limit=$2 waited=0
+        while alive; do
+            rc=0
+            read -r -t 5 -u 3 event src sid _ || rc=$?
+            if ((rc == 0)); then
+                if [[ $event == SessionStart && $src == "$want" ]]; then
+                    # The input box takes control keys only after a short
+                    # wait. Sent at once, the i in type_line lands as text.
+                    sleep "$SETTLE"
+                    return 0
+                fi
+            elif ((rc > 128)); then
+                waited=$((waited + 5))
+                ((limit > 0 && waited >= limit)) && return 1
+            else
+                finish "event stream closed"
+            fi
+        done
+        return 1
+    }
+
+    # finish appends a manifest row after it writes HANDOFF.md and
+    # before it removes .hq.lock, so this advances once per finished
+    # cycle. The Cycle field in HANDOFF.md repeats a number on a thread
+    # whose first cycle is still open.
+    thread_cycle() {
+        [[ -f $folder/cycles/manifest.tsv ]] || { echo 0; return; }
+        awk -F'\t' 'NR > 1 { c = $1 } END { print c + 0 }' \
+            "$folder/cycles/manifest.tsv"
+    }
+
+    # hq list prints "<slug> <date> c<N> <N> open <task>" and puts "-"
+    # in the progress column when the Plan has no checkbox.
+    thread_open() {
+        "$hq_bin" list | awk -v s="$slug" '$1 == s { print $4 }'
+    }
+
+    wait_session_start startup 0 ||
+        finish "claude exited before it started. Its pane showed why, for example a missing .root"
+    type_line "/handoff read $slug"
+    base=$(thread_cycle)
+
+    while alive; do
+        rc=0
+        read -r -t 5 -u 3 event src sid bg ask endsq dh _ || rc=$?
+        if ((rc > 128)); then
+            continue
+        elif ((rc != 0)); then
+            finish "event stream closed"
+        fi
+        idle=0
+        case $event in
+            # Claude sends this when it waits on a permission prompt or
+            # sits idle at the input box, and no Stop follows either. An
+            # idle notice re-runs the decision on the last Stop, so a
+            # closing message that no pattern recognizes cannot stall the
+            # loop. A permission prompt only alerts.
+            Notification)
+                if [[ $src != idle_prompt || -z $last_sid ]]; then
+                    alert "claude is waiting for you ($src)"
+                    continue
+                fi
+                if [[ $last_bg != 0 ]]; then
+                    cycle=$(thread_cycle)
+                    if ((cycle > base)); then
+                        alert "cycle $cycle is written. The loop clears after the background task ends"
+                    else
+                        alert "claude is waiting for you (idle_prompt) with a background task running"
+                    fi
+                    continue
+                fi
+                idle=1 sid=$last_sid ask=$last_ask endsq=$last_endsq dh=$last_dh bg=0
+                ;;
+            # The driver's own /clear is read in wait_session_start, so
+            # this is a manual /clear, a compaction or a resume.
+            SessionStart)
+                sent=-1 nudges=0 idle_nudges=0 last_sid=
+                continue
+                ;;
+            Stop) ;;
+            # A prompt typed since the last Stop makes that Stop stale.
+            UserPromptSubmit)
+                last_sid=''
+                continue
+                ;;
+            *) continue ;;
+        esac
+
+        # The budget hook runs beside this one, so its state file can
+        # lag the Stop. Wait for the events to go quiet, then read it. A
+        # turn or session that starts in the wait makes this Stop stale.
+        if ((!idle)); then
+            skip=0
+            while read -r -t "$DEBOUNCE" -u 3 ev _ id bgn askn endsqn dhn _; do
+                case $ev in
+                    Stop)
+                        sid=$id bg=$bgn ask=$askn endsq=$endsqn dh=$dhn
+                        skip=0
+                        ;;
+                    SessionStart) sent=-1 nudges=0 idle_nudges=0 last_sid='' skip=1 ;;
+                    UserPromptSubmit) last_sid='' skip=1 ;;
+                esac
+            done
+            ((skip)) && continue
+            last_sid=$sid last_ask=$ask last_endsq=$endsq last_dh=$dh last_bg=$bg
+        fi
+
+        # A Stop with a background task running is mid-turn. The task's
+        # completion starts a new turn, which ends in another Stop.
+        [[ $bg == 0 ]] || continue
+
+        [[ -e $folder/.hq.done ]] && finish "$slug is marked done"
+        if [[ -e $folder/.hq.lock ]]; then
+            # Only an hq begin takes over a lock that a dead session
+            # left, and the driver types no write while one exists.
+            [[ -n $(find "$folder/.hq.lock" -mmin +"$LOCK_ALERT_MIN" 2>/dev/null) ]] &&
+                alert "$folder/.hq.lock is over $LOCK_ALERT_MIN minutes old. A dead session may hold it"
+            continue
+        fi
+        ((dh)) && finish "the session points at /handoff done. If the work is finished, run /handoff done $slug"
+        cycle=$(thread_cycle)
+
+        if ((cycle > base)); then
+            [[ -e $dir/stop ]] &&
+                finish "stopped after cycle $cycle as requested. The session is still open: continue it with /handoff read $slug"
+            open=$(thread_open) || finish "hq list failed"
+            [[ -n $open ]] || finish "hq list has no row for $slug"
+            if [[ $open == 0 || $open == - ]]; then
+                finish "$slug shows '$open' in the Plan column after cycle $cycle. If the work is done, run /handoff done $slug"
+            fi
+            ((++cycles >= max)) && finish "reached --max-cycles $max at cycle $cycle"
+            type_line "/clear"
+            wait_session_start clear "$CLEAR_TIMEOUT" ||
+                finish "no SessionStart after /clear, so the read was not typed"
+            type_line "/handoff read $slug"
+            base=$cycle
+            sent=-1
+            nudges=0
+            idle_nudges=0
+        else
+            budget=$(jq -r '[.band // -1, .context // 0, .handoff // 0, .escalate // 0]
+                | map(tostring) | join(" ")' "$BUDGET_STATE_DIR/$sid.json" 2>/dev/null) ||
+                budget=
+            read -r band ctx hp ep _ <<<"${budget:--1 0 0 0}"
+            [[ "$band $ctx $hp $ep" =~ ^-?[0-9]+\ [0-9]+\ [0-9]+\ [0-9]+$ ]] ||
+                { band=-1 ctx=0 hp=0 ep=0; }
+            # Within one write's growth of the handoff point, a write
+            # begun now ends about where the budget calls for one.
+            near=0
+            ((hp > 0 && ep > hp && ctx >= hp - (ep - hp))) && near=1
+            # A question about /handoff under the budget gets "continue".
+            # Past the budget the write goes in, unless the session ends
+            # on another question, which waits for the user. After
+            # MAX_NUDGES answers that left the question standing, the
+            # write goes in once. An idle session that did not end on a
+            # question gets the same "continue", then the write after
+            # MAX_IDLE_NUDGES idle notices in one cycle.
+            if ((band >= 0 && band > sent)); then
+                if ((endsq && !ask)) && [[ ! -e $dir/stop ]]; then
+                    alert "the session asked you a question, so the write waits for your answer"
+                else
+                    type_line "/handoff write $slug"
+                    sent=$band
+                fi
+            elif [[ -e $dir/stop ]] && ((sent < 0)); then
+                type_line "/handoff write $slug"
+                sent=0
+            elif ((ask && near && sent < 0)); then
+                type_line "/handoff write $slug"
+                sent=0
+            elif ((ask && band < 0 && nudges < MAX_NUDGES)); then
+                type_line "$NUDGE_TEXT"
+                ((++nudges))
+            elif ((ask && sent < 0)); then
+                type_line "/handoff write $slug"
+                sent=0
+            elif ((sent >= 0)); then
+                alert "a write was typed but cycle $((base + 1)) has not finished. Check the claude pane"
+            elif ((idle && !endsq && idle_nudges < MAX_IDLE_NUDGES)); then
+                type_line "$NUDGE_TEXT"
+                ((++idle_nudges))
+            elif ((idle && !endsq)); then
+                type_line "/handoff write $slug"
+                sent=0
+            elif ((idle)); then
+                alert "claude is waiting for you (idle_prompt)"
+            else
+                nudges=0
+            fi
+        fi
+    done
+}
+
+launch() {
+    local max=$1 slug=$2
+    shift 2
+    local claude_cmd=("$@")
+    # tmux renames a session name that holds '.' or ':'.
+    [[ $slug =~ ^[A-Za-z0-9_-]+$ ]] || die "slug takes letters, digits, '_' and '-'"
+    [[ $max =~ ^[1-9][0-9]*$ ]] || die "--max-cycles takes a positive integer"
+    for tool in tmux jq "${claude_cmd[0]}"; do
+        command -v "$tool" >/dev/null || die "$tool is not on PATH"
+    done
+    [[ -n ${TMUX:-} && -n ${TMUX_PANE:-} ]] || die "run hq loop inside a tmux pane"
+    (($(tmux display-message -p -t "$TMUX_PANE" '#{pane_height}') >= 12)) ||
+        die "the pane is too short for a driver pane below it"
+    [[ -f .handoff/$slug/HANDOFF.md ]] ||
+        die "no .handoff/$slug/HANDOFF.md here (give the exact folder name)"
+    [[ ! -e .handoff/$slug/.hq.done ]] || die "$slug is marked done"
+
+    local self dir hook_cmd dpane running hq_bin rc=0
+    running=$(tmux list-panes -a -F '#{@hqloop_slug}')
+    grep -qx -- "$slug" <<<"$running" && die "a loop for $slug is already running"
+
+    self=$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0")
+    hq_bin=${self%/*}/hq
+    [[ -x $hq_bin ]] || die "no hq beside $self"
+    # hq loop starts this script at the root it resolved, which can
+    # differ from the git top level that hq falls back to.
+    export HQ_ROOT=$PWD
+    dir=$(mktemp -d)
+    : >"$dir/events"
+    # The hook runs this script once per event, so a redeploy during the
+    # run would pair a new hook with the old driver. Both run a copy,
+    # and the hook exits quietly once the driver has removed it.
+    cp "$self" "$dir/hq-loop"
+    chmod u+x "$dir/hq-loop"
+    self=$dir/hq-loop
+    printf -v hook_cmd '[ -x %q ] || exit 0; %q hook %q' "$self" "$self" "$dir"
+    jq -n --arg c "$hook_cmd" '
+        {hooks: {
+            Stop: [{hooks: [{type: "command", command: $c}]}],
+            Notification: [{hooks: [{type: "command", command: $c}]}],
+            UserPromptSubmit: [{hooks: [{type: "command", command: $c}]}],
+            SessionStart: [{hooks: [{type: "command", command: $c}]}]}}' \
+        >"$dir/settings.json"
+
+    # The driver types into this pane by id. A new pane takes the tmux
+    # server's environment, so PATH, HOME and HQ_ROOT go in by hand.
+    # Its own pane carries the slug and temp dir for hq loop stop to
+    # find.
+    dpane=$(tmux split-window -d -P -F '#{pane_id}' -l 5 -t "$TMUX_PANE" \
+        -e "PATH=$PATH" -e "HOME=$HOME" -e "HQ_ROOT=$HQ_ROOT" \
+        "$self" drive "$dir" "$slug" "$max" "$TMUX_PANE" "$hq_bin" "$$") || {
+        rm -rf -- "$dir"
+        die "could not split the pane for the driver"
+    }
+    # shellcheck disable=SC2064
+    trap "tmux kill-pane -t $(printf %q "$dpane") 2>/dev/null || true; rm -rf -- $(printf %q "$dir")" EXIT HUP TERM
+    tmux set-option -p -t "$dpane" @hqloop_slug "$slug"
+    tmux set-option -p -t "$dpane" @hqloop_dir "$dir"
+
+    "${claude_cmd[@]}" --settings "$dir/settings.json" || rc=$?
+    exit "$rc"
+}
+
+# The flag takes effect at the session's next Stop or idle notice, when
+# the driver next looks. Zooming the claude pane hides the driver pane
+# and its messages.
+stop() {
+    local slug=${1:-} dir panes
+    [[ $slug =~ ^[A-Za-z0-9_-]+$ ]] || die "usage: hq loop stop <slug>"
+    panes=$(tmux list-panes -a -F '#{@hqloop_slug} #{@hqloop_dir}')
+    dir=$(awk -v s="$slug" '$1 == s { print $2; exit }' <<<"$panes")
+    [[ -n $dir && -d $dir ]] || die "no running hq loop for $slug"
+    touch "$dir/stop"
+    echo "hq loop: stop requested. The loop writes the handoff at the next Stop or idle notice, then ends."
+}
+
+case "${1:-}" in
+    hook) hook "$2" ;;
+    stop) stop "$2" ;;
+    drive) shift; drive "$@" ;;
+    launch) shift; launch "$@" ;;
+    *) die "run this as hq loop" ;;
+esac
