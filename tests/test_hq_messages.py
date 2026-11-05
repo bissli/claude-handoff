@@ -34,6 +34,7 @@ def _root(tmp_path, monkeypatch, git=False):
     monkeypatch.setenv('HQ_HOST', 'test-host')
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path))
     monkeypatch.delenv('HQ_CYCLE', raising=False)
+    monkeypatch.delenv('HQ_LOOP', raising=False)
     if git:
         monkeypatch.delenv('HQ_GIT', raising=False)
     else:
@@ -727,6 +728,7 @@ def test_the_reference_example_file_is_the_scripts_own_output(
     monkeypatch.setenv('HQ_HOST', 'dev')
     monkeypatch.delenv('HQ_GIT', raising=False)
     monkeypatch.delenv('HQ_CYCLE', raising=False)
+    monkeypatch.delenv('HQ_LOOP', raising=False)
     monkeypatch.setenv('HQ_NOW', '2026-08-24T10:00:00')
     monkeypatch.chdir(root)
     slug = 'auth-refresh'

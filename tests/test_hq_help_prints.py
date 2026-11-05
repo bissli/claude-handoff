@@ -29,6 +29,7 @@ def _root(tmp_path, monkeypatch):
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path))
     monkeypatch.setenv('HQ_GIT', '0')
     monkeypatch.delenv('HQ_CYCLE', raising=False)
+    monkeypatch.delenv('HQ_LOOP', raising=False)
     return root
 
 
@@ -153,3 +154,29 @@ def test_open_no_handoff_prints_no_read_topic(tmp_path, monkeypatch):
     rc, out, _ = _run(['open', _SLUG])
     assert rc == 0
     assert hq.HELP_TOPICS['read'] not in out
+
+
+def test_open_marks_unattended_only_while_loop_dir_exists(tmp_path, monkeypatch):
+    """Open marks the session unattended only while HQ_LOOP names a directory.
+
+    Mutation: the check reads HQ_LOOP as a plain flag, so a session left
+    open after the loop ends still reads as unattended; or the marker
+    prints after the read topic; or the marker reworded without the read
+    step that quotes it, which turns the loop rule off.
+    Oracle: the marker line precedes HELP_TOPICS['read'] while the
+    directory exists, is absent once the directory is removed, and is
+    quoted in the read topic.
+    """
+    _root(tmp_path, monkeypatch)
+    _run(['begin', _SLUG])
+    _run(['finish', _SLUG, '--log', 'c1'])
+    loop_dir = tmp_path / 'loop'
+    loop_dir.mkdir()
+    monkeypatch.setenv('HQ_LOOP', str(loop_dir))
+    marker = 'hq loop: no one is watching this session'
+    assert f"'{marker}'" in hq.HELP_TOPICS['read']
+    _, out, _ = _run(['open', _SLUG])
+    assert out == marker + '\n' + hq.HELP_TOPICS['read'] + '\n'
+    loop_dir.rmdir()
+    _, out, _ = _run(['open', _SLUG])
+    assert out == hq.HELP_TOPICS['read'] + '\n'
