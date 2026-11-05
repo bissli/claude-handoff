@@ -406,3 +406,74 @@ def test_drive_retries_a_refused_finish_under_its_own_lock(tmp_path):
         launcher.wait()
         os.killpg(driver.pid, 9)
         driver.wait()
+
+
+def test_drive_waits_on_a_question_asked_under_its_own_lock(tmp_path):
+    """Verify a session that ends on a question while it holds its lock
+    gets an alert and no retry text, unless the question is about
+    /handoff or a stop is pending.
+
+    Mutation: the endsq check dropped from the own-lock branch, so the
+    retry text answers a question the loop must leave to the user; the
+    !ask or the stop-file test dropped, so a /handoff question or a
+    pending stop waits on the user.
+    Oracle: a stub tmux that records each call - the lines typed after
+    a plain question Stop, a /handoff question Stop, and a question
+    Stop with the stop file present.
+    """
+    bin_dir = tmp_path / 'stub'
+    bin_dir.mkdir()
+    calls_path = tmp_path / 'tmux.log'
+    stub = bin_dir / 'tmux'
+    stub.write_text(f'#!/bin/sh\nIFS="|"; echo "$*" >> {calls_path}\n')
+    stub.chmod(0o755)
+    folder = tmp_path / '.handoff' / 'auth-refresh'
+    folder.mkdir(parents=True)
+    driver_dir = tmp_path / 'driver'
+    driver_dir.mkdir()
+    events = driver_dir / 'events'
+    events.write_text('')
+    launcher = subprocess.Popen(['sleep', '120'])
+    driver = subprocess.Popen(
+        [str(ROOT / 'bin' / 'hq-loop'), 'drive', str(driver_dir),
+         'auth-refresh', '10', '%0', str(ROOT / 'bin' / 'hq'),
+         str(launcher.pid)],
+        cwd=tmp_path,
+        env={**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'},
+        stdout=subprocess.DEVNULL,
+        start_new_session=True)
+
+    def calls() -> list[str]:
+        if not calls_path.exists():
+            return []
+        return calls_path.read_text().splitlines()
+
+    def typed() -> list[str]:
+        return [
+            line.split('|', 5)[5] for line in calls()
+            if line.startswith('send-keys|-t|%0|-l')]
+
+    try:
+        with events.open('a') as stream:
+            stream.write('SessionStart startup S1 0 0 0 0\n')
+        assert _wait_for(lambda: len(typed()) == 1)
+        (folder / '.hq.lock').write_text('slug=auth-refresh\nsession=S1\n')
+        with events.open('a') as stream:
+            stream.write('Stop - S1 0 0 1 0\n')
+        assert _wait_for(lambda: any(
+            line.startswith('display-message') and 'question' in line
+            for line in calls()))
+        assert typed() == ['/handoff read auth-refresh']
+        with events.open('a') as stream:
+            stream.write('Stop - S1 0 1 1 0\n')
+        assert _wait_for(lambda: len(typed()) == 2)
+        (driver_dir / 'stop').write_text('')
+        with events.open('a') as stream:
+            stream.write('Stop - S1 0 0 1 0\n')
+        assert _wait_for(lambda: len(typed()) == 3)
+        assert all('hq finish' in line for line in typed()[1:])
+    finally:
+        launcher.kill()
+        launcher.wait()
+        os.killpg(driver.pid, 9)
+        driver.wait()

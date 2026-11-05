@@ -219,7 +219,9 @@ drive() {
             # unfinished, most often a refused finish, and no fresh
             # session starts to retry it while the lock stands.
             if grep -qxF "session=$sid" "$folder/.hq.lock" 2>/dev/null; then
-                if ((retries < MAX_NUDGES)); then
+                if ((endsq && !ask)) && [[ ! -e $dir/stop ]]; then
+                    alert "the session asked you a question while it holds the lock, so the retry waits for your answer"
+                elif ((retries < MAX_NUDGES)); then
                     type_line "$RETRY_TEXT"
                     ((++retries))
                 else
