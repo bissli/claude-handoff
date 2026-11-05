@@ -56,10 +56,10 @@ form, the wind-down, the readiness checks and the cycle cap. A user
 Directive in the thread, or the user's answer at step 2, outranks any
 piece, down to replacing it whole. Setup tailors each piece to the
 thread: rewrite each loop-block bullet in the thread's terms, drop a
-bullet that does not apply, and add what the thread needs. Example:
-the user rules that a request relayed by a peer session counts as
-asked for when the peer's slug is on the grant list. The Loop and
-Authority bullets then carry that ruling in the user's words.
+bullet that does not apply, and add what the thread needs. One such
+answer is the user's step 2 ruling on whose requests count as asked
+for. The Loop and Authority bullets then carry that ruling in the
+user's words.
 
 ## Procedure
 
@@ -73,10 +73,15 @@ Authority bullets then carry that ruling in the user's words.
      "the eval harness prints 0 open sites in every feature", or
      "each item's test command passes".
    - Grants: commit identity and branch, push, deploy, spend cap,
-     peer sessions the loop may message.
+     peer sessions the loop may message, and whose requests count
+     as asked for. Example: "the peer's requests to drop closed
+     markers count as asked for".
    - The never list. Example: push, rewrite history, discard
      uncommitted work, delete a generated artifact.
    - Which open items wait on a person or a peer.
+   - Where each peer writes its reply, and what the file holds.
+     Example: `.handoff/<peer-slug>/outputs/review-<step>.md`, whose
+     first line is PASS or FAIL.
 3. Build the measure: one status command, run first and last in every
    cycle. It prints one line per open Plan item (coordinate, value,
    goal, MET or OPEN) and a `summary:` line. If writing an item's
@@ -148,9 +153,12 @@ bullet is a default, tailored to the thread as Scope says.
 - Terminal form: an item that cannot close leaves the checkbox as
   `- parked (<blocked|failed|stalled>): <item> - unblocked by <what>`.
 - Bounded waits: a wait on a peer or a lock names its limit in
-  minutes and ends parked. Every background or long command carries
-  its own timeout (`timeout <N>m`), and on timeout its item is parked
-  (failed). No turn ends to wait on a lock.
+  minutes and ends parked. A wait on a peer's verdict polls for the
+  file the peer writes, <path and what it holds>, as a background
+  command, so the turn ends under Turn and the verdict survives
+  /clear. Every background or long command carries its own timeout
+  (`timeout <N>m`), and on timeout its item is parked (failed). No
+  turn ends to wait on a lock.
 - Wind-down: when no `- [ ]` is workable, write the final report into
   State: each item by name with its state and figure, the measure,
   every residue or ruling row this loop added, and what would unblock
@@ -164,7 +172,9 @@ bullet is a default, tailored to the thread as Scope says.
 ## Plan form
 
 Every open item names its coordinate and the condition the measure
-checks. Every waiting item takes the terminal form at setup.
+checks. A waiting item takes the terminal form at setup. A peer
+wait that polls a named file under a timeout stays `- [ ]`. The
+parked line below is for a peer wait with no file.
 
 ```markdown
 - [ ] <item>. Coordinate: <name>. Done when <condition the measure
@@ -184,9 +194,16 @@ checks. Every waiting item takes the terminal form at setup.
 
 Run each one. Print it as pass or fail with the evidence line.
 
-- `hq list` shows the slug with an integer count above 0.
+- `hq list` shows the slug with an integer count above 0. When
+  parking every item that waits on a peer or a person leaves 0, the
+  fix is a backlog item the user promotes, or peer-free work split
+  out of a parked item into its own `- [ ]` as Audit describes.
 - No `- [ ]` matches
-  `parked|awaiting|on demand|waits on|until .* reports|proposal`.
+  `parked|awaiting|on demand|waits on|until .* reports|proposal`,
+  except one that names the peer file it polls and its timeout.
+- Every bullet under `## Plan` is a `- [ ]`, a `[x]`, or in the
+  terminal form. Any other bullet moves to Directives or
+  Environment.
 - Every `- [ ]` has a Done-when the measure reads.
 - No `.hq.lock`, no `.hq.done`, no `## Open questions`.
 - Directives hold the `Loop (user,` headline, and `/handoff done`
@@ -236,9 +253,10 @@ progress.
   stalled now: say so, and park or split the stalled items before any
   launch.
 - Existing parked `- [ ]` items: rewrite each in the terminal form.
-  An item that waits on a peer is parked at setup. Where part of it
-  is work the session can do each cycle, split that part into its own
-  `- [ ]` with its own coordinate before the Plan closes.
+  An item that waits on a peer with no file to poll is parked at
+  setup. Where part of it is work the session can do each cycle,
+  split that part into its own `- [ ]` with its own coordinate
+  before the Plan closes.
 - A scoreboard whose lines are not the Plan's items: rewrite each
   `- [ ]` as one scoreboard line, or add a line per `- [ ]`. The
   driver counts the Plan and the stall rule reads the scoreboard, so
