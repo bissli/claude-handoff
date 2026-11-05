@@ -160,12 +160,13 @@ def test_open_marks_unattended_only_while_loop_dir_exists(tmp_path, monkeypatch)
     """Open marks the session unattended only while HQ_LOOP names a directory.
 
     Mutation: the check reads HQ_LOOP as a plain flag, so a session left
-    open after the loop ends still reads as unattended; or the marker
-    prints after the read topic; or the marker reworded without the read
-    step that quotes it, which turns the loop rule off.
-    Oracle: the marker line precedes HELP_TOPICS['read'] while the
-    directory exists, is absent once the directory is removed, and is
-    quoted in the read topic.
+    open after the loop ends still reads as unattended; or the marker or
+    LOOP_RULE prints after the read topic, where the stop step meets the
+    session first; or the marker reworded without the read step that
+    quotes it, which turns the loop rule off.
+    Oracle: the marker line, then LOOP_RULE, precede HELP_TOPICS['read']
+    while the directory exists, both are absent once the directory is
+    removed, and the marker is quoted in the read topic.
     """
     _root(tmp_path, monkeypatch)
     _run(['begin', _SLUG])
@@ -176,7 +177,8 @@ def test_open_marks_unattended_only_while_loop_dir_exists(tmp_path, monkeypatch)
     marker = 'hq loop: no one is watching this session'
     assert f"'{marker}'" in hq.HELP_TOPICS['read']
     _, out, _ = _run(['open', _SLUG])
-    assert out == marker + '\n' + hq.HELP_TOPICS['read'] + '\n'
+    assert out == (
+        marker + '\n' + hq.LOOP_RULE + '\n' + hq.HELP_TOPICS['read'] + '\n')
     loop_dir.rmdir()
     _, out, _ = _run(['open', _SLUG])
     assert out == hq.HELP_TOPICS['read'] + '\n'
