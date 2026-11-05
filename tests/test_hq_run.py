@@ -3,6 +3,7 @@
 import os
 import pathlib
 import subprocess
+import time
 from typing import Any
 
 import pytest
@@ -320,3 +321,88 @@ def test_completion_offers_stop_then_slugs_after_loop(
     """
     _root_with_threads(tmp_path, monkeypatch)
     assert _complete(words, tmp_path) == expected
+
+
+def _wait_for(predicate: Any, limit: float = 20.0) -> bool:
+    """Poll predicate every 0.2 s until it is true or limit seconds pass.
+    """
+    deadline = time.monotonic() + limit
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.2)
+    return predicate()
+
+
+def test_drive_retries_a_refused_finish_under_its_own_lock(tmp_path):
+    """Verify the driver nudges a retry at a Stop under its own session's
+    lock, MAX_NUDGES times, and waits silently on a foreign lock.
+
+    Mutation: the session check dropped, so a foreign lock gets the retry;
+    the cap dropped, so a third retry is typed; or the own_lock branch
+    removed, so a refused finish leaves the pane idle.
+    Oracle: a stub tmux that records each call - the lines typed after
+    one foreign-lock Stop and three own-lock Stops, and the alert.
+    """
+    bin_dir = tmp_path / 'stub'
+    bin_dir.mkdir()
+    calls_path = tmp_path / 'tmux.log'
+    stub = bin_dir / 'tmux'
+    stub.write_text(f'#!/bin/sh\nIFS="|"; echo "$*" >> {calls_path}\n')
+    stub.chmod(0o755)
+    folder = tmp_path / '.handoff' / 'auth-refresh'
+    folder.mkdir(parents=True)
+    driver_dir = tmp_path / 'driver'
+    driver_dir.mkdir()
+    events = driver_dir / 'events'
+    events.write_text('')
+    launcher = subprocess.Popen(['sleep', '120'])
+    driver = subprocess.Popen(
+        [str(ROOT / 'bin' / 'hq-loop'), 'drive', str(driver_dir),
+         'auth-refresh', '10', '%0', str(ROOT / 'bin' / 'hq'),
+         str(launcher.pid)],
+        cwd=tmp_path,
+        env={**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'},
+        stdout=subprocess.DEVNULL,
+        start_new_session=True)
+
+    def typed() -> list[str]:
+        if not calls_path.exists():
+            return []
+        return [
+            line.split('|', 5)[5] for line in calls_path.read_text().splitlines()
+            if line.startswith('send-keys|-t|%0|-l')]
+
+    def alerts() -> list[str]:
+        if not calls_path.exists():
+            return []
+        return [
+            line for line in calls_path.read_text().splitlines()
+            if line.startswith('display-message')]
+
+    def stop_event() -> None:
+        with events.open('a') as stream:
+            stream.write('Stop - S1 0 0 0 0\n')
+
+    try:
+        with events.open('a') as stream:
+            stream.write('SessionStart startup S1 0 0 0 0\n')
+        assert _wait_for(lambda: len(typed()) == 1)
+        (folder / '.hq.lock').write_text('slug=auth-refresh\nsession=S2\n')
+        stop_event()
+        time.sleep(4)
+        assert len(typed()) == 1
+        (folder / '.hq.lock').write_text('slug=auth-refresh\nsession=S1\n')
+        for count in (2, 3):
+            stop_event()
+            assert _wait_for(lambda: len(typed()) == count)
+        stop_event()
+        assert _wait_for(lambda: any('hq finish' in line for line in alerts()))
+        assert len(typed()) == 3
+        assert typed()[0] == '/handoff read auth-refresh'
+        assert all('hq finish' in line for line in typed()[1:])
+    finally:
+        launcher.kill()
+        launcher.wait()
+        os.killpg(driver.pid, 9)
+        driver.wait()
