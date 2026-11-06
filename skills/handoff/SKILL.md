@@ -259,9 +259,9 @@ Run these steps in order.
    did not settle. Leave the header line and everything below the
    marker alone.
 5. Run the Reviewer pass below. Each finding that survives the
-   re-check becomes a `note`, a `stamp`, or a cursor edit in this
-   cycle. Return to step 2 for it. A cursor line a surviving finding
-   names moves out by the printed rules.
+   re-check becomes a `note`, a `stamp`, a `supersede`, or a cursor
+   edit in this cycle. Return to step 2 for it. A cursor line a
+   surviving finding names moves out by the printed rules.
 6. Run `hq finish <slug> --log "<one line for the Log>"`. It exits 1
    at the first blocking line. Do what that line says and re-run. An
    `advisory:` line never blocks, and neither does a `:?` in the read
@@ -281,7 +281,8 @@ hq finish auth-refresh \
 
 With the file on disk, and before `finish`, spawn the Skeptic below.
 It returns one numbered item per finding, `<n>. <finding>`. Re-check
-each finding in the write session, then stop. Never loop back to the
+each finding in the write session, then stop. Run the command a
+finding gives once its re-check holds. Never loop back to the
 Skeptic. A question it raises for the user goes under `## Open
 questions`. Do not stop for it. Only `--no-check` from the user,
 anywhere in the call, skips this pass. The agent never grants itself
@@ -306,7 +307,7 @@ the skip.
      contradicts it.
   3. Read a standing id the cursor cites with `hq standing <slug>
      <id>`, never from the block.
-  4. Last, name each cursor line the next session does not act on. The
+  4. Name each cursor line the next session does not act on. The
      next session acts on a line when it executes, checks, obeys, or
      answers it, or needs it to understand such a line. It does not
      act on history, a done Plan item, an open item's detail beyond
@@ -317,6 +318,16 @@ the skip.
      first and last words, and the reason. Never name a line the Now
      step, an open Plan item, or an open question depends on, nor an
      environment fact the work uses.
+  5. Last, name a live Standing item that only records a commit, such
+     as `Crash repaired (3f2a9c1)`, and a live artifact row for done
+     work the cursor does not name: a past cycle's probe or output
+     directory, or a spike or verify file whose verdict a Standing
+     item or another file holds. Confirm each with `hq standing <slug>
+     <id>` or `hq artifacts <slug>`. Give the id or path and the fix,
+     `hq supersede <slug> <id> --reason "<why>"` or `hq stamp <slug>
+     <path> --archive --reason "<why>"`. Never name a decision the
+     cursor cites or whose ruling still holds, an `always` row, or a
+     row the Now step or an open Plan item uses.
 
 ### Report
 
