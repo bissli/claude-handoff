@@ -68,20 +68,18 @@ drive() {
     # to close this pane.
     alive() { tmux list-panes -t "$target" >/dev/null 2>&1 && kill -0 "$launcher" 2>/dev/null; }
 
-    # $1 is an SGR code: 2 dim for progress, 33 yellow for an alert,
-    # 1 bold when the loop ends.
     say() {
-        printf '\e[2m%s\e[0m [%d/%d] \e[%sm%s\e[0m\n' \
-            "$(date +%H:%M)" "$cycles" "$max" "$1" "$2"
+        printf '\e[2m%s\e[0m [%d/%d] \e[2m%s\e[0m\n' \
+            "$(date +%H:%M)" "$cycles" "$max" "$1"
     }
 
     alert() {
-        say "${2:-33}" "$1"
+        say "$1"
         tmux display-message -d 10000 -t "$target" "hq loop $slug: $1" || true
     }
 
     finish() {
-        alert "$1" 1
+        alert "$1"
         # hq open reads a session left open after the loop as attended
         # once this directory is gone.
         rm -rf -- "$dir"
@@ -150,7 +148,7 @@ drive() {
         finish "claude exited before it started. Its pane showed why, for example a missing .root"
     type_line "/handoff read $slug"
     base=$(thread_cycle)
-    say 2 "started $slug at cycle $((base + 1))"
+    say "started $slug at cycle $((base + 1))"
 
     while alive; do
         rc=0
@@ -256,7 +254,7 @@ drive() {
                 finish "$slug shows '$open' in the Plan column after cycle $cycle. If the work is done, run /handoff done $slug"
             fi
             ((cycles >= max)) && finish "reached --max-cycles $max at cycle $cycle"
-            say 2 "cycle $cycle written, clearing"
+            say "cycle $cycle written, clearing"
             type_line "/clear"
             wait_session_start clear "$CLEAR_TIMEOUT" ||
                 finish "no SessionStart after /clear, so the read was not typed"
