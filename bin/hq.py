@@ -5657,7 +5657,8 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
     argv : argparse.Namespace
         Parsed flags; ``--log`` is required, ``--acknowledge`` passes a
         witness break, and ``--replace-directives`` passes a changed
-        ``## Directives`` section and records its reason.
+        ``## Directives`` section and records its reason in a decision
+        that supersedes every live ``Directives replaced`` decision.
 
     Returns
     -------
@@ -5956,12 +5957,23 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
     # The decision quotes the replaced section whole, so not_carried
     # below finds each old directive line carried in standing.md.
     if replace_why:
+        standing_items_old, not_live_old = _parse_standing(standing_text_new)
         line = _note_line(
             standing_text_new, 'decision', 'Directives replaced',
             f'{replace_why.rstrip(".")}. Previous: {directives_old or "none"}',
             anch['cycle'])
+        new_id = _parse_standing(line)[0][0]['id']
         new_note_lines.append(line)
         standing_text_new += line + '\n'
+        # A supersession line keeps the prior decision's text in
+        # standing.md, where not_carried still reads it.
+        for item in standing_items_old:
+            if (item['prefix'] == 'd'
+                and item['headline'] == 'Directives replaced'
+                and item['id'] not in not_live_old):
+                retire = f'- (c{anch["cycle"]}) {item["id"]} -> {new_id}'
+                new_note_lines.append(retire)
+                standing_text_new += retire + '\n'
     # --- Advisory: cursor lines not carried ---
     # Notes:
     # - The cursor is rewritten every cycle, so the previous archive is
@@ -7445,8 +7457,8 @@ def _build_parser() -> argparse.ArgumentParser:
         'manifest.\n'
         '--replace-directives "<why>" passes a changed ## Directives\n'
         'section and records the old section and the reason in one\n'
-        'decision; without it a changed section refuses, and with it an\n'
-        'unchanged one does.\n'
+        'decision, which supersedes the last such decision; without it\n'
+        'a changed section refuses, and with it an unchanged one does.\n'
         'The cursor lines from the last finished cycle that nothing now\n'
         'carries print as an advisory, and the manifest records their\n'
         'count; they never block the write, and the Now step is exempt.\n'

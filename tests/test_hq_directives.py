@@ -145,6 +145,48 @@ def test_replace_directives_records_the_old_section(tmp_path, monkeypatch):
     assert 'not carried' not in out
 
 
+def test_a_second_replacement_supersedes_the_first(tmp_path, monkeypatch):
+    """Each replacement leaves one live Directives replaced decision.
+
+    Mutation: no supersession line written, or written new -> old, or a
+    decision of another headline retired with it, or an already
+    superseded one given a second outgoing line.
+    Oracle: hand-traced ids - d01 is the hand-filed decision, and the
+    replacements of cycles 2, 3 and 4 file d02, d03 and d04, each
+    superseding the one before alone.
+    """
+    folder = _cycle_one(tmp_path, monkeypatch, _RULE)
+    standing_path = folder / 'standing.md'
+    standing_path.write_text(
+        standing_path.read_text() + '- [d01] (c1) **Keep the old cache**\n')
+    _set(folder, 'Directives', '')
+    assert _run([
+        'finish', _SLUG, '--log', 'c2',
+        '--replace-directives', 'the user lifted it'])[0] == 0
+    monkeypatch.setenv('HQ_CYCLE', '3')
+    assert _run(['begin', _SLUG])[0] == 0
+    _set(folder, 'Directives', _RULE)
+    _set(folder, 'Now', 'Step three.')
+    assert _run([
+        'finish', _SLUG, '--log', 'c3',
+        '--replace-directives', 'the user restored it'])[0] == 0
+    monkeypatch.setenv('HQ_CYCLE', '4')
+    assert _run(['begin', _SLUG])[0] == 0
+    _set(folder, 'Directives', '')
+    _set(folder, 'Now', 'Step four.')
+    assert _run([
+        'finish', _SLUG, '--log', 'c4',
+        '--replace-directives', 'the user lifted it again'])[0] == 0
+    standing = standing_path.read_text()
+    items, not_live = hq._parse_standing(standing)
+    live_ids = [item['id'] for item in items if item['id'] not in not_live]
+    assert live_ids == ['d01', 'd04']
+    assert [ln for ln in standing.splitlines() if ' -> ' in ln] == [
+        '- (c3) d02 -> d03',
+        '- (c4) d03 -> d04',
+        ]
+
+
 def test_replace_directives_on_an_unchanged_section_refuses(
         tmp_path, monkeypatch):
     """The flag on an unchanged section refuses instead of filing a decision.
