@@ -55,7 +55,7 @@ drive() {
     local dir=$1 slug=$2 max=$3 target=$4 hq_bin=$5 launcher=$6
     local folder=".handoff/$slug"
     local event src sid bg ask endsq dh ev id bgn askn endsqn dhn rc skip
-    local base sent=-1 nudges=0 retries=0 idle=0 idle_nudges=0 cycles=0 cycle open budget band ctx hp ep near
+    local base sent=-1 nudges=0 retries=0 idle=0 idle_nudges=0 cycles=1 cycle open budget band ctx hp ep near
     local last_sid='' last_ask=0 last_endsq=0 last_dh=0 last_bg=0
 
     # The trap runs after this function returns, when its locals are gone.
@@ -245,7 +245,6 @@ drive() {
         cycle=$(thread_cycle)
 
         if ((cycle > base)); then
-            ((++cycles))
             [[ -e $dir/stop ]] &&
                 finish "stopped after cycle $cycle as requested. The session is still open: continue it with /handoff read $slug"
             open=$(thread_open) || finish "hq list failed"
@@ -259,6 +258,7 @@ drive() {
             wait_session_start clear "$CLEAR_TIMEOUT" ||
                 finish "no SessionStart after /clear, so the read was not typed"
             type_line "/handoff read $slug"
+            ((++cycles))
             base=$cycle
             sent=-1
             nudges=0
