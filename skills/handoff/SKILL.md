@@ -326,8 +326,8 @@ the skip.
      <id>` or `hq artifacts <slug>`. Give the id or path and the fix,
      `hq supersede <slug> <id> --reason "<why>"` or `hq stamp <slug>
      <path> --archive --reason "<why>"`. Never name a decision the
-     cursor cites or whose ruling still holds, an `always` row, or a
-     row the Now step or an open Plan item uses.
+     cursor cites or whose ruling still holds, an `always` or `edit`
+     row, or a row the Now step or an open Plan item uses.
 
 ### Report
 
