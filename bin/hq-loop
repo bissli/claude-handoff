@@ -56,6 +56,7 @@ drive() {
     local folder=".handoff/$slug"
     local event src sid bg ask endsq dh ev id bgn askn endsqn dhn rc skip
     local base sent=-1 nudges=0 retries=0 idle=0 idle_nudges=0 cycles=1 cycle open budget band ctx hp ep near
+    local payload
     local last_sid='' last_ask=0 last_endsq=0 last_dh=0 last_bg=0
 
     # The trap runs after this function returns, when its locals are gone.
@@ -253,7 +254,19 @@ drive() {
                 finish "$slug shows '$open' in the Plan column after cycle $cycle. If the work is done, run /handoff done $slug"
             fi
             ((cycles >= max)) && finish "reached --max-cycles $max at cycle $cycle"
-            say "cycle $cycle written, clearing"
+            payload=$(awk -F'\t' '
+                !NF { next }
+                !header { for (i = 1; i <= NF; i++) if ($i == "payload_tokens") p = i
+                          header = 1; next }
+                { prev_label = last_label; prev = last
+                  last_label = $1; last = p ? $p : "" }
+                END {
+                    if (last !~ /^[0-9]+$/) exit
+                    printf ", %d tok", last
+                    if (prev ~ /^[0-9]+$/)
+                        printf " %+d since c%s", last - prev, prev_label
+                }' "$folder/cycles/manifest.tsv") || payload=
+            say "cycle $cycle written$payload, clearing"
             type_line "/clear"
             wait_session_start clear "$CLEAR_TIMEOUT" ||
                 finish "no SessionStart after /clear, so the read was not typed"

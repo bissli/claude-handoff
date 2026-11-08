@@ -543,3 +543,70 @@ def test_drive_counts_the_cycle_in_progress(tmp_path):
         launcher.wait()
         os.killpg(driver.pid, 9)
         driver.wait()
+
+
+def test_drive_prints_payload_and_slope(tmp_path):
+    """Verify the written line carries the last manifest row's payload
+    and its change since the row before.
+
+    Mutation: the cursor_lines column read in place of payload_tokens,
+    the sign of the change flipped, or the first row read in place of
+    the last.
+    Oracle: hand-written manifest values and expected lines.
+    """
+    bin_dir = tmp_path / 'stub'
+    bin_dir.mkdir()
+    (bin_dir / 'tmux').write_text('#!/bin/sh\nexit 0\n')
+    (bin_dir / 'tmux').chmod(0o755)
+    hq_stub = bin_dir / 'hq'
+    hq_stub.write_text('#!/bin/sh\necho "auth-refresh 2026-01-01 c1 3 open task"\n')
+    hq_stub.chmod(0o755)
+    cycles_dir = tmp_path / '.handoff' / 'auth-refresh' / 'cycles'
+    cycles_dir.mkdir(parents=True)
+    manifest = cycles_dir / 'manifest.tsv'
+    header = 'cycle\twritten\tcursor_lines\tpayload_tokens\n'
+    driver_dir = tmp_path / 'driver'
+    driver_dir.mkdir()
+    events = driver_dir / 'events'
+    events.write_text('')
+    output = tmp_path / 'driver.out'
+    launcher = subprocess.Popen(['sleep', '120'])
+
+    def emit(line: str) -> None:
+        with events.open('a') as stream:
+            stream.write(line + '\n')
+
+    def said() -> list[str]:
+        text = output.read_text() if output.exists() else ''
+        return [re.sub(r'\x1b\[[0-9;]*m', '', line)[6:] for line in text.splitlines()]
+
+    try:
+        with output.open('w') as out:
+            driver = subprocess.Popen(
+                [str(ROOT / 'bin' / 'hq-loop'), 'drive', str(driver_dir),
+                 'auth-refresh', '3', '%0', str(hq_stub), str(launcher.pid)],
+                cwd=tmp_path,
+                env={**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'},
+                stdin=subprocess.DEVNULL,
+                stdout=out,
+                start_new_session=True)
+        emit('SessionStart startup S1 0 0 0 0')
+        assert _wait_for(lambda: len(said()) == 1)
+        manifest.write_text(header + '1\t2026-01-01\t40\t1000\n')
+        emit('Stop - S1 0 0 0 0')
+        assert _wait_for(lambda: len(said()) == 2)
+        emit('SessionStart clear S2 0 0 0 0')
+        manifest.write_text(
+            header + '1\t2026-01-01\t40\t1000\n2\t2026-01-02\t44\t1250\n')
+        emit('Stop - S2 0 0 0 0')
+        assert _wait_for(lambda: len(said()) == 3)
+        assert said() == [
+            '[1/3] started auth-refresh at cycle 1',
+            '[1/3] cycle 1 written, 1000 tok, clearing',
+            '[2/3] cycle 2 written, 1250 tok +250 since c1, clearing',
+            ]
+    finally:
+        launcher.kill()
+        launcher.wait()
+        os.killpg(driver.pid, 9)
+        driver.wait()
