@@ -246,9 +246,12 @@ Run these steps in order.
    <slug> --force to take over`. Stop the same way, and run that only
    on the same confirmation. `begin` takes over a lock older than two
    hours without `--force`.
-2. Run one `hq note` per item settled this session, or one `--batch`
-   call for all of them. Run `hq supersede <slug> <old-id> <new-id>`
-   for each ruling that reverses an earlier one.
+2. Run one `hq note` per item settled this session that a later
+   cycle must follow or know, or one `--batch` call for all of them.
+   A call that settles only this step goes in the `finish --log`
+   line, and in the commit subject where the cycle commits. Run
+   `hq supersede <slug> <old-id> <new-id>` for each ruling that
+   reverses an earlier one.
 3. Place each file this session made where `## The folder` says,
    before its first stamp. Then run one `hq stamp` per artifact
    created, re-read, or moved, or one `--batch` call. A refusal names
@@ -318,16 +321,18 @@ the skip.
      first and last words, and the reason. Never name a line the Now
      step, an open Plan item, or an open question depends on, nor an
      environment fact the work uses.
-  5. Last, name a live Standing item that only records a commit, such
-     as `Crash repaired (3f2a9c1)`, and a live artifact row for done
-     work the cursor does not name: a past cycle's probe or output
-     directory, or a spike or verify file whose verdict a Standing
-     item or another file holds. Confirm each with `hq standing <slug>
-     <id>` or `hq artifacts <slug>`. Give the id or path and the fix,
-     `hq supersede <slug> <id> --reason "<why>"` or `hq stamp <slug>
-     <path> --archive --reason "<why>"`. Never name a decision the
-     cursor cites or whose ruling still holds, an `always` or `edit`
-     row, or a row the Now step or an open Plan item uses.
+  5. Last, name a live decision that only records a step - a commit,
+     a verdict, one site's reading, or a spike's answer - such
+     as `Crash repaired (3f2a9c1)` or `4be01c2 verify PASS`, and a
+     live artifact row for done work the cursor does not name: a past
+     cycle's probe or output directory, or a spike or verify file
+     whose verdict a Standing item or another file holds. Confirm
+     each with `hq standing <slug> <id>` or `hq artifacts <slug>`.
+     Give the id or path and the fix, `hq supersede <slug> <id>
+     --reason "<why>"` or `hq stamp <slug> <path> --archive --reason
+     "<why>"`. Never name a decision the cursor cites or whose ruling
+     still holds, an `always` or `edit` row, or a row the Now step or
+     an open Plan item uses.
 
 ### Report
 
