@@ -1,5 +1,6 @@
 """Tests for the hq run and hq loop verbs and bin/hq-completion.bash."""
 
+import contextlib
 import os
 import pathlib
 import re
@@ -411,16 +412,16 @@ def test_drive_retries_a_refused_finish_under_its_own_lock(tmp_path):
 
 def test_drive_waits_on_a_question_asked_under_its_own_lock(tmp_path):
     """Verify a session that ends on a question while it holds its lock
-    gets an alert and no retry text, unless the question is about
-    /handoff or a stop is pending.
+    gets an alert and no retry text, with a stop pending as well, unless
+    the question is about /handoff.
 
     Mutation: the endsq check dropped from the own-lock branch, so the
     retry text answers a question the loop must leave to the user; the
-    !ask or the stop-file test dropped, so a /handoff question or a
-    pending stop waits on the user.
-    Oracle: a stub tmux that records each call - the lines typed after
-    a plain question Stop, a /handoff question Stop, and a question
-    Stop with the stop file present.
+    !ask test dropped, so a /handoff question waits on the user; or the
+    stop-file condition kept, so a pending stop answers the question.
+    Oracle: a stub tmux that records each call - the lines typed and
+    the alerts after a plain question Stop, a /handoff question Stop,
+    and a question Stop with the stop file present.
     """
     bin_dir = tmp_path / 'stub'
     bin_dir.mkdir()
@@ -468,11 +469,14 @@ def test_drive_waits_on_a_question_asked_under_its_own_lock(tmp_path):
         with events.open('a') as stream:
             stream.write('Stop - S1 0 1 1 0\n')
         assert _wait_for(lambda: len(typed()) == 2)
+        assert 'hq finish' in typed()[1]
         (driver_dir / 'stop').write_text('')
+        asked = sum('question' in line for line in calls())
         with events.open('a') as stream:
             stream.write('Stop - S1 0 0 1 0\n')
-        assert _wait_for(lambda: len(typed()) == 3)
-        assert all('hq finish' in line for line in typed()[1:])
+        assert _wait_for(lambda: sum('question' in line for line in calls()) > asked)
+        time.sleep(3)
+        assert len(typed()) == 2
     finally:
         launcher.kill()
         launcher.wait()
@@ -526,11 +530,13 @@ def test_drive_counts_the_cycle_in_progress(tmp_path):
                 start_new_session=True)
         emit('SessionStart startup S1 0 0 0 0')
         assert _wait_for(lambda: len(said()) == 1)
-        manifest.write_text('cycle\twritten\n1\t2026-01-01\n')
+        pad = '\t-' * 12 + '\t0'
+        manifest.write_text(f'cycle\twritten\n1\t2026-01-01{pad}\n')
         emit('Stop - S1 0 0 0 0')
         assert _wait_for(lambda: len(said()) == 2)
         emit('SessionStart clear S2 0 0 0 0')
-        manifest.write_text('cycle\twritten\n1\t2026-01-01\n2\t2026-01-02\n')
+        manifest.write_text(
+            f'cycle\twritten\n1\t2026-01-01{pad}\n2\t2026-01-02{pad}\n')
         emit('Stop - S2 0 0 0 0')
         driver.wait(timeout=20)
         assert said() == [
@@ -592,12 +598,14 @@ def test_drive_prints_payload_and_slope(tmp_path):
                 start_new_session=True)
         emit('SessionStart startup S1 0 0 0 0')
         assert _wait_for(lambda: len(said()) == 1)
-        manifest.write_text(header + '1\t2026-01-01\t40\t1000\n')
+        pad = '\t-' * 10 + '\t0'
+        manifest.write_text(header + f'1\t2026-01-01\t40\t1000{pad}\n')
         emit('Stop - S1 0 0 0 0')
         assert _wait_for(lambda: len(said()) == 2)
         emit('SessionStart clear S2 0 0 0 0')
         manifest.write_text(
-            header + '1\t2026-01-01\t40\t1000\n2\t2026-01-02\t44\t1250\n')
+            header + f'1\t2026-01-01\t40\t1000{pad}\n'
+            f'2\t2026-01-02\t44\t1250{pad}\n')
         emit('Stop - S2 0 0 0 0')
         assert _wait_for(lambda: len(said()) == 3)
         assert said() == [
@@ -610,3 +618,278 @@ def test_drive_prints_payload_and_slope(tmp_path):
         launcher.wait()
         os.killpg(driver.pid, 9)
         driver.wait()
+
+
+def _manifest_row(cycle, log='-', stall='0', window=None):
+    """One manifest line: cycle, log at field 12, stall and window at 15, 16."""
+    fields = [str(cycle), '2026-01-01'] + ['-'] * 9 + [log, '-', '-', stall]
+    if window is not None:
+        fields.append(str(window))
+    return '\t'.join(fields)
+
+
+class _Drive:
+    """A driver run against stub tmux and hq, its calls and output read back.
+    """
+
+    def __init__(self, tmp_path, max_cycles, open_cnt='3', stdin=subprocess.DEVNULL):
+        bin_dir = tmp_path / 'stub'
+        bin_dir.mkdir()
+        self.calls_path = tmp_path / 'tmux.log'
+        (bin_dir / 'tmux').write_text(
+            f'#!/bin/sh\nIFS="|"; echo "$*" >> {self.calls_path}\n')
+        (bin_dir / 'tmux').chmod(0o755)
+        hq_stub = bin_dir / 'hq'
+        hq_stub.write_text(
+            f'#!/bin/sh\necho "auth-refresh 2026-01-01 c1 {open_cnt} open task"\n')
+        hq_stub.chmod(0o755)
+        self.folder = tmp_path / '.handoff' / 'auth-refresh'
+        (self.folder / 'cycles').mkdir(parents=True)
+        self.manifest = self.folder / 'cycles' / 'manifest.tsv'
+        self.driver_dir = tmp_path / 'driver'
+        self.driver_dir.mkdir()
+        self.events = self.driver_dir / 'events'
+        self.events.write_text('')
+        self.output = tmp_path / 'driver.out'
+        self.errors = tmp_path / 'driver.err'
+        self.launcher = subprocess.Popen(['sleep', '120'])
+        with self.output.open('w') as out, self.errors.open('w') as err:
+            self.driver = subprocess.Popen(
+                [str(ROOT / 'bin' / 'hq-loop'), 'drive', str(self.driver_dir),
+                 'auth-refresh', str(max_cycles), '%0', str(hq_stub),
+                 str(self.launcher.pid)],
+                cwd=tmp_path,
+                env={
+                    **os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}',
+                    'TMUX_PANE': '%9'},
+                stdin=stdin,
+                stdout=out,
+                stderr=err,
+                start_new_session=True)
+
+    def write_manifest(self, rows):
+        self.manifest.write_text('cycle\twritten\n' + ''.join(r + '\n' for r in rows))
+
+    def emit(self, line):
+        with self.events.open('a') as stream:
+            stream.write(line + '\n')
+
+    def said(self):
+        text = self.output.read_text() if self.output.exists() else ''
+        return [re.sub(r'\x1b\[[0-9;]*m', '', line)[6:] for line in text.splitlines()]
+
+    def calls(self):
+        return self.calls_path.read_text().splitlines() if self.calls_path.exists() else []
+
+    def close(self):
+        self.launcher.kill()
+        self.launcher.wait()
+        # The driver can exit with its whole group before cleanup.
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(self.driver.pid, 9)
+        self.driver.wait()
+
+
+@pytest.mark.parametrize('field15', ['-', None])
+def test_drive_backstop_stops_on_no_readable_summary(tmp_path, field15):
+    """Verify a written cycle with '-' or no field 15 stops the loop ahead of
+    --max-cycles, and rings the bell.
+
+    Mutation: the backstop placed after the --max-cycles check, or the
+    bell dropped from alert.
+    Oracle: --max-cycles 1, so a backstop placed late prints the ceiling
+    line in place of the summary line.
+    """
+    drive = _Drive(tmp_path, 1)
+    try:
+        drive.emit('SessionStart startup S1 0 0 0 0')
+        assert _wait_for(lambda: len(drive.said()) == 1)
+        row = _manifest_row(1, stall=field15 or '')
+        drive.write_manifest([row if field15 else row.rsplit('\t', 1)[0]])
+        drive.emit('Stop - S1 0 0 0 0')
+        drive.driver.wait(timeout=20)
+        assert drive.said()[-1] == (
+            '[1/1] cycle 1 stored no readable summary. Run /handoff'
+            ' auth-refresh in this session, fix the measure, then hq loop'
+            ' auth-refresh')
+        assert '\a' in drive.errors.read_text()
+    finally:
+        drive.close()
+
+
+def test_drive_backstop_stops_at_four_and_passes_three(tmp_path):
+    """Verify a stored stall of 3 clears and one of 4 stops the loop.
+
+    Mutation: the threshold moved by one.
+    Oracle: the two stored values either side of the threshold.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.emit('SessionStart startup S1 0 0 0 0')
+        assert _wait_for(lambda: len(drive.said()) == 1)
+        drive.write_manifest([_manifest_row(1, stall='3')])
+        drive.emit('Stop - S1 0 0 0 0')
+        assert _wait_for(lambda: len(drive.said()) == 2)
+        drive.emit('SessionStart clear S2 0 0 0 0')
+        drive.write_manifest([_manifest_row(1, stall='3'), _manifest_row(2, stall='4')])
+        drive.emit('Stop - S2 0 0 0 0')
+        drive.driver.wait(timeout=20)
+        assert drive.said() == [
+            '[1/10] started auth-refresh at cycle 1',
+            '[1/10] cycle 1 written, clearing',
+            ('[2/10] 4 cycles without progress and no stall ruling. Run'
+             ' /handoff auth-refresh in this session, answer the stall'
+             ' question it asks, then hq loop auth-refresh'),
+            ]
+    finally:
+        drive.close()
+
+
+def test_drive_open_count_of_zero_stops_before_the_backstop(tmp_path):
+    """Verify an open count of 0 stops the loop before field 15 is read.
+
+    Mutation: the backstop placed ahead of the open-count check.
+    Oracle: a '-' in field 15, which the backstop would stop on first.
+    """
+    drive = _Drive(tmp_path, 10, open_cnt='0')
+    try:
+        drive.emit('SessionStart startup S1 0 0 0 0')
+        assert _wait_for(lambda: len(drive.said()) == 1)
+        drive.write_manifest([_manifest_row(1, stall='-')])
+        drive.emit('Stop - S1 0 0 0 0')
+        drive.driver.wait(timeout=20)
+        assert "shows '0' in the Plan column" in drive.said()[-1]
+    finally:
+        drive.close()
+
+
+def test_drive_alerts_at_once_on_a_question(tmp_path):
+    """Verify a Stop that ends on a question, not about /handoff, alerts at
+    once with nothing typed.
+
+    Mutation: the branch dropped, so only a later idle notice alerts.
+    Oracle: a stub tmux that records each call, with no idle notice sent.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.emit('SessionStart startup S1 0 0 0 0')
+        assert _wait_for(lambda: len(drive.said()) == 1)
+        drive.emit('Stop - S1 0 0 1 0')
+        assert _wait_for(lambda: any(
+            line.startswith('display-message')
+            and 'the session asked a question and waits for the answer' in line
+            for line in drive.calls()))
+        typed = [c for c in drive.calls() if c.startswith('send-keys|-t|%0|-l')]
+        assert len(typed) == 1
+    finally:
+        drive.close()
+
+
+def test_drive_ceiling_stop_prints_the_window_and_the_re_stamps(tmp_path):
+    """Verify the --max-cycles stop prints the window's first summary, the
+    latest summary and every probe re-stamp after the setup cycle.
+
+    Mutation: the first manifest row printed in place of the window's
+    first row, or a setup-cycle stamp listed.
+    Oracle: a ruling at c3 opens the window; c1 is the setup cycle.
+    """
+    drive = _Drive(tmp_path, 1)
+    rows = [
+        _manifest_row(1, 'summary: a=5->0 - setup', '0', 1),
+        _manifest_row(2, 'summary: a=4->0 b=MET - work', '0', 1),
+        _manifest_row(3, 'summary: a=4->0 stall review: split a', '0', 3),
+        ]
+    (drive.folder / 'ledger.tsv').write_text(
+        'cycle\tts\tpath\n1\t-\tprobes/status.sh\n2\t-\tprobes/status.sh\n'
+        '3\t-\tnotes/x.md\n4\t-\tprobes/\n')
+    try:
+        drive.write_manifest(rows)
+        drive.emit('SessionStart startup S1 0 0 0 0')
+        assert _wait_for(lambda: len(drive.said()) == 1)
+        drive.write_manifest(rows + [_manifest_row(4, 'summary: a=3->0 - more', '0', 3)])
+        drive.emit('Stop - S1 0 0 0 0')
+        drive.driver.wait(timeout=20)
+        assert drive.said()[1:] == [
+            '[1/1] window c3: summary: a=4->0',
+            '[1/1] latest c4: summary: a=3->0',
+            '[1/1] probe re-stamps: c2 probes/status.sh, c4 probes/',
+            '[1/1] reached --max-cycles 1 at cycle 4',
+            ]
+    finally:
+        drive.close()
+
+
+def test_drive_finish_unsets_the_slug_and_grows_the_pane(tmp_path):
+    """Verify finish() resizes its pane before the alert and unsets the
+    pane's slug and dir before the Enter wait.
+
+    Mutation: the resize or the unset dropped, or run after the read.
+    Oracle: a stub tmux that records each call while the driver still
+    waits on stdin.
+    """
+    drive = _Drive(tmp_path, 10, stdin=subprocess.PIPE)
+    try:
+        drive.emit('SessionStart startup S1 0 0 0 0')
+        assert _wait_for(lambda: len(drive.said()) == 1)
+        (drive.folder / '.hq.done').write_text('')
+        drive.emit('Stop - S1 0 0 0 0')
+        assert _wait_for(lambda: any('@hqloop_dir' in c for c in drive.calls()))
+        assert drive.driver.poll() is None
+        calls = drive.calls()
+        resize = calls.index('resize-pane|-y|10|-t|%9')
+        alert = next(i for i, c in enumerate(calls) if c.startswith('display-message'))
+        assert resize < alert
+        assert 'set-option|-p|-u|-t|%9|@hqloop_slug' in calls[alert:]
+    finally:
+        drive.close()
+
+
+def test_launch_guards(tmp_path):
+    """Verify launch dies on a leftover lock, a missing Loop directive, and
+    a manifest with no integer in field 15, in that order.
+
+    Mutation: a guard dropped; the lock check placed after a guard that
+    also fails; the Loop line matched anywhere in the file; or field 14
+    read, or '-' accepted.
+    Oracle: the die line each fixture draws, and exit 0 once all hold.
+    """
+    bin_dir = tmp_path / 'stub'
+    bin_dir.mkdir()
+    (bin_dir / 'tmux').write_text('#!/bin/sh\necho 40\n')
+    (bin_dir / 'tmux').chmod(0o755)
+    folder = tmp_path / '.handoff' / 'auth-refresh'
+    (folder / 'cycles').mkdir(parents=True)
+    handoff = folder / 'HANDOFF.md'
+    loop_line = '- Loop (user, 2026-11-10): run unattended\n'
+    env = {
+        **os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}',
+        'TMUX': 'stub', 'TMUX_PANE': '%0'}
+
+    def launch() -> tuple[int, str]:
+        proc = subprocess.run(
+            [str(ROOT / 'bin' / 'hq-loop'), 'launch', '10', 'auth-refresh', 'true'],
+            cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30)
+        return proc.returncode, proc.stderr.strip()
+
+    handoff.write_text(f'# Handoff\n\n## Task\n{loop_line}\n')
+    (folder / '.hq.lock').write_text('session=S1\n')
+    assert launch() == (
+        1, ('hq loop: auth-refresh has an open cycle (.hq.lock) - finish it in'
+            ' its session, or run hq begin auth-refresh --force once that session'
+            ' is dead'))
+    (folder / '.hq.lock').unlink()
+    no_loop = (
+        1, ('hq loop: auth-refresh has no Loop directive - run /hq-loop'
+            ' auth-refresh first'))
+    assert launch() == no_loop
+    handoff.write_text(f'# Handoff\n\n## Directives\n{loop_line}\n## Task\nWork.\n')
+    no_summary = (
+        1, ('hq loop: auth-refresh has no cycle with a readable summary - run'
+            ' /hq-loop auth-refresh to audit it'))
+    assert launch() == no_summary
+    manifest = folder / 'cycles' / 'manifest.tsv'
+    row14 = '\t'.join(['1'] + ['-'] * 12 + ['5'])
+    manifest.write_text(f'cycle\n{row14}\t-\n')
+    assert launch() == no_summary
+    manifest.write_text(f'cycle\n{row14}\t0\n')
+    assert launch()[0] == 0
