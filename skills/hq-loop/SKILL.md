@@ -220,14 +220,16 @@ Write these bullets into Directives, filling each `<...>`.
 - Stall: `hq finish` judges each cycle's summary. A cycle is progress
   when, since the last stall ruling, a counting token beats its best,
   a gate first reads MET, or a tally passes its highest value. The
-  trigger is the stall line `hq open` prints. At 2, close a unit on
-  another workable `- [ ]` this cycle where one exists. At 3 or more
-  under hq loop, work the cycle first, and put the stall question
-  only when `hq finish` refuses the cycle or the cycle's last measure
-  shows no progress. At 3 or more with the user present (`hq open`
-  printed no `hq loop:` line), put it before any work. The message
-  names each stuck item, its values over the stalled cycles from
-  `hq arc <slug>`, the likely cause, and the options: split it,
+  trigger is the stall line `hq open` printed at this cycle's read.
+  The `stall:` count `hq finish` prints belongs to the next cycle and
+  never triggers the question in the cycle it ends. At 2, close a
+  unit on another workable `- [ ]` this cycle where one exists. At 3
+  or more under hq loop, work the cycle first, and put the stall
+  question only when `hq finish` refuses the cycle or the cycle's
+  last measure shows no progress. At 3 or more with the user present
+  (`hq open` printed no `hq loop:` line), put it before any work. The
+  message names each stuck item, its values over the stalled cycles
+  from `hq arc <slug>`, the likely cause, and the options: split it,
   change its Done-when, park it, or drop the objective. It ends the
   turn on one question, with no "/handoff" anywhere in the message.
   No item parks and nothing winds down on a stall. The user's answer
