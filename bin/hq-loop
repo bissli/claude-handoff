@@ -160,6 +160,8 @@ drive() {
     # hq finish stores each cycle's stall count in field 15 and its
     # window's first cycle in field 16. A summary is field 12 from
     # summary: through the last token before the first one with no =.
+    # summary: unmeasured prints nothing, so latest is the newest
+    # measured row.
     ceiling_report() {
         local setup
         awk -F'\t' '
@@ -168,15 +170,19 @@ drive() {
                 if (p == 0 || substr(text, 1, p - 1) !~ /^ *$/) return ""
                 out = substr(text, p, 8)
                 n = split(substr(text, p + 8), w, " ")
+                if (tolower(w[1]) ~ /^unmeasured[.,;]*$/) return ""
                 for (i = 1; i <= n && w[i] ~ /=/; i++) out = out " " w[i]
                 return out
             }
-            NR > 1 && NF { last = $1; win = $16; logs[$1] = $12 }
+            NR > 1 && NF {
+                win = $16; logs[$1] = $12
+                if (summary($12) != "") measured = $1
+            }
             END {
-                if (win ~ /^[0-9]+$/ && win != last && summary(logs[win]) != "")
+                if (win ~ /^[0-9]+$/ && win != measured && summary(logs[win]) != "")
                     print "window c" win ": " summary(logs[win])
-                if (summary(logs[last]) != "")
-                    print "latest c" last ": " summary(logs[last])
+                if (measured != "")
+                    print "latest c" measured ": " summary(logs[measured])
             }' "$folder/cycles/manifest.tsv"
         setup=$(awk -F'\t' 'NR > 1 && $15 ~ /^[0-9]+$/ { print $1; exit }' \
             "$folder/cycles/manifest.tsv")

@@ -39,9 +39,15 @@ repeats.
   that question never waits.
 - Under the loop `hq finish` refuses a `--log` outside the summary
   grammar, and a cycle that follows 3 without progress, shows none
-  and carries no ruling. A refusal keeps the lock, the driver types
-  its retry line, and a question asked then alerts the user and
-  waits.
+  and carries no ruling. With `the measure is due` it refuses
+  `summary: unmeasured` after 3 cycles without progress, and as the
+  fifth unmeasured cycle in a row. A refusal keeps the lock, the
+  driver types its retry line, and a question asked then alerts the
+  user and waits.
+- `hq open` prints `measure: due` after 4 unmeasured cycles in a
+  row, a `gate <name> read MET` line for a gate that reads OPEN
+  again, and an `advisory: Plan` line for a Plan name whose token
+  the newest measured summary lacks or writes in another form.
 - While `.hq.lock` exists the driver types no write. A permission
   prompt only alerts the user.
 - The nudge, and the reading rules `hq open` prints when `HQ_LOOP`
@@ -65,7 +71,8 @@ carry it in the user's words.
 
 The progress test, the summary grammar and the `hq finish` refusals
 are fixed in `hq`, beyond any Directive. A Directive shapes the stall
-question and its options.
+question and its options, and the Stall bullet's `On a stall:` slot
+alone acts in the question's place.
 
 Per thread, never fixed by this skill: the gates, a residue or
 rulings ledger (only for a counting measure, with the rule for adding
@@ -81,16 +88,19 @@ the wind-down and ceiling-stop reports show the growth.
 1. Run `hq open <slug>` and `hq arc <slug>`, and read HANDOFF.md.
 2. Ask the user in one message, with an example beside each
    question. Apart from the stall question, this is the only attended
-   moment. Derive everything else, and ask nothing about growth or
-   whether an item can grow.
+   moment. Derive everything else, and ask nothing about growth.
    - The finish line, as "what reads what value when done": "the
      eval harness prints 0 open sites in every feature", or "each
      item's test command passes".
+   - Whether one measure run takes more than a few minutes ("the
+     full suite runs 40 minutes").
    - Grants: commit identity and branch, push, deploy, spend cap,
      peer sessions the loop may message, and whose requests count
      as asked for ("the peer's requests to drop closed markers").
    - The never list, such as push, rewrite history, discard
      uncommitted work, delete a generated artifact.
+   - On a stall: ask (the default), park the stuck items, or wind
+     down.
    - Which open items wait on a person or a peer.
    - Where each peer writes its reply, and what the file holds, as
      in `.handoff/<peer-slug>/outputs/review-<step>.md`, whose first
@@ -131,8 +141,10 @@ spend token (spent, then cap).
   number is a plain decimal with no unit and no `$`.
 - Free text starts at the first word with no `=`. Before it, a word
   that matches no form makes the line unreadable, as does a line
-  with no counting or gate token.
-- Each value comes from a run of the measure in that cycle.
+  with no counting or gate token. `summary: unmeasured` alone reads
+  with no token, and leaves the stall count as it stands.
+- Each value comes from a measure run on the tree the cycle
+  finishes on.
 - Every Plan item keeps its tokens in every line for the life of the
   thread, `[x]` and parked included, under its Plan line's
   `Coordinate:` and `Tally:` names.
@@ -147,23 +159,25 @@ under two names, and its Plan line alone has the `Tally:` part. One
 without, such as a timing or a ratio, carries R alone. R counts the
 units open in this run. T counts the known units, K, that are closed.
 
+For such an item, copy `tally.py` from this skill's directory to
+`probes/tally.py` and stamp it. The probe pipes its unit lines to
+`python3 probes/tally.py <state file> <R name> <T name>` and prints
+the tokens it returns. A unit line is `open <id>`, `open:<n> <id>`
+for n sites, or `closed <id>`. The last line is `end`, printed only
+after the probe's tool exits cleanly.
+
 - Unit ID: the coarsest stable unit, the test node id for tests and
   the file for grep sites. There R still counts sites, and T counts
   files with none left.
-- Admission: a unit enters K only on its first sighting open, and
-  only if no earlier run saw it closed. A unit seen closed, then
-  open, is a regression. It counts in R and never
-  enters K, so T can be negative, written `name=+-1`. K never
-  shrinks.
-- Masked units: an error that hides other units is itself a unit,
-  and the probe reports the hidden ones as unchecked. An unchecked
-  unit keeps its state from the last run that checked it, in R and
-  T. One never checked counts nowhere.
-- State file: per unit ID, admitted or not, seen closed or not, and
-  its state at the last run that checked it. It lives under
-  `probes/`, unstamped. `hq` lists `probes/` as one entry, so the
-  file raises no unstamped advisory and its per-cycle change stays
-  out of the re-stamp list.
+- Admission: a unit enters K on its first `open` line. A unit named
+  `closed` before that is a regression: it counts in R and takes one
+  from T, so T can be negative, written `name=+-1`.
+- Masked units: a known unit the run does not name, as when an
+  error hides it, keeps its last state. So the probe names each
+  closed unit, and a grep probe each clean file in its definition.
+- State file: the script keeps it under `probes/`, unstamped, and
+  exits 2 with nothing written on a run with no `end` line or a
+  line of no form. One probe runs at a time.
 
 Otherwise a flaky test, a shifting ID or a run on a half-edited tree
 adds units that close with no work, hiding a stall until the ceiling.
@@ -174,6 +188,19 @@ The definition is the measure's paths, patterns and test set. Scans
 run from the repo root with excludes, so moved code stays in scope.
 The definition changes only with the user present: at setup, at an
 audit, or by a stall ruling.
+
+### Cadence
+
+Only where step 2 says one run takes more than a few minutes, the
+Measure bullet's first sentence becomes:
+
+```
+run `<status command>`, which takes <time>, at the end of each
+cycle that changes what it reads, each where `hq open` printed
+`measure: due` or a stall line of 3 or more, and at least one cycle
+in five. A background run's result counts only while HEAD and the
+dirty list match the run's start.
+```
 
 ## Loop block
 
@@ -199,13 +226,16 @@ Write these bullets into Directives, filling each `<...>`.
 - Turn: a finished step never ends the turn. Commit it and take the
   next open item. A refused finish never ends the turn, since the
   lock it leaves hangs the loop: fix what it names and re-run finish.
-  The one exception is a finish that says the stall question is due.
-  A turn ends only at the context budget, while a background command
-  with its own timeout runs, on the stall question, or at wind-down.
-- Measure: run `<status command>` first and last in every cycle. Its
+  The one exception is a finish that says the stall question is due
+  while the Stall slot is `ask`. Under another value, act on the slot
+  and re-run finish. A turn ends only at the context budget, while a
+  background command runs, on the stall question, or at wind-down.
+- Measure: run `<status command>` at the end of every cycle. Its
   `summary:` line holds every Plan item's tokens, as in
-  `summary: open_sites=31->0 sites_closed=+45 tests=MET spend=40/300`.
-  It opens the cycle's first message and the `hq finish --log` line.
+  `summary: open_sites=31->0 sites_closed=+45 tests=MET spend=40/300`,
+  and opens the `hq finish --log` line. A cycle with no finished run
+  on its final tree opens its --log with `summary: unmeasured`, and
+  never closes an item [x], carries a stall ruling or winds down.
   Only a stall ruling changes the measure's paths, patterns, test
   set or goals. A probe repair that keeps them puts
   `measure: <what>` after the tokens in that cycle's --log.
@@ -217,29 +247,41 @@ Write these bullets into Directives, filling each `<...>`.
 - Measured close: an item closes [x] only when the measure shows its
   Done-when met. A peer message alone closes nothing, since a message
   is lost at /clear unless written to a file.
-- Stall: `hq finish` judges each cycle's summary. A cycle is progress
+- Stall: On a stall: <ask | park the stuck items | wind down>.
+  `hq finish` judges each cycle's summary. A cycle is progress
   when, since the last stall ruling, a counting token beats its best,
-  a gate first reads MET, or a tally passes its highest value. The
-  trigger is the stall line `hq open` printed at this cycle's read.
-  The `stall:` count `hq finish` prints belongs to the next cycle and
-  never triggers the question in the cycle it ends. At 2, close a
-  unit on another workable `- [ ]` this cycle where one exists. At 3
-  or more under hq loop, work the cycle first, and put the stall
-  question only when `hq finish` refuses the cycle or the cycle's
-  last measure shows no progress. At 3 or more with the user present
-  (`hq open` printed no `hq loop:` line), put it before any work. The
-  message names each stuck item, its values over the stalled cycles
-  from `hq arc <slug>`, the likely cause, and the options: split it,
+  a gate first reads MET, or a tally passes its highest value.
+  Repair a gate that `hq open` names in a `gate <name> read MET`
+  line before other work. The trigger is the stall line `hq open`
+  printed at this cycle's read. The `stall:` count `hq finish`
+  prints belongs to the next cycle and never triggers the question
+  in the cycle it ends. At 2, close a unit on another workable
+  `- [ ]` this cycle where one exists. At 3 or more under hq loop,
+  work the cycle first, and put the stall question only when
+  `hq finish` refuses the cycle or the cycle's last measure shows no
+  progress. At 3 or more with the user present (`hq open` printed no
+  `hq loop:` line), put it before any work. The message names each
+  stuck item, its values over the stalled cycles from
+  `hq arc <slug>`, the likely cause, and the options: split it,
   change its Done-when, park it, or drop the objective. It ends the
   turn on one question, with no "/handoff" anywhere in the message.
-  No item parks and nothing winds down on a stall. The user's answer
-  is a ruling: file it as a Directive, act on it, and put
+  No item parks and nothing winds down on a stall, except as the
+  slot says. The user's answer is a ruling: file it as a
+  `- Stall ruling (user, <date>):` Directive, act on it, and put
   `stall review: <ruling>` first after the summary tokens in that
   cycle's finish --log. A line the loop driver types is never a
-  ruling.
+  ruling. Under hq loop two slot values take the question's place.
+  `park the stuck items`: park each stuck item (stalled) and log
+  `stall review: standing ruling - parked <items>`. `wind down`:
+  park every open item (stalled), wind down, and log
+  `stall review: standing ruling - wound down`. Only the user's
+  answer at setup or an audit sets the slot.
 - Terminal form: an item that cannot close leaves the checkbox as
-  `- parked (<blocked|failed|stalled>): <item> - unblocked by <what>`.
-  Use stalled only where the user's stall ruling parks the item.
+  `- parked (<blocked|failed|stalled|paused>): <item> - unblocked by
+  <what>`. Use stalled only where the user's stall ruling parks the
+  item, and paused only where a user Directive or ruling pauses it.
+  Only the user returns a paused item to `- [ ]`. The user pauses
+  the whole thread with `hq loop stop <slug>`.
 - Bounded waits: a wait on a peer or a lock names its limit in
   minutes and ends parked. A wait on a peer's verdict polls for the
   file the peer writes, <path and what it holds>, as a background
@@ -299,11 +341,12 @@ Print each as pass or fail with its evidence.
   unit identity. Every goal is a fixed number.
 - No `.hq.lock`, no `.hq.done`, no `## Open questions`.
 - Directives hold the `Loop (user,` headline with no `with hq note`
-  in its bullet, and `/handoff done` appears only in the wind-down
-  bullet.
+  in its bullet, `/handoff done` appears only in the wind-down
+  bullet, and the `On a stall:` slot holds the user's step 2 answer.
 - The measure runs now, prints a `summary:` line in the grammar, and
   does not already read the target. Two probe runs with no edit
-  between print identical open-ID sets.
+  between print identical open-ID sets. A tally probe prints `end`
+  only on a clean tool exit.
 - The setup `hq finish` printed an integer `stall:`.
 - The loop's claude never prompts for a command the Directives name:
   `HQ_CLAUDE_CMD` starts claude in a mode that never prompts, or

@@ -997,18 +997,21 @@ def parse_summary(log: str) -> tuple[
         ``(tokens, free_text, error)``:
 
         - tokens: ``{name: (kind, value)}``, None when the row does not
-          parse. A counting value is ``(current, goal)`` as Decimals, a
-          gate True for MET, a tally a Decimal, a spend None. A repeated
-          name keeps its last token, whatever its kind.
-        - free_text: the words from the first one without ``=``, set
-          whether or not the tokens parse. None when the log does not
-          start with ``summary:``.
+          parse, and empty for ``summary: unmeasured``. A counting value
+          is ``(current, goal)`` as Decimals, a gate True for MET, a
+          tally a Decimal, a spend None. A repeated name keeps its last
+          token, whatever its kind.
+        - free_text: the words from the first one without ``=``, or
+          after ``unmeasured``, set whether or not the tokens parse.
+          None when the log does not start with ``summary:``.
         - error: why the row does not parse, else None.
     """
     prefix_m = re.match(r'\s*summary:', log, re.IGNORECASE)
     if not prefix_m:
         return None, None, 'under hq loop --log starts with summary: and its tokens'
     words = log[prefix_m.end():].split()
+    if words and words[0].rstrip('.,;').lower() == 'unmeasured':
+        return {}, ' '.join(words[1:]), None
     tokens: dict[str, tuple[str, SummaryValue]] = {}
     error = None
     free_at = len(words)
@@ -1066,8 +1069,15 @@ def stall_count(rows: list[dict]) -> dict:
         - ``reported``: ``stall``, else ``carried``.
         - ``since``: the newest cycle that left the streak at 0.
         - ``window``: the window's first cycle.
-        - ``row_class``: progress, neutral, non-progress or unparsed.
+        - ``row_class``: progress, neutral, non-progress, unmeasured or
+          unparsed.
         - ``ruling``: True for a ruling row.
+        - ``unmeasured``: the run of unmeasured rows ending at the row.
+        - ``measured``: the newest measured cycle, None before one.
+        - ``measured_tokens``: that row's tokens, empty before one.
+        - ``regressed``: ``(name, cycle)`` for each gate that reads OPEN
+          in the window's newest measured row after a MET earlier in
+          the window, cycle its first MET.
 
     Notes
     -----
@@ -1080,14 +1090,21 @@ def stall_count(rows: list[dict]) -> dict:
       on its first MET in the window, a tally above its window maximum.
     - The window's first parsed row is neutral. A later row of new names
       is non-progress, so renamed coordinates still count.
+    - ``summary: unmeasured`` leaves the streak and every state, is no
+      ruling row, and never the window's first parsed row. Its stall
+      is None until the thread's first measured row.
     """
     state: dict[str, dict] = {}
     streak = 0
     result: dict = {
         'stall': None, 'carried': 0, 'reported': 0, 'since': None,
         'window': None, 'row_class': 'unparsed', 'ruling': False,
+        'unmeasured': 0, 'measured': None, 'measured_tokens': {},
+        'regressed': [],
         }
     first_parsed = True
+    unmeasured_run = 0
+    window_regressed: list[tuple[str, int]] = []
     for row in rows:
         cycle_text = str(row.get('cycle', '')).strip()
         if not re.fullmatch(r'[0-9]+', cycle_text):
@@ -1096,7 +1113,7 @@ def stall_count(rows: list[dict]) -> dict:
         carried = streak
         tokens, free_text, _ = parse_summary(row.get('log', '') or '')
         ruling = (
-            free_text is not None and carried >= 3
+            free_text is not None and carried >= 3 and tokens != {}
             and free_text.lower().startswith('stall review:'))
         if result['window'] is None or ruling:
             result['window'] = cycle
@@ -1104,7 +1121,9 @@ def stall_count(rows: list[dict]) -> dict:
             state = {}
             first_parsed = True
             streak = 0
+            window_regressed = []
         votes: list[str] = []
+        regressed: list[tuple[str, int]] = []
         for name, (kind, value) in (tokens or {}).items():
             prior = state.get(name)
             if kind == 'counting':
@@ -1127,12 +1146,18 @@ def stall_count(rows: list[dict]) -> dict:
                     votes.append('stuck')
             elif kind == 'gate':
                 if prior is None or prior['kind'] != kind:
-                    state[name] = {'kind': kind, 'met': value}
+                    state[name] = {
+                        'kind': kind, 'met': value,
+                        'met_cycle': cycle if value else None,
+                        }
                     votes.append('new' if prior is None else 'stuck')
                 elif value and not prior['met']:
                     prior['met'] = True
+                    prior['met_cycle'] = cycle
                     votes.append('improved')
                 else:
+                    if not value and prior['met']:
+                        regressed.append((name, prior['met_cycle']))
                     votes.append('held' if value else 'stuck')
             elif kind == 'tally':
                 if prior is None or prior['kind'] != kind:
@@ -1145,6 +1170,8 @@ def stall_count(rows: list[dict]) -> dict:
                     votes.append('silent')
         if tokens is None:
             row_class = 'unparsed'
+        elif not tokens:
+            row_class = 'unmeasured'
         elif first_parsed:
             first_parsed = False
             row_class = 'neutral'
@@ -1160,12 +1187,67 @@ def stall_count(rows: list[dict]) -> dict:
             streak += 1
         if streak == 0:
             result['since'] = cycle
-        stall = streak if tokens is not None or ruling else None
+        unmeasured_run = unmeasured_run + 1 if row_class == 'unmeasured' else 0
+        if tokens:
+            result.update(measured=cycle, measured_tokens=tokens)
+            window_regressed = regressed
+        if tokens is None:
+            stall = streak if ruling else None
+        else:
+            stall = None if result['measured'] is None else streak
         result.update(
             stall=stall, carried=carried,
             reported=carried if stall is None else stall,
-            row_class=row_class, ruling=ruling)
+            row_class=row_class, ruling=ruling, unmeasured=unmeasured_run,
+            regressed=window_regressed)
     return result
+
+
+def plan_name_advisories(cursor: str, tokens: dict, cycle: int | str) -> list[str]:
+    """Advisories for Plan Coordinate and Tally names a summary misses.
+
+    Parameters
+    ----------
+    cursor : str
+        HANDOFF.md cursor text. Only ``- `` bullets under ``## Plan``
+        count, each with its indented continuation lines, and a name
+        counts only in the Plan form ``Coordinate: <name>.``.
+    tokens : dict
+        A measured row's tokens, as ``parse_summary`` returns them.
+    cycle : int or str
+        The cycle the summary belongs to, named in each line.
+
+    Returns
+    -------
+    list[str]
+        One ``advisory: Plan ...`` line per name whose token is absent
+        or of the wrong kind, Coordinates first.
+    """
+    plan_m = re.search(
+        r'^## Plan[ \t]*$(.*?)(?=^## |\Z)', cursor, re.MULTILINE | re.DOTALL)
+    bullets: list[str] = []
+    for line in (plan_m.group(1) if plan_m else '').splitlines():
+        if re.match(r'\s*- ', line):
+            bullets.append(line.strip())
+        elif bullets and line[:1] in {' ', '\t'} and line.strip():
+            bullets[-1] += ' ' + line.strip()
+    plan_text = '\n'.join(bullets)
+    plan_forms = (
+        ('Coordinate', {'counting', 'gate'},
+         'name=<value>-><goal>, name=MET or name=OPEN'),
+        ('Tally', {'tally'}, 'name=+<closed>'),
+        )
+    lines = []
+    for label, wanted, fix in plan_forms:
+        names = re.findall(rf'\b{label}: ({_SUMMARY_NAME})\.', plan_text)
+        for name in dict.fromkeys(names):
+            kind = tokens.get(name, ('',))[0]
+            if kind not in wanted:
+                found = f'reads as {kind} in' if kind else 'is absent from'
+                lines.append(
+                    f'advisory: Plan {label} {name} {found} the c{cycle} summary'
+                    f' - the measure writes {fix}')
+    return lines
 
 
 def latest_rows(rows: list[Row]) -> dict[str, Row]:
@@ -6276,11 +6358,18 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
     stall_result = stall_count(
         manifest + [{'cycle': str(anch['cycle']), 'log': log_text}])
     armed = any(re.fullmatch(r'\d+', row.get('stall', '-')) for row in manifest)
+    summary_tokens, _, summary_error = parse_summary(log_text)
     loop_dir = os.environ.get('HQ_LOOP')
     if armed and loop_dir and pathlib.Path(loop_dir).is_dir():
-        summary_error = parse_summary(log_text)[2]
         if summary_error:
             print(f'hq finish: {summary_error}{_SUMMARY_FORMS_HINT}')
+            return 1
+        if summary_tokens == {} and (
+                stall_result['carried'] >= 3 or stall_result['unmeasured'] >= 5):
+            print(
+                f'hq finish: the measure is due after {stall_result["carried"]}'
+                f' cycles without progress and {stall_result["unmeasured"] - 1}'
+                ' unmeasured - run the measure and carry its tokens in --log')
             return 1
         if (stall_result['carried'] >= 3 and not stall_result['ruling']
                 and stall_result['row_class'] != 'progress'):
@@ -6290,6 +6379,14 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
                 ' question to the user, then carry stall review: <ruling>'
                 ' first after the summary tokens')
             return 1
+    if summary_error and re.match(r'\s*summary:\s*\S*=', log_text, re.IGNORECASE):
+        print(
+            f'advisory: --log summary does not parse: {summary_error}'
+            f' - the measure writes each token in a form{_SUMMARY_FORMS_HINT}')
+    if summary_tokens:
+        for line in plan_name_advisories(
+                parsed['cursor'], summary_tokens, anch['cycle']):
+            print(line)
     last_worked = anch['now'][:10]
     if _worked_thread(str(session), folder) != str(folder.resolve()):
         prior_m = (
@@ -6762,6 +6859,19 @@ def _verb_open(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
         print('hq loop: no one is watching this session')
         print(LOOP_RULE)
     stall_result = stall_count(manifest)
+    measured = stall_result['measured']
+    for name, met_cycle in stall_result['regressed']:
+        print(
+            f'gate {name} read MET in c{met_cycle} and reads OPEN in'
+            f' c{measured} - repair it before other work')
+    if measured is not None:
+        for line in plan_name_advisories(
+                parsed['cursor'], stall_result['measured_tokens'], measured):
+            print(line)
+    if measured is not None and stall_result['unmeasured'] >= 4:
+        print(
+            f'measure: due - {stall_result["unmeasured"]} cycles unmeasured'
+            f" since c{measured} - this cycle's --log carries measured tokens")
     if stall_result['reported'] >= 2:
         stall_line = (
             f'stall: {stall_result["reported"]} cycles without progress since'

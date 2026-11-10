@@ -819,6 +819,59 @@ def test_drive_ceiling_stop_prints_the_window_and_the_re_stamps(tmp_path):
         drive.close()
 
 
+def _ceiling_lines(tmp_path, rows, last_row):
+    drive = _Drive(tmp_path, 1)
+    try:
+        drive.write_manifest(rows)
+        drive.emit('SessionStart startup S1 0 0 0 0')
+        assert _wait_for(lambda: len(drive.said()) == 1)
+        drive.write_manifest(rows + [last_row])
+        drive.emit('Stop - S1 0 0 0 0')
+        drive.driver.wait(timeout=20)
+        return drive.said()[1:]
+    finally:
+        drive.close()
+
+
+def test_drive_ceiling_stop_skips_an_unmeasured_newest_row(tmp_path):
+    """Verify the --max-cycles stop prints the newest measured row as latest
+    when the newest manifest row is summary: unmeasured.
+
+    Mutation: latest printed from the newest row in place of the newest
+    measured row, or the unmeasured test dropped from summary().
+    Oracle: c3 is unmeasured, so c2 is latest and c1 is the window.
+    """
+    rows = [
+        _manifest_row(1, 'summary: a=5->0 - setup', '0', 1),
+        _manifest_row(2, 'summary: a=4->0 - work', '0', 1),
+        ]
+    last_row = _manifest_row(3, 'summary: unmeasured - skipped', '0', 1)
+    assert _ceiling_lines(tmp_path, rows, last_row) == [
+        '[1/1] window c1: summary: a=5->0',
+        '[1/1] latest c2: summary: a=4->0',
+        '[1/1] reached --max-cycles 1 at cycle 3',
+        ]
+
+
+def test_drive_ceiling_stop_omits_the_window_that_is_the_latest(tmp_path):
+    """Verify the --max-cycles stop prints no window line when the window
+    row is the newest measured row.
+
+    Mutation: the win != measured test dropped, so the same summary
+    prints twice.
+    Oracle: the window opens at c2, which is also the newest measured row.
+    """
+    rows = [
+        _manifest_row(1, 'summary: a=5->0 - setup', '0', 1),
+        _manifest_row(2, 'summary: a=4->0 - work', '0', 2),
+        ]
+    last_row = _manifest_row(3, 'summary: unmeasured - skipped', '0', 2)
+    assert _ceiling_lines(tmp_path, rows, last_row) == [
+        '[1/1] latest c2: summary: a=4->0',
+        '[1/1] reached --max-cycles 1 at cycle 3',
+        ]
+
+
 def test_drive_finish_unsets_the_slug_and_grows_the_pane(tmp_path):
     """Verify finish() resizes its pane before the alert and unsets the
     pane's slug and dir before the Enter wait.

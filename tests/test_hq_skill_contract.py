@@ -541,3 +541,14 @@ def test_the_write_cycle_fits_the_reattach_budget():
             '\n### Report\n'):
         assert literal in text, literal
     assert len(text) <= _REATTACH_BUDGET_CHARS, len(text)
+
+
+def test_the_loop_skill_fits_the_reattach_budget():
+    """The hq-loop skill fits whole inside the re-attach cut.
+
+    Mutation: the skill regrown past the budget, so a compacted session
+    loses whatever falls beyond the cut.
+    Oracle: the file length against the budget constant.
+    """
+    text = (HERE.parent / 'skills' / 'hq-loop' / 'SKILL.md').read_text()
+    assert len(text) <= _REATTACH_BUDGET_CHARS, len(text)

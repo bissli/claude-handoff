@@ -6,6 +6,7 @@ import contextlib
 import decimal
 import io
 import pathlib
+import re
 
 from bin import hq
 
@@ -378,13 +379,24 @@ def test_a_tally_first_entry_is_silent():
 
 
 def test_a_name_that_changes_kind_is_stuck():
-    """Verify a kind change is stuck in both directions.
+    """Verify a kind change is stuck in every direction and restarts the name.
 
-    Mutation: a tally over counting state classed silent.
-    Oracle: a held gate g beside b changing kind.
+    Mutation: a tally over counting state classed silent; or the kind
+    test dropped from the gate branch, so a gate read over tally or
+    counting state keeps the old state.
+    Oracle: a held gate g beside b changing kind; b=+9 then b=MET then
+    b=OPEN regresses from c2, the cycle of its new first entry.
     """
     assert _stalls(['summary: g=MET b=4->0', 'summary: g=MET b=+9']) == [0, 1]
     assert _stalls(['summary: g=MET b=+9', 'summary: g=MET b=4->0']) == [0, 1]
+    assert _stalls(['summary: g=MET b=+9', 'summary: g=MET b=MET']) == [0, 1]
+    assert _stalls(['summary: g=MET b=4->0', 'summary: g=MET b=MET']) == [0, 1]
+    assert _stalls(['summary: g=MET b=MET', 'summary: g=MET b=+9']) == [0, 1]
+    for first in ('b=+9', 'b=4->0'):
+        rows = [
+            {'cycle': str(i + 1), 'log': f'summary: g=MET {tok}'}
+            for i, tok in enumerate([first, 'b=MET', 'b=OPEN'])]
+        assert hq.stall_count(rows)['regressed'] == [('b', 2)]
 
 
 # --- finish, open, begin ---------------------------------------------
@@ -595,3 +607,269 @@ def test_old_manifests_take_the_new_columns_by_position(tmp_path, monkeypatch):
         fields = manifest_path.read_text().splitlines()[-1].split('\t')
         assert len(fields) == 16
         assert fields[14:] == [stall, adopt_fields[0]]
+
+
+
+# --- cadence, advisories, gate regressions ---------------------------
+
+
+def test_unmeasured_parses_with_no_tokens():
+    """Verify summary: unmeasured parses empty and its free text follows it.
+
+    Mutation: the word read as free text, so the row is unparsed; or the
+    trailing-mark strip skipped, so unmeasured. fails.
+    Oracle: hand-written parse of two unmeasured lines.
+    """
+    assert hq.parse_summary('summary: unmeasured') == ({}, '', None)
+    assert hq.parse_summary('Summary: UNMEASURED. stall review: x') == (
+        {}, 'stall review: x', None)
+
+
+def test_unmeasured_rows_leave_the_streak():
+    """Verify unmeasured rows leave the streak, and store - before a measure.
+
+    Mutation: unmeasured classed non-progress, so a costly measure
+    stalls the thread; or it takes the window's first slot, so the first
+    measured row votes against nothing.
+    Oracle: hand-computed rows 0, 0, 0, 1 and -, -, 0, 1.
+    """
+    assert _stalls(
+        ['summary: a=5->0'] + ['summary: unmeasured'] * 2 + ['summary: a=5->0']
+        ) == [0, 0, 0, 1]
+    assert _stalls(
+        ['summary: unmeasured'] * 2 + ['summary: a=5->0', 'summary: a=5->0']
+        ) == [None, None, 0, 1]
+
+
+def test_an_unmeasured_row_is_no_ruling_row():
+    """Verify the marker on an unmeasured row at a carried 3 resets nothing.
+
+    Mutation: the unmeasured test dropped from the ruling marker, so a
+    ruling skips the measure.
+    Oracle: three stuck rows after a neutral first; the marker row keeps 3.
+    """
+    logs = _counting([5, 5, 5, 5]) + ['summary: unmeasured stall review: park a']
+    assert _stalls(logs) == [0, 1, 2, 3, 3]
+
+
+def test_the_measure_is_due_at_a_stall_and_after_three_unmeasured(
+        tmp_path, monkeypatch):
+    """Verify both measure-due triggers refuse an unmeasured row under the loop.
+
+    Mutation: either trigger dropped, the count off by one, or the
+    stall-question refusal checked first.
+    Oracle: the spec's message at a carried streak of 3, and at the
+    fifth unmeasured row with a carried streak of 0; a fourth passes.
+    """
+    folder = _root(tmp_path, monkeypatch)
+    _cycles(['summary: a=5->0'])
+    _live_loop(tmp_path, monkeypatch)
+    _cycles(['summary: unmeasured'] * 4)
+    assert _run(['begin', _SLUG])[0] == 0
+    rc, out, _ = _run(['finish', _SLUG, '--log', 'summary: unmeasured'])
+    assert rc == 1
+    assert out.splitlines()[-1] == (
+        'hq finish: the measure is due after 0 cycles without progress and 4'
+        ' unmeasured - run the measure and carry its tokens in --log')
+    assert _run(['finish', _SLUG, '--log', 'summary: a=4->0'])[0] == 0
+    _cycles(_counting([4, 4, 4]))
+    assert _manifest(folder)[-1]['stall'] == '3'
+    assert _run(['begin', _SLUG])[0] == 0
+    rc, out, _ = _run(['finish', _SLUG, '--log', 'summary: unmeasured'])
+    assert rc == 1
+    assert out.splitlines()[-1] == (
+        'hq finish: the measure is due after 3 cycles without progress and 0'
+        ' unmeasured - run the measure and carry its tokens in --log')
+    assert (folder / '.hq.lock').is_file()
+
+
+def test_an_unparsed_summary_warns_off_the_loop(tmp_path, monkeypatch):
+    """Verify a summary: line with a bad token prints an advisory, loop or not.
+
+    Mutation: the advisory gated on HQ_LOOP or an armed thread; or the
+    = guard dropped, so a prose Summary: line warns.
+    Oracle: the parse error of commits=115, and silence for prose.
+    """
+    _root(tmp_path, monkeypatch)
+    out = _cycles(['summary: commits=115 backtest=FAIL'])
+    assert (
+        'advisory: --log summary does not parse: --log token commits=115'
+        ' matches no summary form - the measure writes each token in a form'
+        ' - forms: name=31->0 name=MET name=OPEN name=+45 name=40/300'
+        ) in out.splitlines()
+    assert 'does not parse' not in _cycles(['Summary: refactored the parser'])
+
+
+def _plan_cycle(folder, plan, log):
+    assert _run(['begin', _SLUG])[0] == 0
+    handoff = folder / 'HANDOFF.md'
+    text = handoff.read_text()
+    text = re.sub(r'(?ms)^## Plan\n.*?(?=^## )', f'## Plan\n{plan}\n\n', text)
+    handoff.write_text(text)
+    rc, out, _ = _run(['finish', _SLUG, '--log', log])
+    assert rc == 0, out
+    return [line for line in out.splitlines() if line.startswith('advisory: Plan')]
+
+
+def test_plan_names_are_checked_in_finish_and_open(tmp_path, monkeypatch):
+    """Verify a Coordinate written as spend and an absent wrapped Tally warn.
+
+    Mutation: the kind test dropped, so clean=115/204 passes as the
+    Coordinate; the continuation line not joined; the bullet scope
+    dropped, so prose names count; open reads the newest row in
+    place of the newest measured one; the Coordinate kinds narrowed to
+    counting, so a gate warns; or a name written twice warns twice.
+    Oracle: the objection's ratio, a prose line naming a Coordinate,
+    a gate Coordinate, a Coordinate named twice, and a row carrying
+    every name in form.
+    """
+    folder = _root(tmp_path, monkeypatch)
+    _cycles(['summary: a=5->0'])
+    plan = (
+        '- [ ] Clean the corpus. Coordinate: clean. Tally:\n'
+        '  clean_done. Done when clean reads 0.\n'
+        '- [ ] Gate it. Coordinate: shipped. Done when shipped reads MET.\n'
+        '- [ ] Twice. Coordinate: dup. Also Coordinate: dup.\n'
+        'Prose names Coordinate: other. here.')
+    expected = [
+        'advisory: Plan Coordinate clean reads as spend in the c2 summary'
+        ' - the measure writes name=<value>-><goal>, name=MET or name=OPEN',
+        'advisory: Plan Coordinate dup is absent from the c2 summary'
+        ' - the measure writes name=<value>-><goal>, name=MET or name=OPEN',
+        'advisory: Plan Tally clean_done is absent from the c2 summary'
+        ' - the measure writes name=+<closed>',
+        ]
+    assert _plan_cycle(
+        folder, plan, 'summary: a=4->0 clean=115/204 shipped=MET') == expected
+    _cycles(['summary: unmeasured'])
+    _, out, _ = _run(['open', _SLUG])
+    assert [ln for ln in out.splitlines() if ln.startswith('advisory: Plan')] == (
+        expected)
+    assert _plan_cycle(
+        folder, plan,
+        'summary: clean=89->0 clean_done=+115 shipped=OPEN dup=MET') == []
+
+
+def test_open_names_a_regressed_gate_until_a_measure_repairs_it(
+        tmp_path, monkeypatch):
+    """Verify the regression line needs a MET, outlasts an unmeasured row
+    and ends at a measure that reads the gate MET again.
+
+    Mutation: any OPEN gate tracked as regressed; the line read from
+    the newest row in place of the newest measured row; or an earlier
+    regression kept after a measured row with none.
+    Oracle: tests OPEN, OPEN, MET, MET, OPEN, unmeasured, MET; no line
+    before the fifth row or after the fourth, the same line after the
+    sixth, none after the seventh.
+    """
+    _root(tmp_path, monkeypatch)
+    line = (
+        'gate tests read MET in c3 and reads OPEN in c5 - repair it before'
+        ' other work')
+    _cycles([f'summary: a={v}->0 tests=OPEN' for v in (6, 5)])
+    _, out, _ = _run(['open', _SLUG])
+    assert 'gate tests' not in out
+    _cycles(['summary: a=4->0 tests=MET', 'summary: a=3->0 tests=MET'])
+    _, out, _ = _run(['open', _SLUG])
+    assert 'gate tests' not in out
+    _cycles(['summary: a=2->0 tests=OPEN'])
+    _, out, _ = _run(['open', _SLUG])
+    assert line in out.splitlines()
+    _cycles(['summary: unmeasured'])
+    _, out, _ = _run(['open', _SLUG])
+    assert line in out.splitlines()
+    _cycles(['summary: a=1->0 tests=MET'])
+    _, out, _ = _run(['open', _SLUG])
+    assert 'gate tests' not in out
+
+
+def test_open_prints_the_measure_line_at_four_unmeasured(tmp_path, monkeypatch):
+    """Verify open says the measure is due at 4 unmeasured rows, not at 3.
+
+    Mutation: the threshold off by one, or the since cycle taken from
+    the newest row.
+    Oracle: a measured c1, then unmeasured rows.
+    """
+    _root(tmp_path, monkeypatch)
+    _cycles(['summary: a=5->0'] + ['summary: unmeasured'] * 3)
+    _, out, _ = _run(['open', _SLUG])
+    assert 'measure: due' not in out
+    _cycles(['summary: unmeasured'])
+    _, out, _ = _run(['open', _SLUG])
+    assert (
+        "measure: due - 4 cycles unmeasured since c1 - this cycle's --log"
+        ' carries measured tokens') in out.splitlines()
+
+
+def test_a_ruling_row_clears_the_regressed_gates():
+    """Verify a regressed gate is no longer reported after a ruling row.
+
+    Mutation: the regressed list kept at a ruling row that carries no
+    tokens, so the old regression outlives the reset.
+    Oracle: g MET then OPEN three times regresses from c1 with a carried
+    streak of 3; the unparsed ruling row at c5 empties the list.
+    """
+    logs = ['summary: a=5->0 g=MET'] + ['summary: a=5->0 g=OPEN'] * 3
+    rows = [{'cycle': str(i + 1), 'log': log} for i, log in enumerate(logs)]
+    assert hq.stall_count(rows)['regressed'] == [('g', 1)]
+    ruling = {'cycle': '5', 'log': 'summary: open_sites=12 stall review: x'}
+    result = hq.stall_count(rows + [ruling])
+    assert result['ruling'] is True
+    assert result['regressed'] == []
+
+
+def test_a_gate_met_at_its_first_entry_is_regressed_from_that_cycle():
+    """Verify a gate first seen MET and later OPEN names its first cycle.
+
+    Mutation: met_cycle left None on a gate's first entry.
+    Oracle: g MET at c3 then OPEN at c4 gives [('g', 3)].
+    """
+    rows = [
+        {'cycle': '3', 'log': 'summary: g=MET'},
+        {'cycle': '4', 'log': 'summary: g=OPEN'},
+        ]
+    assert hq.stall_count(rows)['regressed'] == [('g', 3)]
+
+
+def test_a_row_with_no_numeric_cycle_counts_toward_nothing():
+    """Verify a row whose cycle is '-' or empty is skipped whole.
+
+    Mutation: such a row read as cycle 0, so it opens the window or adds
+    to the streak.
+    Oracle: stuck rows at cycles '-' and '' after c1 leave the streak at
+    0; the same rows before c7 leave c7 the window's first row.
+    """
+    stuck = 'summary: a=5->0'
+    skipped = [{'cycle': '-', 'log': stuck}, {'cycle': '', 'log': stuck}]
+    after = hq.stall_count([{'cycle': '1', 'log': stuck}] + skipped)
+    assert (after['stall'], after['measured']) == (0, 1)
+    before = hq.stall_count(skipped + [{'cycle': '7', 'log': stuck}])
+    assert (before['window'], before['measured']) == (7, 7)
+    assert before['row_class'] == 'neutral'
+
+
+def test_plan_names_need_a_plan_section():
+    """Verify a cursor with no Plan section yields no advisory.
+
+    Mutation: the Plan match used with no None guard, so a cursor with
+    no section raises.
+    Oracle: a Coordinate named in the Task section of a cursor with no
+    Plan.
+    """
+    cursor = '# Handoff: x\n\n## Task\n\n- Coordinate: a.\n\n## Now\n\nGo.\n'
+    assert hq.plan_name_advisories(cursor, {}, 3) == []
+
+
+def test_open_prints_no_measure_line_before_a_measured_row(
+        tmp_path, monkeypatch):
+    """Verify open prints no measure line when no row was ever measured.
+
+    Mutation: the measured-cycle test dropped from the measure-due
+    guard, so the line prints with since cNone.
+    Oracle: four unmeasured rows and no measured one.
+    """
+    _root(tmp_path, monkeypatch)
+    _cycles(['summary: unmeasured'] * 4)
+    _, out, _ = _run(['open', _SLUG])
+    assert 'measure: due' not in out
+    assert 'cNone' not in out
