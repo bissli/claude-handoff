@@ -187,6 +187,22 @@ def test_the_last_occurrence_of_a_name_wins():
     assert hq.parse_summary('summary: a=5->0 a=MET')[0] == {'a': ('gate', True)}
 
 
+def test_the_counting_check_reads_the_tokens_last_wins_leaves():
+    """Verify a counting token a later tally of its name replaces voids the row.
+
+    Mutation: the counting-or-gate check run over every token the row
+    names, before a repeated name keeps its last token.
+    Oracle: a=5->0 a=+3 leaves the tally alone; a=+3 a=5->0 leaves the
+    counting token.
+    """
+    D = decimal.Decimal
+    tokens, _, error = hq.parse_summary('summary: a=5->0 a=+3')
+    assert tokens is None
+    assert error == '--log summary holds no counting or gate token'
+    assert hq.parse_summary('summary: a=+3 a=5->0')[0] == {
+        'a': ('counting', (D(5), D(0)))}
+
+
 def test_goals_compare_as_numbers():
     """Verify a goal written 95 then 95.0 is one goal.
 
@@ -609,7 +625,6 @@ def test_old_manifests_take_the_new_columns_by_position(tmp_path, monkeypatch):
         assert fields[14:] == [stall, adopt_fields[0]]
 
 
-
 # --- cadence, advisories, gate regressions ---------------------------
 
 
@@ -732,12 +747,12 @@ def test_plan_names_are_checked_in_finish_and_open(tmp_path, monkeypatch):
         '- [ ] Twice. Coordinate: dup. Also Coordinate: dup.\n'
         'Prose names Coordinate: other. here.')
     expected = [
-        'advisory: Plan Coordinate clean reads as spend in the c2 summary'
-        ' - the measure writes name=<value>-><goal>, name=MET or name=OPEN',
-        'advisory: Plan Coordinate dup is absent from the c2 summary'
-        ' - the measure writes name=<value>-><goal>, name=MET or name=OPEN',
-        'advisory: Plan Tally clean_done is absent from the c2 summary'
-        ' - the measure writes name=+<closed>',
+        ('advisory: Plan Coordinate clean reads as spend in the c2 summary'
+         ' - the measure writes name=<value>-><goal>, name=MET or name=OPEN'),
+        ('advisory: Plan Coordinate dup is absent from the c2 summary'
+         ' - the measure writes name=<value>-><goal>, name=MET or name=OPEN'),
+        ('advisory: Plan Tally clean_done is absent from the c2 summary'
+         ' - the measure writes name=+<closed>'),
         ]
     assert _plan_cycle(
         folder, plan, 'summary: a=4->0 clean=115/204 shipped=MET') == expected

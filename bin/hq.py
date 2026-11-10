@@ -1000,7 +1000,8 @@ def parse_summary(log: str) -> tuple[
           parse, and empty for ``summary: unmeasured``. A counting value
           is ``(current, goal)`` as Decimals, a gate True for MET, a
           tally a Decimal, a spend None. A repeated name keeps its last
-          token, whatever its kind.
+          token, whatever its kind, before the row needs a counting or
+          gate token, so ``a=5->0 a=+3`` does not parse.
         - free_text: the words from the first one without ``=``, or
           after ``unmeasured``, set whether or not the tokens parse.
           None when the log does not start with ``summary:``.
