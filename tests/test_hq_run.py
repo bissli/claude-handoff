@@ -6,6 +6,7 @@ import os
 import pathlib
 import re
 import subprocess
+import sys
 import time
 from typing import Any
 
@@ -355,36 +356,50 @@ class _Drive:
     """A driver run against a stub tmux, its calls and output read back.
     """
 
-    def __init__(self, tmp_path, max_cycles, stdin=subprocess.DEVNULL, rows=()):
+    def __init__(self, tmp_path, max_cycles, rows=(), launcher=('sleep', '120')):
         bin_dir = tmp_path / 'stub'
         bin_dir.mkdir()
         self.calls_path = tmp_path / 'tmux.log'
+        self.driver_dir = tmp_path / 'driver'
+        self.driver_dir.mkdir()
+        pid_path = tmp_path / 'launcher.pid'
+        # At /exit the stub records the end file and sends the launcher
+        # TERM, as claude exiting would end it.
         (bin_dir / 'tmux').write_text(
-            f'#!/bin/sh\nIFS="|"; echo "$*" >> {self.calls_path}\n')
+            '#!/bin/sh\n'
+            f'IFS="|"; echo "$*" >> {self.calls_path}\n'
+            'case "$*" in *"|-l|--|/exit")\n'
+            f'    [ -e {self.driver_dir}/end ] && echo "end-file|$(cat {self.driver_dir}/end)" >> {self.calls_path}\n'
+            f'    kill "$(cat {pid_path})" 2>/dev/null ;;\n'
+            'esac\n'
+            f'case "$*" in send-keys*-l*) [ -e {tmp_path}/send-fails ] && exit 1 ;; esac\n'
+            'exit 0\n')
         (bin_dir / 'tmux').chmod(0o755)
         self.folder = tmp_path / '.handoff' / 'auth-refresh'
         (self.folder / 'cycles').mkdir(parents=True)
         self.manifest = self.folder / 'cycles' / 'manifest.tsv'
         if rows:
             self.write_manifest(rows)
-        self.driver_dir = tmp_path / 'driver'
-        self.driver_dir.mkdir()
         self.events = self.driver_dir / 'events'
         self.events.write_text('')
         self.budget_dir = tmp_path / 'home' / '.claude' / 'cache' / 'claude-handoff'
         self.budget_dir.mkdir(parents=True)
         self.output = tmp_path / 'driver.out'
         self.errors = tmp_path / 'driver.err'
-        self.launcher = subprocess.Popen(['sleep', '120'])
+        # A launcher started in the background of a shell that exits is
+        # reaped by init, so kill -0 fails once it is gone.
+        self.launcher_pid = int(subprocess.check_output(
+            ['sh', '-c', '"$@" >/dev/null 2>&1 & echo $!', 'sh', *launcher]))
+        pid_path.write_text(str(self.launcher_pid))
         with self.output.open('w') as out, self.errors.open('w') as err:
             self.driver = subprocess.Popen(
                 [str(ROOT / 'bin' / 'hq-loop'), 'drive', str(self.driver_dir),
-                 'auth-refresh', str(max_cycles), '%0', str(self.launcher.pid)],
+                 'auth-refresh', str(max_cycles), '%0', str(self.launcher_pid)],
                 cwd=tmp_path,
                 env={
                     **os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}',
                     'HOME': str(tmp_path / 'home'), 'TMUX_PANE': '%9'},
-                stdin=stdin,
+                stdin=subprocess.DEVNULL,
                 stdout=out,
                 stderr=err,
                 start_new_session=True)
@@ -431,8 +446,9 @@ class _Drive:
             if line.startswith('display-message'))
 
     def close(self):
-        self.launcher.kill()
-        self.launcher.wait()
+        subprocess.run(['pkill', '-KILL', '-P', str(self.launcher_pid)], check=False)
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(self.launcher_pid, 9)
         # The driver can exit with its whole group before cleanup.
         with contextlib.suppress(ProcessLookupError):
             os.killpg(self.driver.pid, 9)
@@ -661,7 +677,7 @@ def test_stop_file_at_a_tick_ends_after_a_written_cycle(tmp_path):
         (drive.driver_dir / 'stop').write_text('')
         drive.driver.wait(timeout=20)
         assert drive.said()[-1] == '[1/10] stopped after cycle 1 as requested'
-        assert drive.typed() == [READ]
+        assert drive.typed() == [READ, '/exit']
     finally:
         drive.close()
 
@@ -742,7 +758,7 @@ def test_stop_ends_after_its_write(tmp_path):
         drive.stop()
         drive.driver.wait(timeout=20)
         assert drive.said()[-1] == '[1/10] stopped after cycle 1 as requested'
-        assert drive.typed() == [READ]
+        assert drive.typed() == [READ, '/exit']
     finally:
         drive.close()
 
@@ -935,7 +951,7 @@ def test_max_cycles_counts_from_launch(tmp_path):
         drive.stop(sid='S2')
         drive.driver.wait(timeout=20)
         assert drive.said()[-1] == '[2/2] reached --max-cycles 2 at cycle 7'
-        assert drive.typed() == [READ, '/clear', READ]
+        assert drive.typed() == [READ, '/clear', READ, '/exit']
     finally:
         drive.close()
 
@@ -1158,27 +1174,103 @@ def test_drive_alerts_at_once_on_a_question(tmp_path):
         drive.close()
 
 
-def test_drive_finish_unsets_the_slug_and_grows_the_pane(tmp_path):
-    """Verify finish() resizes its pane before the alert and unsets the
-    pane's slug and dir before the Enter wait.
+def test_a_failed_type_parks_and_keeps_the_loop(tmp_path):
+    """Verify a line tmux fails to type rings once and ends nothing.
 
-    Mutation: the resize or the unset dropped, or run after the read.
-    Oracle: a stub tmux that records each call while the driver still
-    waits on stdin.
+    Mutation: the failed send made an END.
+    Oracle: a stub whose typed lines fail: one bell, the driver still
+    runs, and the next SessionStart types again.
     """
-    drive = _Drive(tmp_path, 10, stdin=subprocess.PIPE)
+    drive = _Drive(tmp_path, 10)
     try:
-        drive.emit('SessionStart startup S1 0 0 0 0')
-        assert _wait_for(lambda: len(drive.said()) == 1)
-        (drive.folder / '.hq.done').write_text('')
-        drive.emit('Stop - S1 0 0 0 0')
-        assert _wait_for(lambda: any('@hqloop_dir' in c for c in drive.calls()))
+        (tmp_path / 'send-fails').write_text('')
+        drive.emit('SessionStart startup S1 0 0')
+        assert _wait_for(lambda: drive.rang('could not type into the claude pane') == 1)
+        drive.emit('StopFailure rate_limit S1 0 0')
+        time.sleep(QUIET)
         assert drive.driver.poll() is None
-        calls = drive.calls()
-        resize = calls.index('resize-pane|-y|10|-t|%9')
-        alert = next(i for i, c in enumerate(calls) if c.startswith('display-message'))
-        assert resize < alert
-        assert 'set-option|-p|-u|-t|%9|@hqloop_slug' in calls[alert:]
+        assert drive.rang('could not type') == 1
+        (tmp_path / 'send-fails').unlink()
+        drive.emit('SessionStart clear S2 0 0')
+        assert _wait_for(lambda: drive.typed() == [READ, READ])
+    finally:
+        drive.close()
+
+
+# The launcher ignores TERM, and its child writes the marker at TERM.
+HUNG_LAUNCHER = """import signal, subprocess, sys
+signal.signal(signal.SIGTERM, lambda *_: None)
+subprocess.run(['bash', '-c', f'trap "touch {sys.argv[1]}; exit 0" TERM; while :; do sleep 0.2; done'])
+"""
+
+
+def _hung_launcher(tmp_path):
+    """Command of a HUNG_LAUNCHER whose child writes tmp_path/termed.
+    """
+    script = tmp_path / 'launcher.py'
+    script.write_text(HUNG_LAUNCHER)
+    return (sys.executable, str(script), str(tmp_path / 'termed'))
+
+
+def test_end_writes_the_reason_before_exit(tmp_path):
+    """Verify END writes the reason to the end file before it types /exit,
+    and the driver exits once the launcher is gone.
+
+    Mutation: end written after /exit.
+    Oracle: the tmux stub reads the end file when /exit is typed.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        (drive.folder / '.hq.done').write_text('')
+        drive.stop()
+        assert drive.driver.wait(timeout=20) == 0
+        assert drive.typed() == [READ, '/exit']
+        assert 'end-file|auth-refresh is marked done' in drive.calls()
+    finally:
+        drive.close()
+
+
+def test_end_confirms_the_exit_dialog(tmp_path):
+    """Verify END sends Enter when claude is still up DEBOUNCE after /exit.
+
+    Mutation: the Enter after /exit dropped.
+    Oracle: a launcher that outlives /exit: two Enters follow the /exit
+    line, the typing one and the dialog one.
+    """
+    drive = _Drive(tmp_path, 10, launcher=_hung_launcher(tmp_path))
+    try:
+        drive.start()
+        (drive.folder / '.hq.done').write_text('')
+        drive.stop()
+
+        def enters_after_exit():
+            calls = drive.calls()
+            if 'send-keys|-t|%0|-l|--|/exit' not in calls:
+                return 0
+            at = calls.index('send-keys|-t|%0|-l|--|/exit')
+            return calls[at:].count('send-keys|-t|%0|Enter')
+
+        assert _wait_for(lambda: enters_after_exit() == 2, limit=15)
+    finally:
+        drive.close()
+
+
+def test_end_terms_descendants_of_a_hung_launcher(tmp_path):
+    """Verify END sends TERM to the launcher's descendants when the
+    launcher outlives /exit, and rings no bell once it is gone.
+
+    Mutation: the SIGTERM step dropped, so SIGKILL ends the child.
+    Oracle: a child that traps TERM writes its marker before it dies.
+    """
+    drive = _Drive(tmp_path, 10, launcher=_hung_launcher(tmp_path))
+    try:
+        drive.start()
+        (drive.folder / '.hq.done').write_text('')
+        drive.stop()
+        assert drive.driver.wait(timeout=45) == 0
+        assert (tmp_path / 'termed').exists()
+        assert drive.rang('did not exit') == 0
     finally:
         drive.close()
 
@@ -1232,6 +1324,38 @@ def test_launch_guards(tmp_path):
     assert launch() == no_summary
     manifest.write_text(f'cycle\n{row14}\t0\n')
     assert launch()[0] == 0
+
+
+def test_launch_prints_the_end_reason(tmp_path):
+    """Verify launch prints the reason the driver wrote, and rings.
+
+    Mutation: the end read dropped from launch's trap.
+    Oracle: a claude stub that writes the end file: hq loop: <reason> on
+    stdout and a bell on stderr.
+    """
+    bin_dir = tmp_path / 'stub'
+    bin_dir.mkdir()
+    (bin_dir / 'tmux').write_text('#!/bin/sh\necho 40\n')
+    (bin_dir / 'tmux').chmod(0o755)
+    folder = tmp_path / '.handoff' / 'auth-refresh'
+    (folder / 'cycles').mkdir(parents=True)
+    (folder / 'HANDOFF.md').write_text(
+        '# Handoff\n\n## Directives\n- Loop (user, 2026-11-10): run\n\n## Task\nWork.\n')
+    row = '\t'.join(['1'] + ['-'] * 12 + ['5', '0'])
+    (folder / 'cycles' / 'manifest.tsv').write_text(f'cycle\n{row}\n')
+    claude = ['sh', '-c', 'echo "reached --max-cycles 1 at cycle 3" > "$HQ_LOOP/end"']
+    proc = subprocess.run(
+        [str(ROOT / 'bin' / 'hq-loop'), 'launch', '1', 'auth-refresh', *claude],
+        cwd=tmp_path,
+        env={
+            **os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}',
+            'TMUX': 'stub', 'TMUX_PANE': '%0'},
+        capture_output=True,
+        text=True,
+        timeout=30)
+    assert proc.returncode == 0
+    assert 'hq loop: reached --max-cycles 1 at cycle 3' in proc.stdout.splitlines()
+    assert '\a' in proc.stderr
 
 
 def _loop_text(name: str) -> str:

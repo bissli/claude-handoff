@@ -116,23 +116,82 @@ drive() {
         tmux display-message -d 10000 -t "$target" "hq loop $slug: $1" || true
     }
 
-    # The pane grows so the Enter prompt fits. A slug left set tells a
-    # rerun and hq loop stop the loop still runs. An empty -t names the
-    # active pane, so a run with no TMUX_PANE leaves every pane alone.
+    # The launcher waits on claude alone, so it stands for claude.
+    launcher_gone_within() {
+        local deadline=$((SECONDS + $1))
+        while kill -0 "$launcher" 2>/dev/null; do
+            ((SECONDS < deadline)) || return 1
+            sleep 0.5
+        done
+    }
+
+    descendants() {
+        local pid
+        for pid in $(pgrep -P "$1" || true); do
+            echo "$pid"
+            descendants "$pid"
+        done
+    }
+
+    # END. launch prints the reason from $dir/end, rings, closes this
+    # pane and removes $dir.
     finish() {
-        if [[ -n ${TMUX_PANE:-} ]]; then
-            tmux resize-pane -y 10 -t "$TMUX_PANE" 2>/dev/null || true
+        local reason=$1 deadline quiet_due=$SECONDS rc
+        printf '%s\n' "$reason" >"$dir/end"
+        say "$reason"
+        deadline=$((SECONDS + EXIT_TIMEOUT))
+        while ((turn || dialog || SECONDS < quiet_due)) && ((SECONDS < deadline)); do
+            rc=0
+            read -r -t 1 -u 3 event src ev_sid tasks endsq _ || rc=$?
+            ((rc > 128)) && continue
+            ((rc == 0)) || break
+            if [[ $event == SessionStart ]]; then
+                sid=$ev_sid
+            elif [[ $ev_sid != "$sid" ]]; then
+                continue
+            fi
+            case $event in
+                Stop | StopFailure) turn=0 ;;
+                SessionStart) turn=0 dialog=0 ;;
+                UserPromptSubmit) turn=1 dialog=0 ;;
+                PostToolUse)
+                    [[ $src == main ]] || continue
+                    turn=1 dialog=0
+                    ;;
+                Notification) if is_dialog "$src"; then dialog=1; fi ;;
+            esac
+            quiet_due=$((SECONDS + DEBOUNCE + 1))
+        done
+        if ((turn == 0 && dialog == 0 && SECONDS >= quiet_due)); then
+            send_line /exit || true
+            sleep "$DEBOUNCE"
+            # A running background task makes /exit open a dialog, and
+            # Enter takes its default, Exit and stop tasks.
+            if kill -0 "$launcher" 2>/dev/null; then
+                tmux send-keys -t "$target" Enter || true
+            fi
         fi
-        alert "$1"
-        if [[ -n ${TMUX_PANE:-} ]]; then
-            tmux set-option -p -u -t "$TMUX_PANE" @hqloop_slug 2>/dev/null || true
-            tmux set-option -p -u -t "$TMUX_PANE" @hqloop_dir 2>/dev/null || true
+        launcher_gone_within "$EXIT_TIMEOUT" && exit 0
+        # shellcheck disable=SC2046
+        kill -TERM $(descendants "$launcher") 2>/dev/null || true
+        launcher_gone_within "$EXIT_TIMEOUT" && exit 0
+        # shellcheck disable=SC2046
+        kill -KILL $(descendants "$launcher") 2>/dev/null || true
+        # launch still needs $dir/end once claude exits.
+        if ! launcher_gone_within "$DEBOUNCE"; then
+            trap - EXIT
+            alert "$reason. claude did not exit: close it by hand"
         fi
-        # hq open reads a session left open after the loop as attended
-        # once this directory is gone.
-        rm -rf -- "$dir"
-        read -r -p "Press Enter to close this window. "
         exit 0
+    }
+
+    is_dialog() {
+        case $1 in
+            permission_prompt | worker_permission_prompt | \
+                elicitation_dialog | \
+                elicitation_url_dialog | agent_needs_input) return 0 ;;
+        esac
+        return 1
     }
 
     # A mouse scroll leaves the pane in copy mode, which swallows every
@@ -141,14 +200,19 @@ drive() {
     # of the line. C-e first, because C-u keeps any text after the
     # cursor. Enter follows after a pause so the slash-command menu has
     # closed.
-    type_line() {
-        ((turn == 0 && dialog == 0)) || return 1
-        if ! { tmux copy-mode -q -t "$target" &&
+    send_line() {
+        tmux copy-mode -q -t "$target" &&
             tmux send-keys -t "$target" i C-e C-u &&
             tmux send-keys -t "$target" -l -- "$1" &&
             sleep 0.3 &&
-            tmux send-keys -t "$target" Enter; }; then
-            finish "could not type into the claude pane"
+            tmux send-keys -t "$target" Enter
+    }
+
+    type_line() {
+        ((turn == 0 && dialog == 0)) || return 1
+        if ! send_line "$1"; then
+            park_with type alert "could not type into the claude pane"
+            return 1
         fi
         turn=1
     }
@@ -342,14 +406,10 @@ drive() {
                 esac
                 ;;
             Notification)
-                case $src in
-                    permission_prompt | worker_permission_prompt | \
-                        elicitation_dialog | \
-                        elicitation_url_dialog | agent_needs_input)
-                        dialog=1
-                        alert "claude is waiting for you ($src)"
-                        ;;
-                esac
+                if is_dialog "$src"; then
+                    dialog=1
+                    alert "claude is waiting for you ($src)"
+                fi
                 if ((stop_due > 0)); then
                     stop_due=$((SECONDS + DEBOUNCE + 1))
                 fi
@@ -458,7 +518,7 @@ launch() {
         die "could not split the pane for the driver"
     }
     # shellcheck disable=SC2064
-    trap "tmux kill-pane -t $(printf %q "$dpane") 2>/dev/null || true; rm -rf -- $(printf %q "$dir")" EXIT HUP TERM
+    trap "close_launch $(printf %q "$dpane") $(printf %q "$dir")" EXIT HUP TERM
     tmux set-option -p -t "$dpane" @hqloop_slug "$slug"
     tmux set-option -p -t "$dpane" @hqloop_dir "$dir"
 
@@ -466,7 +526,19 @@ launch() {
     exit "$rc"
 }
 
-# The flag takes effect at the session's next Stop or idle notice, when
+# After a TERM or HUP runs this, the EXIT trap runs it again, so only
+# the first run may find $dir.
+close_launch() {
+    local dpane=$1 dir=$2
+    if [[ -s $dir/end ]]; then
+        printf 'hq loop: %s\n' "$(cat "$dir/end")" || true
+        printf '\a' >&2 || true
+    fi
+    tmux kill-pane -t "$dpane" 2>/dev/null || true
+    rm -rf -- "$dir"
+}
+
+# The flag takes effect at the session's next Stop or rest tick, when
 # the driver next looks. Zooming the claude pane hides the driver pane
 # and its messages.
 stop() {
@@ -476,7 +548,7 @@ stop() {
     dir=$(awk -v s="$slug" '$1 == s { print $2; exit }' <<<"$panes")
     [[ -n $dir && -d $dir ]] || die "no running hq loop for $slug"
     touch "$dir/stop"
-    echo "hq loop: stop requested. The loop writes the handoff at the next Stop or idle notice, then ends."
+    echo "hq loop: stop requested. The loop writes the handoff at the next Stop or rest tick, then ends."
 }
 
 case "${1:-}" in

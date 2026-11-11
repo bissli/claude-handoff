@@ -6970,8 +6970,8 @@ def _verb_open(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
                 f' {dirname}/{folder.name}/ x{counts[dirname]}'
                 ' - correct it at the next write, inside a cycle, never in'
                 ' HANDOFF.md outside one; hq help stale-path has the steps')
-    # The driver removes the directory when the loop ends, so a session
-    # left open after it reads as attended.
+    # launch removes the directory when the loop ends, so an HQ_LOOP
+    # that outlives its loop reads as attended.
     loop_dir = os.environ.get('HQ_LOOP')
     loop_live = bool(loop_dir) and pathlib.Path(loop_dir).is_dir()
     if loop_live:
