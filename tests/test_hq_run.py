@@ -337,152 +337,779 @@ def _wait_for(predicate: Any, limit: float = 20.0) -> bool:
     return predicate()
 
 
-def test_drive_retries_a_refused_finish_under_its_own_lock(tmp_path):
-    """Verify the driver nudges a retry at a Stop under its own session's
-    lock, MAX_NUDGES times, and waits silently on a foreign lock.
+def _manifest_row(cycle, log='-', stall='0', window=None):
+    """One manifest line: cycle, log at field 12, stall and window at 15, 16."""
+    fields = [str(cycle), '2026-01-01'] + ['-'] * 9 + [log, '-', '-', stall]
+    if window is not None:
+        fields.append(str(window))
+    return '\t'.join(fields)
 
-    Mutation: the session check dropped, so a foreign lock gets the retry;
-    the cap dropped, so a third retry is typed; or the own_lock branch
-    removed, so a refused finish leaves the pane idle.
-    Oracle: a stub tmux that records each call - the lines typed after
-    one foreign-lock Stop and three own-lock Stops, and the alert.
+
+READ = '/handoff read auth-refresh'
+WRITE = '/handoff write auth-refresh'
+# A Stop's decision runs DEBOUNCE + 1 s after it, plus the typing pause.
+QUIET = 4.5
+
+
+class _Drive:
+    """A driver run against a stub tmux, its calls and output read back.
     """
-    bin_dir = tmp_path / 'stub'
-    bin_dir.mkdir()
-    calls_path = tmp_path / 'tmux.log'
-    stub = bin_dir / 'tmux'
-    stub.write_text(f'#!/bin/sh\nIFS="|"; echo "$*" >> {calls_path}\n')
-    stub.chmod(0o755)
-    folder = tmp_path / '.handoff' / 'auth-refresh'
-    folder.mkdir(parents=True)
-    driver_dir = tmp_path / 'driver'
-    driver_dir.mkdir()
-    events = driver_dir / 'events'
-    events.write_text('')
-    launcher = subprocess.Popen(['sleep', '120'])
-    driver = subprocess.Popen(
-        [str(ROOT / 'bin' / 'hq-loop'), 'drive', str(driver_dir),
-         'auth-refresh', '10', '%0', str(ROOT / 'bin' / 'hq'),
-         str(launcher.pid)],
-        cwd=tmp_path,
-        env={**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'},
-        stdout=subprocess.DEVNULL,
-        start_new_session=True)
 
-    def typed() -> list[str]:
-        if not calls_path.exists():
-            return []
+    def __init__(self, tmp_path, max_cycles, stdin=subprocess.DEVNULL, rows=()):
+        bin_dir = tmp_path / 'stub'
+        bin_dir.mkdir()
+        self.calls_path = tmp_path / 'tmux.log'
+        (bin_dir / 'tmux').write_text(
+            f'#!/bin/sh\nIFS="|"; echo "$*" >> {self.calls_path}\n')
+        (bin_dir / 'tmux').chmod(0o755)
+        self.folder = tmp_path / '.handoff' / 'auth-refresh'
+        (self.folder / 'cycles').mkdir(parents=True)
+        self.manifest = self.folder / 'cycles' / 'manifest.tsv'
+        if rows:
+            self.write_manifest(rows)
+        self.driver_dir = tmp_path / 'driver'
+        self.driver_dir.mkdir()
+        self.events = self.driver_dir / 'events'
+        self.events.write_text('')
+        self.budget_dir = tmp_path / 'home' / '.claude' / 'cache' / 'claude-handoff'
+        self.budget_dir.mkdir(parents=True)
+        self.output = tmp_path / 'driver.out'
+        self.errors = tmp_path / 'driver.err'
+        self.launcher = subprocess.Popen(['sleep', '120'])
+        with self.output.open('w') as out, self.errors.open('w') as err:
+            self.driver = subprocess.Popen(
+                [str(ROOT / 'bin' / 'hq-loop'), 'drive', str(self.driver_dir),
+                 'auth-refresh', str(max_cycles), '%0', str(self.launcher.pid)],
+                cwd=tmp_path,
+                env={
+                    **os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}',
+                    'HOME': str(tmp_path / 'home'), 'TMUX_PANE': '%9'},
+                stdin=stdin,
+                stdout=out,
+                stderr=err,
+                start_new_session=True)
+
+    def write_manifest(self, rows):
+        self.manifest.write_text('cycle\twritten\n' + ''.join(r + '\n' for r in rows))
+
+    def set_band(self, sid, band):
+        (self.budget_dir / f'{sid}.json').write_text(json.dumps({'band': band}))
+
+    def emit(self, line):
+        with self.events.open('a') as stream:
+            stream.write(line + '\n')
+
+    def start(self, sid='S1'):
+        """Emit SessionStart startup and wait for the read it types.
+        """
+        self.emit(f'SessionStart startup {sid} 0 0')
+        assert _wait_for(lambda: len(self.typed()) == 1)
+
+    def stop(self, sid='S1', tasks=0, endsq=0, last='Waiting.'):
+        """Write the hook's last file, then emit a Stop.
+        """
+        (self.driver_dir / 'last').write_text(last + '\n')
+        self.emit(f'Stop - {sid} {tasks} {endsq}')
+
+    def said(self):
+        text = self.output.read_text() if self.output.exists() else ''
+        return [re.sub(r'\x1b\[[0-9;]*m', '', line)[6:] for line in text.splitlines()]
+
+    def calls(self):
+        return self.calls_path.read_text().splitlines() if self.calls_path.exists() else []
+
+    def typed(self):
         return [
-            line.split('|', 5)[5] for line in calls_path.read_text().splitlines()
+            line.split('|', 5)[5] for line in self.calls()
             if line.startswith('send-keys|-t|%0|-l')]
 
-    def alerts() -> list[str]:
-        if not calls_path.exists():
-            return []
-        return [
-            line for line in calls_path.read_text().splitlines()
-            if line.startswith('display-message')]
+    def rang(self, text):
+        """How many bells carry text.
+        """
+        return sum(
+            text in line for line in self.calls()
+            if line.startswith('display-message'))
 
-    def stop_event() -> None:
-        with events.open('a') as stream:
-            stream.write('Stop - S1 0 0 0 0\n')
+    def close(self):
+        self.launcher.kill()
+        self.launcher.wait()
+        # The driver can exit with its whole group before cleanup.
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(self.driver.pid, 9)
+        self.driver.wait()
 
+
+def test_foreign_sid_is_dropped(tmp_path):
+    """Verify an event under another session id is ignored, and the id a
+    SessionStart carries replaces the old one.
+
+    Mutation: the drop test removed, or the sid kept across a clear.
+    Oracle: a foreign Stop types nothing; after a SessionStart clear under
+    a new sid, that sid's Stop types the nudge.
+    """
+    drive = _Drive(tmp_path, 10)
     try:
-        with events.open('a') as stream:
-            stream.write('SessionStart startup S1 0 0 0 0\n')
-        assert _wait_for(lambda: len(typed()) == 1)
-        (folder / '.hq.lock').write_text('slug=auth-refresh\nsession=S2\n')
-        stop_event()
-        time.sleep(4)
-        assert len(typed()) == 1
-        (folder / '.hq.lock').write_text('slug=auth-refresh\nsession=S1\n')
-        for count in (2, 3):
-            stop_event()
-            assert _wait_for(lambda: len(typed()) == count)
-        stop_event()
-        assert _wait_for(lambda: any('hq finish' in line for line in alerts()))
-        assert len(typed()) == 3
-        assert typed()[0] == '/handoff read auth-refresh'
-        assert all('hq finish' in line for line in typed()[1:])
+        drive.start()
+        drive.emit('PostToolUse main S1 0 0')
+        drive.stop(sid='S2')
+        time.sleep(QUIET)
+        assert drive.typed() == [READ]
+        drive.emit('SessionStart clear S3 0 0')
+        assert _wait_for(lambda: len(drive.typed()) == 2)
+        drive.emit('PostToolUse main S3 0 0')
+        drive.stop(sid='S3')
+        assert _wait_for(lambda: len(drive.typed()) == 3)
+        assert drive.typed()[2] == _loop_text('NUDGE_TEXT')
     finally:
-        launcher.kill()
-        launcher.wait()
-        os.killpg(driver.pid, 9)
-        driver.wait()
+        drive.close()
+
+
+def test_no_line_is_typed_inside_a_turn(tmp_path):
+    """Verify no line is typed into a turn a prompt or the read started.
+
+    Mutation: the turn gate dropped from type_line, so a decision still
+    pending when the read is typed types into the read's turn.
+    Oracle: a prompt within DEBOUNCE of a Stop leaves nothing typed; a
+    Stop at band 0 right after a clear types the read alone.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.set_band('S2', 0)
+        drive.start()
+        drive.emit('PostToolUse main S1 0 0')
+        drive.stop()
+        drive.emit('UserPromptSubmit - S1 0 0')
+        time.sleep(QUIET)
+        assert drive.typed() == [READ]
+        drive.emit('SessionStart clear S2 0 0')
+        drive.stop(sid='S2')
+        time.sleep(QUIET)
+        assert drive.typed() == [READ, READ]
+    finally:
+        drive.close()
+
+
+def test_a_dialog_holds_typing_until_work_resumes(tmp_path):
+    """Verify a dialog notice rings and blocks typing until a main tool
+    call.
+
+    Mutation: the dialog gate dropped, or never cleared.
+    Oracle: a dialog, then a Stop: a bell, no line; a main tool call,
+    then a Stop: a line.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        drive.emit('PostToolUse main S1 0 0')
+        drive.emit('Notification permission_prompt S1 0 0')
+        assert _wait_for(lambda: drive.rang('claude is waiting for you (permission_prompt)') == 1)
+        drive.stop()
+        time.sleep(QUIET)
+        assert drive.typed() == [READ]
+        drive.emit('PostToolUse main S1 0 0')
+        drive.stop()
+        assert _wait_for(lambda: len(drive.typed()) == 2)
+        assert drive.typed()[1] == _loop_text('NUDGE_TEXT')
+    finally:
+        drive.close()
+
+
+def test_idle_prompt_is_no_dialog(tmp_path):
+    """Verify an idle_prompt notice neither rings nor holds typing.
+
+    Mutation: idle_prompt read as a dialog.
+    Oracle: no bell, and the next Stop types the nudge.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        drive.emit('PostToolUse main S1 0 0')
+        drive.emit('Notification idle_prompt S1 0 0')
+        drive.stop()
+        assert _wait_for(lambda: len(drive.typed()) == 2)
+        assert drive.rang('claude is waiting for you') == 0
+    finally:
+        drive.close()
+
+
+@pytest.mark.parametrize('after', ['stop', 'tick'])
+def test_done_ends_at_a_stop_and_at_a_rest_tick(tmp_path, after):
+    """Verify .hq.done ends the loop at a Stop and at a rest tick.
+
+    Mutation: Stop row 1 or tick row 1 dropped.
+    Oracle: .hq.done with a Stop that ends on a question: END and no
+    question bell; with no event but a StopFailure that leaves the
+    session resting: END.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        if after == 'stop':
+            (drive.folder / '.hq.done').write_text('')
+            drive.stop(endsq=1, last='Which key?')
+        else:
+            drive.emit('StopFailure rate_limit S1 0 0')
+            time.sleep(1)
+            (drive.folder / '.hq.done').write_text('')
+        drive.driver.wait(timeout=20)
+        assert drive.said()[-1] == '[1/10] auth-refresh is marked done'
+        assert drive.rang('asks:') == 0
+    finally:
+        drive.close()
+
+
+def test_question_parks_before_the_lock_retry(tmp_path):
+    """Verify a Stop that ends on a question rings the question and types
+    no retry, even under the session's own lock.
+
+    Mutation: rows 2 and 3 swapped.
+    Oracle: endsq under its own lock rings asks: with the last line.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        (drive.folder / '.hq.lock').write_text('slug=auth-refresh\nsession=S1\n')
+        drive.stop(endsq=1, last='Which key should I rotate?')
+        assert _wait_for(lambda: drive.rang('auth-refresh asks: Which key should I rotate?') == 1)
+        time.sleep(1)
+        assert drive.typed() == [READ]
+    finally:
+        drive.close()
+
+
+def test_own_lock_retries_twice_then_parks(tmp_path):
+    """Verify a Stop under the session's own lock types RETRY_TEXT twice,
+    then rings the finish bell.
+
+    Mutation: RETRY_CAP off by one.
+    Oracle: two retries typed, then the finish bell with the count 2.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        (drive.folder / '.hq.lock').write_text('slug=auth-refresh\nsession=S1\n')
+        for count in (2, 3):
+            drive.stop()
+            assert _wait_for(lambda: len(drive.typed()) == count)
+        drive.stop()
+        assert _wait_for(lambda: drive.rang('hq finish has not passed after 2 retries') == 1)
+        assert drive.typed() == [READ] + [_loop_text('RETRY_TEXT')] * 2
+    finally:
+        drive.close()
+
+
+def test_rest_tick_runs_beside_agent_events(tmp_path):
+    """Verify the rest tick keeps its clock while a background agent works.
+
+    Mutation: the tick keyed to a quiet read timeout, so agent events a
+    second apart hold off .hq.done.
+    Oracle: a session parked beside a task, then .hq.done and an agent
+    tool call every second: END within three ticks.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        drive.stop(tasks=1)
+        assert _wait_for(lambda: '[1/10] auth-refresh waits: Waiting.' in drive.said())
+        (drive.folder / '.hq.done').write_text('')
+        for _ in range(15):
+            if drive.driver.poll() is not None:
+                break
+            drive.emit('PostToolUse a1 S1 1 0')
+            time.sleep(1)
+        assert drive.driver.poll() is not None
+        assert drive.said()[-1] == '[1/10] auth-refresh is marked done'
+    finally:
+        drive.close()
+
+
+def test_stop_file_at_a_tick_keeps_the_question(tmp_path):
+    """Verify the Stop file at a tick never writes over an open question.
+
+    Mutation: the tick types the write without the Stop decisions, whose
+    question row comes before the Stop file.
+    Oracle: a Stop that ends on a question, then the Stop file: two
+    ticks type nothing.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        drive.stop(endsq=1, last='Which key?')
+        assert _wait_for(lambda: drive.rang('auth-refresh asks: Which key?') == 1)
+        (drive.driver_dir / 'stop').write_text('')
+        time.sleep(11)
+        assert drive.typed() == [READ]
+        assert drive.rang('asks:') == 1
+    finally:
+        drive.close()
+
+
+def test_stop_file_at_a_tick_ends_after_a_written_cycle(tmp_path):
+    """Verify the Stop file at a tick ends a loop whose cycle is written.
+
+    Mutation: the tick types the write without the Stop decisions, whose
+    cycle end comes before the Stop file.
+    Oracle: a cycle written beside a task, then the Stop file: END
+    stopped after cycle 1, and no write typed.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        drive.write_manifest([_manifest_row(1)])
+        drive.stop(tasks=1)
+        time.sleep(QUIET)
+        (drive.driver_dir / 'stop').write_text('')
+        drive.driver.wait(timeout=20)
+        assert drive.said()[-1] == '[1/10] stopped after cycle 1 as requested'
+        assert drive.typed() == [READ]
+    finally:
+        drive.close()
+
+
+def test_a_session_start_ends_the_dialog(tmp_path):
+    """Verify a dialog of the old session does not hold the new one's read.
+
+    Mutation: dialog kept across a SessionStart, so the read after a
+    clear is never typed.
+    Oracle: a dialog notice, a Stop, then a clear: the read is typed.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        drive.emit('Notification permission_prompt S1 0 0')
+        drive.stop()
+        time.sleep(QUIET)
+        drive.emit('SessionStart clear S2 0 0')
+        assert _wait_for(lambda: drive.typed() == [READ, READ])
+    finally:
+        drive.close()
+
+
+def test_foreign_lock_parks_and_the_tick_rechecks(tmp_path):
+    """Verify a foreign lock parks the loop silent, and a rest tick runs
+    the Stop decisions again once the lock is gone.
+
+    Mutation: tick row 3 dropped.
+    Oracle: lock gone after a tool call and a Stop: the nudge is typed.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        (drive.folder / '.hq.lock').write_text('slug=auth-refresh\nsession=S2\n')
+        drive.emit('PostToolUse main S1 0 0')
+        drive.stop()
+        assert _wait_for(lambda: '[1/10] waits on the lock of S2' in drive.said())
+        time.sleep(1)
+        assert drive.typed() == [READ]
+        (drive.folder / '.hq.lock').unlink()
+        assert _wait_for(lambda: len(drive.typed()) == 2, limit=12)
+        assert drive.typed()[1] == _loop_text('NUDGE_TEXT')
+    finally:
+        drive.close()
+
+
+def test_stop_file_at_rest_types_one_write(tmp_path):
+    """Verify a resting session with the Stop file gets one write.
+
+    Mutation: stop_sent dropped from tick row 2.
+    Oracle: one write over two ticks after the first.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        (drive.driver_dir / 'stop').write_text('')
+        drive.emit('StopFailure rate_limit S1 0 0')
+        assert _wait_for(lambda: len(drive.typed()) == 2, limit=12)
+        drive.emit('StopFailure rate_limit S1 0 0')
+        time.sleep(11)
+        assert drive.typed() == [READ, WRITE]
+    finally:
+        drive.close()
+
+
+def test_stop_ends_after_its_write(tmp_path):
+    """Verify a written cycle with the Stop file ends the loop with no
+    clear.
+
+    Mutation: the cycle end's Stop-file test dropped.
+    Oracle: a written cycle with the Stop file: END, no /clear.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        (drive.driver_dir / 'stop').write_text('')
+        drive.write_manifest([_manifest_row(1)])
+        drive.stop()
+        drive.driver.wait(timeout=20)
+        assert drive.said()[-1] == '[1/10] stopped after cycle 1 as requested'
+        assert drive.typed() == [READ]
+    finally:
+        drive.close()
+
+
+def test_budget_band_writes_retry_then_park(tmp_path):
+    """Verify a band types the write, retries it twice, then rings, and
+    a higher band types again.
+
+    Mutation: sent left unset, or RETRY_CAP off.
+    Oracle: band 0 over four Stops: three writes, then the write bell;
+    band 1 types one more, and a second Stop at band 1 types nothing.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.set_band('S1', 0)
+        drive.start()
+        for count in (2, 3, 4):
+            drive.stop()
+            assert _wait_for(lambda: len(drive.typed()) == count)
+        drive.stop()
+        assert _wait_for(lambda: drive.rang('a write was typed 3 times and cycle 1 is not written') == 1)
+        assert drive.typed() == [READ] + [WRITE] * 3
+        drive.set_band('S1', 1)
+        drive.stop()
+        assert _wait_for(lambda: len(drive.typed()) == 5)
+        drive.stop()
+        time.sleep(QUIET)
+        assert len(drive.typed()) == 5
+    finally:
+        drive.close()
+
+
+def test_a_ruling_types_the_write(tmp_path):
+    """Verify a hold with a ruling types the write at a Stop.
+
+    Mutation: row 9 ignoring ruling.
+    Oracle: hold and ruling: a write typed.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        (drive.driver_dir / 'hold').write_text('stall: held at 4.\n')
+        (drive.driver_dir / 'ruling').write_text('split it\n')
+        drive.stop()
+        assert _wait_for(lambda: len(drive.typed()) == 2)
+        assert drive.typed()[1] == WRITE
+    finally:
+        drive.close()
+
+
+def test_hold_alone_says_once_per_park(tmp_path):
+    """Verify a hold with no ruling says its line once across a Stop and
+    two rest ticks.
+
+    Mutation: the park said at each tick.
+    Oracle: the hold line printed once, and nothing typed.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        (drive.driver_dir / 'hold').write_text('stall: held at 4.\n')
+        drive.stop()
+        assert _wait_for(lambda: '[1/10] stall: held at 4.' in drive.said())
+        time.sleep(11)
+        assert drive.said().count('[1/10] stall: held at 4.') == 1
+        assert drive.typed() == [READ]
+    finally:
+        drive.close()
+
+
+def test_a_working_turn_gets_a_nudge(tmp_path):
+    """Verify a Stop after tool calls types the nudge, and a Stop after
+    none parks as waiting.
+
+    Mutation: row 10 keyed to anything but tools.
+    Oracle: tools 1 nudges; the nudge's own turn with tools 0 parks waits.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        drive.emit('PostToolUse main S1 0 0')
+        drive.stop()
+        assert _wait_for(lambda: len(drive.typed()) == 2)
+        assert drive.typed()[1] == _loop_text('NUDGE_TEXT')
+        drive.emit('UserPromptSubmit - S1 0 0')
+        drive.stop(last='Waiting on the build.')
+        assert _wait_for(lambda: '[1/10] auth-refresh waits: Waiting on the build.' in drive.said())
+        assert len(drive.typed()) == 2
+    finally:
+        drive.close()
+
+
+def test_cycle_end_rests_beside_a_task(tmp_path):
+    """Verify a written cycle with a background task running does not
+    clear, and clears at a Stop with none.
+
+    Mutation: the tasks test dropped.
+    Oracle: tasks 1: no /clear; tasks 0 after it: /clear.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        drive.write_manifest([_manifest_row(1)])
+        drive.stop(tasks=1)
+        time.sleep(QUIET)
+        assert drive.typed() == [READ]
+        drive.stop()
+        assert _wait_for(lambda: drive.typed() == [READ, '/clear'])
+    finally:
+        drive.close()
+
+
+def test_a_typed_clear_moves_the_base(tmp_path):
+    """Verify a clear the user types counts the written cycle as cleared.
+
+    Mutation: base set only at the driver's own clear, so the next Stop
+    sees the cycle as written again and clears the session that just
+    read the handoff back.
+    Oracle: a cycle written beside a task, then a typed clear: the next
+    Stop types no /clear.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        drive.write_manifest([_manifest_row(1)])
+        drive.stop(tasks=1)
+        time.sleep(QUIET)
+        drive.emit('SessionStart clear S2 0 0')
+        assert _wait_for(lambda: drive.typed() == [READ, READ])
+        drive.stop(sid='S2')
+        time.sleep(QUIET)
+        assert drive.typed() == [READ, READ]
+    finally:
+        drive.close()
+
+
+def test_clear_resets_the_cycle_counters(tmp_path):
+    """Verify the clear resets sent, retries, compacts and agent_calls.
+
+    Mutation: one counter left out of the reset.
+    Oracle: after the clear, three writes then the write bell (sent and
+    retries), no compact bell on the next compact, and no agent bell on
+    the call that would reach AGENT_CAP.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.set_band('S1', 0)
+        drive.set_band('S2', 0)
+        drive.start()
+        with drive.events.open('a') as stream:
+            stream.write('PostToolUse a1 S1 0 0\n' * 499)
+        drive.emit('SessionStart compact S1 0 0')
+        for count in (2, 3, 4):
+            drive.stop()
+            assert _wait_for(lambda: len(drive.typed()) == count)
+        drive.write_manifest([_manifest_row(1)])
+        drive.stop()
+        assert _wait_for(lambda: drive.typed()[-1] == '/clear')
+        drive.emit('SessionStart clear S2 0 0')
+        assert _wait_for(lambda: len(drive.typed()) == 6)
+        drive.emit('PostToolUse a1 S2 0 0')
+        drive.emit('SessionStart compact S2 0 0')
+        for count in (7, 8, 9):
+            drive.stop(sid='S2')
+            assert _wait_for(lambda: len(drive.typed()) == count)
+        drive.stop(sid='S2')
+        assert _wait_for(lambda: drive.rang('a write was typed 3 times and cycle 2 is not written') == 1)
+        assert drive.typed()[6:] == [WRITE] * 3
+        assert drive.rang('agents made') == 0
+        assert drive.rang('compacted twice') == 0
+    finally:
+        drive.close()
+
+
+def test_max_cycles_counts_from_launch(tmp_path):
+    """Verify --max-cycles counts the cycles written since launch.
+
+    Mutation: the count reset at a clear.
+    Oracle: launch at c5, max 2: the clear at c6, END at c7.
+    """
+    drive = _Drive(tmp_path, 2, rows=[_manifest_row(5)])
+    try:
+        drive.start()
+        drive.write_manifest([_manifest_row(5), _manifest_row(6)])
+        drive.stop()
+        assert _wait_for(lambda: drive.typed() == [READ, '/clear'])
+        drive.emit('SessionStart clear S2 0 0')
+        assert _wait_for(lambda: len(drive.typed()) == 3)
+        drive.write_manifest([_manifest_row(n) for n in (5, 6, 7)])
+        drive.stop(sid='S2')
+        drive.driver.wait(timeout=20)
+        assert drive.said()[-1] == '[2/2] reached --max-cycles 2 at cycle 7'
+        assert drive.typed() == [READ, '/clear', READ]
+    finally:
+        drive.close()
+
+
+def test_second_compact_rings_once(tmp_path):
+    """Verify the second compaction in a cycle rings, and no other does.
+
+    Mutation: the bell at 1, or ringing again at 3.
+    Oracle: compacts 1 silent, 2 rings, 3 silent.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        drive.emit('SessionStart compact S1 0 0')
+        time.sleep(1)
+        assert drive.rang('compacted twice') == 0
+        drive.emit('SessionStart compact S1 0 0')
+        assert _wait_for(lambda: drive.rang('compacted twice in cycle 1 with no write') == 1)
+        drive.emit('SessionStart compact S1 0 0')
+        time.sleep(1)
+        assert drive.rang('compacted twice') == 1
+    finally:
+        drive.close()
+
+
+def test_agent_cap_rings_once(tmp_path):
+    """Verify agent tool calls ring when they reach AGENT_CAP, and once.
+
+    Mutation: > for >=, or ringing past the cap.
+    Oracle: AGENT_CAP calls ring once; five more ring nothing.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        with drive.events.open('a') as stream:
+            stream.write('PostToolUse a1 S1 0 0\n' * 499)
+        time.sleep(1)
+        assert drive.rang('agents made') == 0
+        with drive.events.open('a') as stream:
+            stream.write('PostToolUse a1 S1 0 0\n')
+        assert _wait_for(lambda: drive.rang('agents made 500 tool calls in cycle 1 with no write') == 1)
+        with drive.events.open('a') as stream:
+            stream.write('PostToolUse a1 S1 0 0\n' * 5)
+        time.sleep(1)
+        assert drive.rang('agents made') == 1
+    finally:
+        drive.close()
+
+
+def test_stop_failure_parks_with_the_error(tmp_path):
+    """Verify a StopFailure rings the error and types nothing.
+
+    Mutation: StopFailure run through the Stop rows.
+    Oracle: an error bell, and no nudge after a tool call that a Stop
+    would have drawn.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        drive.emit('PostToolUse main S1 0 0')
+        drive.emit('StopFailure rate_limit S1 0 0')
+        assert _wait_for(lambda: drive.rang('claude stopped on an API error: rate_limit') == 1)
+        time.sleep(QUIET)
+        assert drive.typed() == [READ]
+    finally:
+        drive.close()
+
+
+def test_session_starts_type_the_read(tmp_path):
+    """Verify startup, clear and resume each type a read, even when a
+    prompt follows inside DEBOUNCE.
+
+    Mutation: resume or clear left out, or the read held back by a
+    prompt.
+    Oracle: three SessionStarts type three reads; a clear followed at
+    once by a prompt still types its read.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        drive.emit('SessionStart clear S2 0 0')
+        assert _wait_for(lambda: len(drive.typed()) == 2)
+        drive.emit('SessionStart resume S3 0 0')
+        assert _wait_for(lambda: len(drive.typed()) == 3)
+        drive.emit('SessionStart clear S4 0 0')
+        drive.emit('UserPromptSubmit - S4 0 0')
+        assert _wait_for(lambda: len(drive.typed()) == 4)
+        assert drive.typed() == [READ] * 4
+    finally:
+        drive.close()
+
+
+def test_a_newer_hold_rings_again(tmp_path):
+    """Verify a hold rings once, and rings again when rewritten with the
+    same text under a newer mtime.
+
+    Mutation: the bell keyed to the text.
+    Oracle: same text, newer mtime rings again.
+    """
+    drive = _Drive(tmp_path, 10)
+    hold = drive.driver_dir / 'hold'
+    try:
+        hold.write_text('stall: held at 4.\n')
+        drive.start()
+        assert _wait_for(lambda: drive.rang('auth-refresh holds: stall: held at 4.') == 1)
+        drive.emit('StopFailure rate_limit S1 0 0')
+        time.sleep(6)
+        assert drive.rang('holds:') == 1
+        later = time.time() + 30
+        hold.write_text('stall: held at 4.\n')
+        os.utime(hold, (later, later))
+        assert _wait_for(lambda: drive.rang('holds:') == 2, limit=12)
+    finally:
+        drive.close()
+
+
+def test_drive_retries_a_refused_finish_under_its_own_lock(tmp_path):
+    """Verify the driver types a retry at a Stop under its own session's
+    lock, RETRY_CAP times, and waits silently on a foreign lock.
+
+    Mutation: the session check dropped, so a foreign lock gets the retry;
+    the cap dropped, so a third retry is typed; or the own-lock row
+    removed, so a refused finish leaves the pane idle.
+    Oracle: a stub tmux that records each call - the lines typed after
+    one foreign-lock Stop and three own-lock Stops, and the bell.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        (drive.folder / '.hq.lock').write_text('slug=auth-refresh\nsession=S2\n')
+        drive.stop()
+        time.sleep(QUIET)
+        assert len(drive.typed()) == 1
+        (drive.folder / '.hq.lock').write_text('slug=auth-refresh\nsession=S1\n')
+        for count in (2, 3):
+            drive.stop()
+            assert _wait_for(lambda: len(drive.typed()) == count)
+        drive.stop()
+        assert _wait_for(lambda: drive.rang('hq finish') == 1)
+        assert len(drive.typed()) == 3
+        assert drive.typed()[0] == READ
+        assert all('hq finish' in line for line in drive.typed()[1:])
+    finally:
+        drive.close()
 
 
 def test_drive_waits_on_a_question_asked_under_its_own_lock(tmp_path):
     """Verify a session that ends on a question while it holds its lock
-    gets an alert and no retry text, with a stop pending as well, unless
-    the question is about /handoff.
+    gets a bell and no retry text, with a stop pending as well, and
+    gets the retry once it stops asking.
 
-    Mutation: the endsq check dropped from the own-lock branch, so the
-    retry text answers a question the loop must leave to the user; the
-    !ask test dropped, so a /handoff question waits on the user; or the
-    stop-file condition kept, so a pending stop answers the question.
+    Mutation: the endsq check dropped from the own-lock path, so the
+    retry text answers a question the loop leaves to the user; or the
+    stop file made to answer the question.
     Oracle: a stub tmux that records each call - the lines typed and
-    the alerts after a plain question Stop, a /handoff question Stop,
-    and a question Stop with the stop file present.
+    the bells after a question Stop, a question Stop with the stop file
+    present, and a Stop with no question.
     """
-    bin_dir = tmp_path / 'stub'
-    bin_dir.mkdir()
-    calls_path = tmp_path / 'tmux.log'
-    stub = bin_dir / 'tmux'
-    stub.write_text(f'#!/bin/sh\nIFS="|"; echo "$*" >> {calls_path}\n')
-    stub.chmod(0o755)
-    folder = tmp_path / '.handoff' / 'auth-refresh'
-    folder.mkdir(parents=True)
-    driver_dir = tmp_path / 'driver'
-    driver_dir.mkdir()
-    events = driver_dir / 'events'
-    events.write_text('')
-    launcher = subprocess.Popen(['sleep', '120'])
-    driver = subprocess.Popen(
-        [str(ROOT / 'bin' / 'hq-loop'), 'drive', str(driver_dir),
-         'auth-refresh', '10', '%0', str(ROOT / 'bin' / 'hq'),
-         str(launcher.pid)],
-        cwd=tmp_path,
-        env={**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'},
-        stdout=subprocess.DEVNULL,
-        start_new_session=True)
-
-    def calls() -> list[str]:
-        if not calls_path.exists():
-            return []
-        return calls_path.read_text().splitlines()
-
-    def typed() -> list[str]:
-        return [
-            line.split('|', 5)[5] for line in calls()
-            if line.startswith('send-keys|-t|%0|-l')]
-
+    drive = _Drive(tmp_path, 10)
     try:
-        with events.open('a') as stream:
-            stream.write('SessionStart startup S1 0 0 0 0\n')
-        assert _wait_for(lambda: len(typed()) == 1)
-        (folder / '.hq.lock').write_text('slug=auth-refresh\nsession=S1\n')
-        with events.open('a') as stream:
-            stream.write('Stop - S1 0 0 1 0\n')
-        assert _wait_for(lambda: any(
-            line.startswith('display-message') and 'question' in line
-            for line in calls()))
-        assert typed() == ['/handoff read auth-refresh']
-        with events.open('a') as stream:
-            stream.write('Stop - S1 0 1 1 0\n')
-        assert _wait_for(lambda: len(typed()) == 2)
-        assert 'hq finish' in typed()[1]
-        (driver_dir / 'stop').write_text('')
-        asked = sum('question' in line for line in calls())
-        with events.open('a') as stream:
-            stream.write('Stop - S1 0 0 1 0\n')
-        assert _wait_for(lambda: sum('question' in line for line in calls()) > asked)
-        time.sleep(3)
-        assert len(typed()) == 2
+        drive.start()
+        (drive.folder / '.hq.lock').write_text('slug=auth-refresh\nsession=S1\n')
+        drive.stop(endsq=1, last='Rotate it?')
+        assert _wait_for(lambda: drive.rang('asks: Rotate it?') == 1)
+        (drive.driver_dir / 'stop').write_text('')
+        drive.stop(endsq=1, last='Rotate it?')
+        assert _wait_for(lambda: drive.rang('asks: Rotate it?') == 2)
+        time.sleep(QUIET)
+        assert drive.typed() == [READ]
+        drive.stop()
+        assert _wait_for(lambda: len(drive.typed()) == 2)
+        assert 'hq finish' in drive.typed()[1]
     finally:
-        launcher.kill()
-        launcher.wait()
-        os.killpg(driver.pid, 9)
-        driver.wait()
+        drive.close()
 
 
 def test_drive_counts_the_cycle_in_progress(tmp_path):
@@ -494,383 +1121,41 @@ def test_drive_counts_the_cycle_in_progress(tmp_path):
     Oracle: the driver's own output across two finished cycles under
     --max-cycles 2, read against hand-written expected lines.
     """
-    bin_dir = tmp_path / 'stub'
-    bin_dir.mkdir()
-    (bin_dir / 'tmux').write_text('#!/bin/sh\nexit 0\n')
-    (bin_dir / 'tmux').chmod(0o755)
-    hq_stub = bin_dir / 'hq'
-    hq_stub.write_text('#!/bin/sh\necho "auth-refresh 2026-01-01 c1 3 open task"\n')
-    hq_stub.chmod(0o755)
-    cycles_dir = tmp_path / '.handoff' / 'auth-refresh' / 'cycles'
-    cycles_dir.mkdir(parents=True)
-    manifest = cycles_dir / 'manifest.tsv'
-    driver_dir = tmp_path / 'driver'
-    driver_dir.mkdir()
-    events = driver_dir / 'events'
-    events.write_text('')
-    output = tmp_path / 'driver.out'
-    launcher = subprocess.Popen(['sleep', '120'])
-
-    def emit(line: str) -> None:
-        with events.open('a') as stream:
-            stream.write(line + '\n')
-
-    def said() -> list[str]:
-        text = output.read_text() if output.exists() else ''
-        return [re.sub(r'\x1b\[[0-9;]*m', '', line)[6:] for line in text.splitlines()]
-
+    drive = _Drive(tmp_path, 2)
     try:
-        with output.open('w') as out:
-            driver = subprocess.Popen(
-                [str(ROOT / 'bin' / 'hq-loop'), 'drive', str(driver_dir),
-                 'auth-refresh', '2', '%0', str(hq_stub), str(launcher.pid)],
-                cwd=tmp_path,
-                env={**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'},
-                stdin=subprocess.DEVNULL,
-                stdout=out,
-                start_new_session=True)
-        emit('SessionStart startup S1 0 0 0 0')
-        assert _wait_for(lambda: len(said()) == 1)
-        pad = '\t-' * 12 + '\t0'
-        manifest.write_text(f'cycle\twritten\n1\t2026-01-01{pad}\n')
-        emit('Stop - S1 0 0 0 0')
-        assert _wait_for(lambda: len(said()) == 2)
-        emit('SessionStart clear S2 0 0 0 0')
-        manifest.write_text(
-            f'cycle\twritten\n1\t2026-01-01{pad}\n2\t2026-01-02{pad}\n')
-        emit('Stop - S2 0 0 0 0')
-        driver.wait(timeout=20)
-        assert said() == [
+        drive.start()
+        drive.write_manifest([_manifest_row(1)])
+        drive.stop()
+        assert _wait_for(lambda: len(drive.said()) == 2)
+        drive.emit('SessionStart clear S2 0 0')
+        assert _wait_for(lambda: len(drive.typed()) == 3)
+        drive.write_manifest([_manifest_row(1), _manifest_row(2)])
+        drive.stop(sid='S2')
+        drive.driver.wait(timeout=20)
+        assert drive.said() == [
             '[1/2] started auth-refresh at cycle 1',
             '[1/2] cycle 1 written, clearing',
             '[2/2] reached --max-cycles 2 at cycle 2',
             ]
     finally:
-        launcher.kill()
-        launcher.wait()
-        os.killpg(driver.pid, 9)
-        driver.wait()
-
-
-def test_drive_prints_payload_and_slope(tmp_path):
-    """Verify the written line carries the last manifest row's payload
-    and its change since the row before.
-
-    Mutation: the cursor_lines column read in place of payload_tokens,
-    the sign of the change flipped, or the first row read in place of
-    the last.
-    Oracle: hand-written manifest values and expected lines.
-    """
-    bin_dir = tmp_path / 'stub'
-    bin_dir.mkdir()
-    (bin_dir / 'tmux').write_text('#!/bin/sh\nexit 0\n')
-    (bin_dir / 'tmux').chmod(0o755)
-    hq_stub = bin_dir / 'hq'
-    hq_stub.write_text('#!/bin/sh\necho "auth-refresh 2026-01-01 c1 3 open task"\n')
-    hq_stub.chmod(0o755)
-    cycles_dir = tmp_path / '.handoff' / 'auth-refresh' / 'cycles'
-    cycles_dir.mkdir(parents=True)
-    manifest = cycles_dir / 'manifest.tsv'
-    header = 'cycle\twritten\tcursor_lines\tpayload_tokens\n'
-    driver_dir = tmp_path / 'driver'
-    driver_dir.mkdir()
-    events = driver_dir / 'events'
-    events.write_text('')
-    output = tmp_path / 'driver.out'
-    launcher = subprocess.Popen(['sleep', '120'])
-
-    def emit(line: str) -> None:
-        with events.open('a') as stream:
-            stream.write(line + '\n')
-
-    def said() -> list[str]:
-        text = output.read_text() if output.exists() else ''
-        return [re.sub(r'\x1b\[[0-9;]*m', '', line)[6:] for line in text.splitlines()]
-
-    try:
-        with output.open('w') as out:
-            driver = subprocess.Popen(
-                [str(ROOT / 'bin' / 'hq-loop'), 'drive', str(driver_dir),
-                 'auth-refresh', '3', '%0', str(hq_stub), str(launcher.pid)],
-                cwd=tmp_path,
-                env={**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'},
-                stdin=subprocess.DEVNULL,
-                stdout=out,
-                start_new_session=True)
-        emit('SessionStart startup S1 0 0 0 0')
-        assert _wait_for(lambda: len(said()) == 1)
-        pad = '\t-' * 10 + '\t0'
-        manifest.write_text(header + f'1\t2026-01-01\t40\t1000{pad}\n')
-        emit('Stop - S1 0 0 0 0')
-        assert _wait_for(lambda: len(said()) == 2)
-        emit('SessionStart clear S2 0 0 0 0')
-        manifest.write_text(
-            header + f'1\t2026-01-01\t40\t1000{pad}\n'
-            f'2\t2026-01-02\t44\t1250{pad}\n')
-        emit('Stop - S2 0 0 0 0')
-        assert _wait_for(lambda: len(said()) == 3)
-        assert said() == [
-            '[1/3] started auth-refresh at cycle 1',
-            '[1/3] cycle 1 written, 1000 tok, clearing',
-            '[2/3] cycle 2 written, 1250 tok +250 since c1, clearing',
-            ]
-    finally:
-        launcher.kill()
-        launcher.wait()
-        os.killpg(driver.pid, 9)
-        driver.wait()
-
-
-def _manifest_row(cycle, log='-', stall='0', window=None):
-    """One manifest line: cycle, log at field 12, stall and window at 15, 16."""
-    fields = [str(cycle), '2026-01-01'] + ['-'] * 9 + [log, '-', '-', stall]
-    if window is not None:
-        fields.append(str(window))
-    return '\t'.join(fields)
-
-
-class _Drive:
-    """A driver run against stub tmux and hq, its calls and output read back.
-    """
-
-    def __init__(self, tmp_path, max_cycles, open_cnt='3', stdin=subprocess.DEVNULL):
-        bin_dir = tmp_path / 'stub'
-        bin_dir.mkdir()
-        self.calls_path = tmp_path / 'tmux.log'
-        (bin_dir / 'tmux').write_text(
-            f'#!/bin/sh\nIFS="|"; echo "$*" >> {self.calls_path}\n')
-        (bin_dir / 'tmux').chmod(0o755)
-        hq_stub = bin_dir / 'hq'
-        hq_stub.write_text(
-            f'#!/bin/sh\necho "auth-refresh 2026-01-01 c1 {open_cnt} open task"\n')
-        hq_stub.chmod(0o755)
-        self.folder = tmp_path / '.handoff' / 'auth-refresh'
-        (self.folder / 'cycles').mkdir(parents=True)
-        self.manifest = self.folder / 'cycles' / 'manifest.tsv'
-        self.driver_dir = tmp_path / 'driver'
-        self.driver_dir.mkdir()
-        self.events = self.driver_dir / 'events'
-        self.events.write_text('')
-        self.output = tmp_path / 'driver.out'
-        self.errors = tmp_path / 'driver.err'
-        self.launcher = subprocess.Popen(['sleep', '120'])
-        with self.output.open('w') as out, self.errors.open('w') as err:
-            self.driver = subprocess.Popen(
-                [str(ROOT / 'bin' / 'hq-loop'), 'drive', str(self.driver_dir),
-                 'auth-refresh', str(max_cycles), '%0', str(hq_stub),
-                 str(self.launcher.pid)],
-                cwd=tmp_path,
-                env={
-                    **os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}',
-                    'TMUX_PANE': '%9'},
-                stdin=stdin,
-                stdout=out,
-                stderr=err,
-                start_new_session=True)
-
-    def write_manifest(self, rows):
-        self.manifest.write_text('cycle\twritten\n' + ''.join(r + '\n' for r in rows))
-
-    def emit(self, line):
-        with self.events.open('a') as stream:
-            stream.write(line + '\n')
-
-    def said(self):
-        text = self.output.read_text() if self.output.exists() else ''
-        return [re.sub(r'\x1b\[[0-9;]*m', '', line)[6:] for line in text.splitlines()]
-
-    def calls(self):
-        return self.calls_path.read_text().splitlines() if self.calls_path.exists() else []
-
-    def close(self):
-        self.launcher.kill()
-        self.launcher.wait()
-        # The driver can exit with its whole group before cleanup.
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(self.driver.pid, 9)
-        self.driver.wait()
-
-
-@pytest.mark.parametrize('field15', ['-', None])
-def test_drive_backstop_stops_on_no_readable_summary(tmp_path, field15):
-    """Verify a written cycle with '-' or no field 15 stops the loop ahead of
-    --max-cycles, and rings the bell.
-
-    Mutation: the backstop placed after the --max-cycles check, or the
-    bell dropped from alert.
-    Oracle: --max-cycles 1, so a backstop placed late prints the ceiling
-    line in place of the summary line.
-    """
-    drive = _Drive(tmp_path, 1)
-    try:
-        drive.emit('SessionStart startup S1 0 0 0 0')
-        assert _wait_for(lambda: len(drive.said()) == 1)
-        row = _manifest_row(1, stall=field15 or '')
-        drive.write_manifest([row if field15 else row.rsplit('\t', 1)[0]])
-        drive.emit('Stop - S1 0 0 0 0')
-        drive.driver.wait(timeout=20)
-        assert drive.said()[-1] == (
-            '[1/1] cycle 1 stored no readable summary. Run /handoff'
-            ' auth-refresh in this session, fix the measure, then hq loop'
-            ' auth-refresh')
-        assert '\a' in drive.errors.read_text()
-    finally:
-        drive.close()
-
-
-def test_drive_backstop_stops_at_four_and_passes_three(tmp_path):
-    """Verify a stored stall of 3 clears and one of 4 stops the loop.
-
-    Mutation: the threshold moved by one.
-    Oracle: the two stored values either side of the threshold.
-    """
-    drive = _Drive(tmp_path, 10)
-    try:
-        drive.emit('SessionStart startup S1 0 0 0 0')
-        assert _wait_for(lambda: len(drive.said()) == 1)
-        drive.write_manifest([_manifest_row(1, stall='3')])
-        drive.emit('Stop - S1 0 0 0 0')
-        assert _wait_for(lambda: len(drive.said()) == 2)
-        drive.emit('SessionStart clear S2 0 0 0 0')
-        drive.write_manifest([_manifest_row(1, stall='3'), _manifest_row(2, stall='4')])
-        drive.emit('Stop - S2 0 0 0 0')
-        drive.driver.wait(timeout=20)
-        assert drive.said() == [
-            '[1/10] started auth-refresh at cycle 1',
-            '[1/10] cycle 1 written, clearing',
-            ('[2/10] 4 cycles without progress and no stall ruling. Run'
-             ' /handoff auth-refresh in this session, answer the stall'
-             ' question it asks, then hq loop auth-refresh'),
-            ]
-    finally:
-        drive.close()
-
-
-def test_drive_open_count_of_zero_stops_before_the_backstop(tmp_path):
-    """Verify an open count of 0 stops the loop before field 15 is read.
-
-    Mutation: the backstop placed ahead of the open-count check.
-    Oracle: a '-' in field 15, which the backstop would stop on first.
-    """
-    drive = _Drive(tmp_path, 10, open_cnt='0')
-    try:
-        drive.emit('SessionStart startup S1 0 0 0 0')
-        assert _wait_for(lambda: len(drive.said()) == 1)
-        drive.write_manifest([_manifest_row(1, stall='-')])
-        drive.emit('Stop - S1 0 0 0 0')
-        drive.driver.wait(timeout=20)
-        assert "shows '0' in the Plan column" in drive.said()[-1]
-    finally:
         drive.close()
 
 
 def test_drive_alerts_at_once_on_a_question(tmp_path):
-    """Verify a Stop that ends on a question, not about /handoff, alerts at
-    once with nothing typed.
+    """Verify a Stop that ends on a question rings at once with nothing
+    typed.
 
-    Mutation: the branch dropped, so only a later idle notice alerts.
+    Mutation: the row dropped, so the Stop falls to the waits park.
     Oracle: a stub tmux that records each call, with no idle notice sent.
     """
     drive = _Drive(tmp_path, 10)
     try:
-        drive.emit('SessionStart startup S1 0 0 0 0')
-        assert _wait_for(lambda: len(drive.said()) == 1)
-        drive.emit('Stop - S1 0 0 1 0')
-        assert _wait_for(lambda: any(
-            line.startswith('display-message')
-            and 'the session asked a question and waits for the answer' in line
-            for line in drive.calls()))
-        typed = [c for c in drive.calls() if c.startswith('send-keys|-t|%0|-l')]
-        assert len(typed) == 1
+        drive.start()
+        drive.stop(endsq=1, last='Ship it?')
+        assert _wait_for(lambda: drive.rang('auth-refresh asks: Ship it?') == 1)
+        assert drive.typed() == [READ]
     finally:
         drive.close()
-
-
-def test_drive_ceiling_stop_prints_the_window_and_the_re_stamps(tmp_path):
-    """Verify the --max-cycles stop prints the window's first summary, the
-    latest summary and every probe re-stamp after the setup cycle.
-
-    Mutation: the first manifest row printed in place of the window's
-    first row, or a setup-cycle stamp listed.
-    Oracle: a ruling at c3 opens the window; c1 is the setup cycle.
-    """
-    drive = _Drive(tmp_path, 1)
-    rows = [
-        _manifest_row(1, 'summary: a=5->0 - setup', '0', 1),
-        _manifest_row(2, 'summary: a=4->0 b=MET - work', '0', 1),
-        _manifest_row(3, 'summary: a=4->0 stall review: split a', '0', 3),
-        ]
-    (drive.folder / 'ledger.tsv').write_text(
-        'cycle\tts\tpath\n1\t-\tprobes/status.sh\n2\t-\tprobes/status.sh\n'
-        '3\t-\tnotes/x.md\n4\t-\tprobes/\n')
-    try:
-        drive.write_manifest(rows)
-        drive.emit('SessionStart startup S1 0 0 0 0')
-        assert _wait_for(lambda: len(drive.said()) == 1)
-        drive.write_manifest(rows + [_manifest_row(4, 'summary: a=3->0 - more', '0', 3)])
-        drive.emit('Stop - S1 0 0 0 0')
-        drive.driver.wait(timeout=20)
-        assert drive.said()[1:] == [
-            '[1/1] window c3: summary: a=4->0',
-            '[1/1] latest c4: summary: a=3->0',
-            '[1/1] probe re-stamps: c2 probes/status.sh, c4 probes/',
-            '[1/1] reached --max-cycles 1 at cycle 4',
-            ]
-    finally:
-        drive.close()
-
-
-def _ceiling_lines(tmp_path, rows, last_row):
-    drive = _Drive(tmp_path, 1)
-    try:
-        drive.write_manifest(rows)
-        drive.emit('SessionStart startup S1 0 0 0 0')
-        assert _wait_for(lambda: len(drive.said()) == 1)
-        drive.write_manifest(rows + [last_row])
-        drive.emit('Stop - S1 0 0 0 0')
-        drive.driver.wait(timeout=20)
-        return drive.said()[1:]
-    finally:
-        drive.close()
-
-
-def test_drive_ceiling_stop_skips_an_unmeasured_newest_row(tmp_path):
-    """Verify the --max-cycles stop prints the newest measured row as latest
-    when the newest manifest row is summary: unmeasured.
-
-    Mutation: latest printed from the newest row in place of the newest
-    measured row, or the unmeasured test dropped from summary().
-    Oracle: c3 is unmeasured, so c2 is latest and c1 is the window.
-    """
-    rows = [
-        _manifest_row(1, 'summary: a=5->0 - setup', '0', 1),
-        _manifest_row(2, 'summary: a=4->0 - work', '0', 1),
-        ]
-    last_row = _manifest_row(3, 'summary: unmeasured - skipped', '0', 1)
-    assert _ceiling_lines(tmp_path, rows, last_row) == [
-        '[1/1] window c1: summary: a=5->0',
-        '[1/1] latest c2: summary: a=4->0',
-        '[1/1] reached --max-cycles 1 at cycle 3',
-        ]
-
-
-def test_drive_ceiling_stop_omits_the_window_that_is_the_latest(tmp_path):
-    """Verify the --max-cycles stop prints no window line when the window
-    row is the newest measured row.
-
-    Mutation: the win != measured test dropped, so the same summary
-    prints twice.
-    Oracle: the window opens at c2, which is also the newest measured row.
-    """
-    rows = [
-        _manifest_row(1, 'summary: a=5->0 - setup', '0', 1),
-        _manifest_row(2, 'summary: a=4->0 - work', '0', 2),
-        ]
-    last_row = _manifest_row(3, 'summary: unmeasured - skipped', '0', 2)
-    assert _ceiling_lines(tmp_path, rows, last_row) == [
-        '[1/1] latest c2: summary: a=4->0',
-        '[1/1] reached --max-cycles 1 at cycle 3',
-        ]
 
 
 def test_drive_finish_unsets_the_slug_and_grows_the_pane(tmp_path):

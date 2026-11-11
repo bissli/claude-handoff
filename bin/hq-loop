@@ -2,9 +2,7 @@
 # Run one handoff thread in an interactive claude session in the current
 # tmux pane, with a small driver pane below it.
 # When the context-budget notice fires, write the handoff, clear, and
-# read it back. Stops for the user when the thread is done, or when a
-# written cycle stores no readable summary or a fourth cycle in a row
-# without progress.
+# read it back.
 # Usage: hq loop [--max-cycles N] <slug>
 #        hq loop stop <slug>   (write the next handoff, then end the loop)
 # hq loop runs this script at the project root.
@@ -14,12 +12,11 @@ set -euo pipefail
 # read -t returns a status above 128 on a timeout only from bash 4 on.
 ((BASH_VERSINFO[0] >= 4)) || { echo "hq loop: needs bash 4 or later" >&2; exit 1; }
 
+TICK_SECS=5
 DEBOUNCE=2
-CLEAR_TIMEOUT=20
-SETTLE=2
-MAX_NUDGES=2
-MAX_IDLE_NUDGES=3
-LOCK_ALERT_MIN=30
+EXIT_TIMEOUT=20
+RETRY_CAP=2
+AGENT_CAP=500
 # The hook reads a prompt that ends on TAIL as the driver's own line,
 # so it never becomes a stall ruling.
 TAIL="The loop driver typed this line. It answers no question. If a security or stability question is still open, end on it again, as the last line, with ? as the last character."
@@ -87,12 +84,12 @@ hook() {
 }
 
 drive() {
-    local dir=$1 slug=$2 max=$3 target=$4 hq_bin=$5 launcher=$6
+    local dir=$1 slug=$2 max=$3 target=$4 launcher=$5
     local folder=".handoff/$slug"
-    local event src sid bg ask endsq dh ev id bgn askn endsqn dhn rc skip
-    local base sent=-1 nudges=0 retries=0 idle=0 idle_nudges=0 cycles=1 cycle open budget band ctx hp ep near
-    local payload stall line
-    local last_sid='' last_ask=0 last_endsq=0 last_dh=0 last_bg=0
+    local event src sid='' ev_sid tasks endsq rc wait_secs due
+    local launch_cycle base turn=0 tools=0 dialog=0 sent=-1 retries=0
+    local stop_sent=0 compacts=0 agent_calls=0 park=''
+    local stop_tasks=0 stop_endsq=0 read_due=0 stop_due=0 tick_due
 
     # The trap runs after this function returns, when its locals are gone.
     # shellcheck disable=SC2064
@@ -106,7 +103,7 @@ drive() {
 
     say() {
         printf '\e[2m%s\e[0m [%d/%d] \e[2m%s\e[0m\n' \
-            "$(date +%H:%M)" "$cycles" "$max" "$1"
+            "$(date +%H:%M)" "$((base - launch_cycle + 1))" "$max" "$1"
     }
 
     # tmux shows the bell's ! flag on a loop window that is not the
@@ -119,10 +116,9 @@ drive() {
         tmux display-message -d 10000 -t "$target" "hq loop $slug: $1" || true
     }
 
-    # The pane grows so the ceiling report and the Enter prompt fit. A
-    # slug left set tells a rerun and hq loop stop the loop still runs.
-    # An empty -t names the active pane, so a run with no TMUX_PANE
-    # leaves every pane alone.
+    # The pane grows so the Enter prompt fits. A slug left set tells a
+    # rerun and hq loop stop the loop still runs. An empty -t names the
+    # active pane, so a run with no TMUX_PANE leaves every pane alone.
     finish() {
         if [[ -n ${TMUX_PANE:-} ]]; then
             tmux resize-pane -y 10 -t "$TMUX_PANE" 2>/dev/null || true
@@ -146,7 +142,7 @@ drive() {
     # cursor. Enter follows after a pause so the slash-command menu has
     # closed.
     type_line() {
-        last_sid=
+        ((turn == 0 && dialog == 0)) || return 1
         if ! { tmux copy-mode -q -t "$target" &&
             tmux send-keys -t "$target" i C-e C-u &&
             tmux send-keys -t "$target" -l -- "$1" &&
@@ -154,30 +150,7 @@ drive() {
             tmux send-keys -t "$target" Enter; }; then
             finish "could not type into the claude pane"
         fi
-    }
-
-    # A timeout of 0 waits until the pane closes. Status above 128 is
-    # read timing out, and any other failure is the stream ending.
-    wait_session_start() {
-        local want=$1 limit=$2 waited=0
-        while alive; do
-            rc=0
-            read -r -t 5 -u 3 event src sid _ || rc=$?
-            if ((rc == 0)); then
-                if [[ $event == SessionStart && $src == "$want" ]]; then
-                    # The input box takes control keys only after a short
-                    # wait. Sent at once, the i in type_line lands as text.
-                    sleep "$SETTLE"
-                    return 0
-                fi
-            elif ((rc > 128)); then
-                waited=$((waited + 5))
-                ((limit > 0 && waited >= limit)) && return 1
-            else
-                finish "event stream closed"
-            fi
-        done
-        return 1
+        turn=1
     }
 
     # finish appends a manifest row after it writes HANDOFF.md and
@@ -186,247 +159,229 @@ drive() {
     # whose first cycle is still open.
     thread_cycle() {
         [[ -f $folder/cycles/manifest.tsv ]] || { echo 0; return; }
-        awk -F'\t' 'NR > 1 { c = $1 } END { print c + 0 }' \
+        awk -F'\t' 'NR > 1 && NF { c = $1 } END { print c + 0 }' \
             "$folder/cycles/manifest.tsv"
     }
 
-    # hq finish stores each cycle's stall count in field 15 and its
-    # window's first cycle in field 16. A summary is field 12 from
-    # summary: through the last token before the first one with no =.
-    # summary: unmeasured prints nothing, so latest is the newest
-    # measured row.
-    ceiling_report() {
-        local setup
-        awk -F'\t' '
-            function summary(text,   p, n, w, i, out) {
-                p = index(tolower(text), "summary:")
-                if (p == 0 || substr(text, 1, p - 1) !~ /^ *$/) return ""
-                out = substr(text, p, 8)
-                n = split(substr(text, p + 8), w, " ")
-                if (tolower(w[1]) ~ /^unmeasured[.,;]*$/) return ""
-                for (i = 1; i <= n && w[i] ~ /=/; i++) out = out " " w[i]
-                return out
-            }
-            NR > 1 && NF {
-                win = $16; logs[$1] = $12
-                if (summary($12) != "") measured = $1
-            }
-            END {
-                if (win ~ /^[0-9]+$/ && win != measured && summary(logs[win]) != "")
-                    print "window c" win ": " summary(logs[win])
-                if (measured != "")
-                    print "latest c" measured ": " summary(logs[measured])
-            }' "$folder/cycles/manifest.tsv"
-        setup=$(awk -F'\t' 'NR > 1 && $15 ~ /^[0-9]+$/ { print $1; exit }' \
-            "$folder/cycles/manifest.tsv")
-        awk -F'\t' -v s="$setup" '
-            NR > 1 && $3 ~ /^probes\// && $1 + 0 > s + 0 {
-                out = out (out == "" ? "" : ", ") "c" $1 " " $3 }
-            END { if (out != "") print "probe re-stamps: " out }' \
-            "$folder/ledger.tsv" 2>/dev/null || true
+    # A park acts once, so a repeat of the same park stays silent.
+    park_with() {
+        [[ $park == "$1" ]] && return 0
+        park=$1
+        "$2" "$3"
     }
 
-    # hq list prints "<slug> <date> c<N> <N> open <task>" and puts "-"
-    # in the progress column when the Plan has no checkbox.
-    thread_open() {
-        "$hq_bin" list | awk -v s="$slug" '$1 == s { print $4 }'
+    # The marker file's mtime is the last bell, so a rewritten hold
+    # rings again even when its text repeats.
+    ring_hold() {
+        [[ $dir/hold -nt $dir/holdbell ]] || return 0
+        touch "$dir/holdbell"
+        alert "$slug holds: $(head -n 1 "$dir/hold")"
+        return 0
     }
 
-    wait_session_start startup 0 ||
-        finish "claude exited before it started. Its pane showed why, for example a missing .root"
-    type_line "/handoff read $slug"
-    base=$(thread_cycle)
-    say "started $slug at cycle $((base + 1))"
+    type_write() {
+        type_line "/handoff write $slug" || return 1
+        sent=$((sent < 0 ? 0 : sent))
+    }
 
+    cycle_end() {
+        local cycle=$1
+        if [[ -e $dir/stop ]]; then
+            finish "stopped after cycle $cycle as requested"
+        fi
+        if ((cycle - launch_cycle >= max)); then
+            finish "reached --max-cycles $max at cycle $cycle"
+        fi
+        if ((stop_tasks > 0)); then
+            return 0
+        fi
+        if type_line "/clear"; then
+            say "cycle $cycle written, clearing"
+        fi
+        return 0
+    }
+
+    stop_decisions() {
+        local last cycle lock_session budget band=-1
+        last=$(cat "$dir/last" 2>/dev/null) || last=
+        if [[ -e $folder/.hq.done ]]; then
+            finish "$slug is marked done"
+        fi
+        if ((stop_endsq)); then
+            park_with question alert "$slug asks: $last"
+            return 0
+        fi
+        if [[ -e $folder/.hq.lock ]]; then
+            lock_session=$(awk -F= '$1 == "session" { print $2; exit }' \
+                "$folder/.hq.lock" 2>/dev/null) || lock_session=
+            if [[ $lock_session == "$sid" ]]; then
+                if ((retries < RETRY_CAP)); then
+                    if type_line "$RETRY_TEXT"; then ((++retries)); fi
+                else
+                    park_with finish alert "hq finish has not passed after $retries retries"
+                fi
+            else
+                park_with lock say "waits on the lock of $lock_session"
+            fi
+            return 0
+        fi
+        cycle=$(thread_cycle)
+        if ((cycle > base)); then
+            cycle_end "$cycle"
+            return 0
+        fi
+        if [[ -e $dir/stop ]] && ((stop_sent == 0)); then
+            if type_write; then stop_sent=1; fi
+            return 0
+        fi
+        # The budget hook runs beside this one, so its state file can
+        # lag the Stop. DEBOUNCE leaves it time to settle.
+        budget=$(jq -r '.band // -1' "$BUDGET_STATE_DIR/$sid.json" 2>/dev/null) ||
+            budget=
+        [[ $budget =~ ^-?[0-9]+$ ]] && band=$budget
+        if ((band >= 0 && band > sent)); then
+            if type_write; then sent=$band; fi
+            return 0
+        fi
+        if ((sent >= 0)); then
+            if ((retries < RETRY_CAP)); then
+                if type_write; then ((++retries)); fi
+            else
+                park_with write alert "a write was typed $((retries + 1)) times and cycle $((base + 1)) is not written"
+            fi
+            return 0
+        fi
+        if [[ -e $dir/hold ]]; then
+            if [[ -e $dir/ruling ]]; then
+                type_write || true
+            else
+                park_with hold say "$(head -n 1 "$dir/hold")"
+            fi
+            return 0
+        fi
+        if ((tools > 0)); then
+            type_line "$NUDGE_TEXT" || true
+            return 0
+        fi
+        park_with waits say "$slug waits: $last"
+        return 0
+    }
+
+    launch_cycle=$(thread_cycle)
+    base=$launch_cycle
+
+    tick_due=$((SECONDS + TICK_SECS))
     while alive; do
+        wait_secs=$((tick_due - SECONDS))
+        for due in "$read_due" "$stop_due"; do
+            ((due > 0 && due - SECONDS < wait_secs)) && wait_secs=$((due - SECONDS))
+        done
+        ((wait_secs < 1)) && wait_secs=1
         rc=0
-        read -r -t 5 -u 3 event src sid bg ask endsq dh _ || rc=$?
+        read -r -t "$wait_secs" -u 3 event src ev_sid tasks endsq _ || rc=$?
         if ((rc > 128)); then
-            continue
+            event=-
         elif ((rc != 0)); then
             finish "event stream closed"
+        else
+            ring_hold
         fi
-        idle=0
+
+        # Another session's event still lets the due checks below run.
+        if [[ $event == SessionStart ]]; then
+            sid=$ev_sid
+        elif [[ $ev_sid != "$sid" ]]; then
+            event=-
+        fi
+
         case $event in
-            # Claude sends this when it waits on a permission prompt or
-            # sits idle at the input box, and no Stop follows either. An
-            # idle notice re-runs the decision on the last Stop, so a
-            # closing message that no pattern recognizes cannot stall the
-            # loop. A permission prompt only alerts.
-            Notification)
-                if [[ $src != idle_prompt || -z $last_sid ]]; then
-                    alert "claude is waiting for you ($src)"
-                    continue
-                fi
-                if [[ $last_bg != 0 ]]; then
-                    cycle=$(thread_cycle)
-                    if ((cycle > base)); then
-                        alert "cycle $cycle is written. The loop clears after the background task ends"
-                    else
-                        alert "claude is waiting for you (idle_prompt) with a background task running"
-                    fi
-                    continue
-                fi
-                idle=1 sid=$last_sid ask=$last_ask endsq=$last_endsq dh=$last_dh bg=0
+            Stop)
+                turn=0 park='' stop_tasks=$tasks stop_endsq=$endsq
+                stop_due=$((SECONDS + DEBOUNCE + 1))
                 ;;
-            # The driver's own /clear is read in wait_session_start, so
-            # this is a manual /clear, a compaction or a resume.
-            SessionStart)
-                sent=-1 nudges=0 retries=0 idle_nudges=0 last_sid=
-                continue
+            StopFailure)
+                turn=0 stop_due=0 stop_tasks=$tasks stop_endsq=$endsq
+                park_with error alert "claude stopped on an API error: $src"
                 ;;
-            Stop) ;;
-            # A prompt typed since the last Stop makes that Stop stale.
             UserPromptSubmit)
-                last_sid=''
-                continue
+                turn=1 tools=0 dialog=0 park='' stop_due=0
                 ;;
-            *) continue ;;
+            PostToolUse)
+                if [[ $src == main ]]; then
+                    turn=1 dialog=0 stop_due=0
+                    ((++tools))
+                else
+                    ((++agent_calls))
+                    if ((agent_calls == AGENT_CAP)); then
+                        alert "agents made $agent_calls tool calls in cycle $((base + 1)) with no write"
+                    fi
+                fi
+                ;;
+            SessionStart)
+                park='' stop_due=0
+                case $src in
+                    startup | clear | resume)
+                        turn=0 dialog=0
+                        read_due=$((SECONDS + DEBOUNCE + 1))
+                        # A clear the user types moves the base too, or
+                        # the next Stop clears the fresh session again.
+                        if [[ $src == clear ]]; then
+                            base=$(thread_cycle) sent=-1 retries=0
+                            compacts=0 agent_calls=0
+                        fi
+                        if [[ $src == startup ]]; then
+                            say "started $slug at cycle $((base + 1))"
+                        fi
+                        ;;
+                    compact)
+                        ((++compacts))
+                        if ((compacts == 2)); then
+                            alert "compacted twice in cycle $((base + 1)) with no write"
+                        fi
+                        ;;
+                esac
+                ;;
+            Notification)
+                case $src in
+                    permission_prompt | worker_permission_prompt | \
+                        elicitation_dialog | \
+                        elicitation_url_dialog | agent_needs_input)
+                        dialog=1
+                        alert "claude is waiting for you ($src)"
+                        ;;
+                esac
+                if ((stop_due > 0)); then
+                    stop_due=$((SECONDS + DEBOUNCE + 1))
+                fi
+                ;;
         esac
 
-        # The budget hook runs beside this one, so its state file can
-        # lag the Stop. Wait for the events to go quiet, then read it. A
-        # turn or session that starts in the wait makes this Stop stale.
-        if ((!idle)); then
-            skip=0
-            while read -r -t "$DEBOUNCE" -u 3 ev _ id bgn askn endsqn dhn _; do
-                case $ev in
-                    Stop)
-                        sid=$id bg=$bgn ask=$askn endsq=$endsqn dh=$dhn
-                        skip=0
-                        ;;
-                    SessionStart) sent=-1 nudges=0 retries=0 idle_nudges=0 last_sid='' skip=1 ;;
-                    UserPromptSubmit) last_sid='' skip=1 ;;
-                esac
-            done
-            ((skip)) && continue
-            last_sid=$sid last_ask=$ask last_endsq=$endsq last_dh=$dh last_bg=$bg
+        if ((read_due > 0 && SECONDS >= read_due)); then
+            read_due=0 turn=0
+            type_line "/handoff read $slug" || true
         fi
-
-        # A Stop with a background task running is mid-turn. The task's
-        # completion starts a new turn, which ends in another Stop.
-        [[ $bg == 0 ]] || continue
-
-        [[ -e $folder/.hq.done ]] && finish "$slug is marked done"
-        if [[ -e $folder/.hq.lock ]]; then
-            # A lock this session holds at a Stop is a cycle it left
-            # unfinished, most often a refused finish, and no fresh
-            # session starts to retry it while the lock stands.
-            if grep -qxF "session=$sid" "$folder/.hq.lock" 2>/dev/null; then
-                if ((endsq && !ask)); then
-                    alert "the session asked you a question while it holds the lock, so the retry waits for your answer"
-                elif ((retries < MAX_NUDGES)); then
-                    type_line "$RETRY_TEXT"
-                    ((++retries))
-                else
-                    alert "hq finish has not passed after $retries retries. Check the claude pane"
-                fi
-                continue
-            fi
-            # Only an hq begin takes over a lock that a dead session
-            # left, and the driver types no write while one exists.
-            [[ -n $(find "$folder/.hq.lock" -mmin +"$LOCK_ALERT_MIN" 2>/dev/null) ]] &&
-                alert "$folder/.hq.lock is over $LOCK_ALERT_MIN minutes old. A dead session may hold it"
-            continue
+        if ((stop_due > 0 && SECONDS >= stop_due)); then
+            stop_due=0
+            stop_decisions
         fi
-        ((dh)) && finish "the session points at /handoff done. If the work is finished, run /handoff done $slug"
-        cycle=$(thread_cycle)
-
-        if ((cycle > base)); then
-            [[ -e $dir/stop ]] &&
-                finish "stopped after cycle $cycle as requested. The session is still open: continue it with /handoff read $slug"
-            open=$(thread_open) || finish "hq list failed"
-            [[ -n $open ]] || finish "hq list has no row for $slug"
-            if [[ $open == 0 || $open == - ]]; then
-                finish "$slug shows '$open' in the Plan column after cycle $cycle. If the work is done, run /handoff done $slug"
+        # The Stop decisions keep their order at a tick, so the Stop file
+        # never writes over a question or past a written cycle. A pending
+        # decision or read comes first.
+        if ((SECONDS >= tick_due)); then
+            tick_due=$((SECONDS + TICK_SECS))
+            if ((turn == 0)); then
+                ring_hold
             fi
-            # The backstop catches a cycle hq finish wrote with no
-            # HQ_LOOP, which neither checks the summary nor refuses.
-            stall=$(awk -F'\t' 'NR > 1 && NF { s = $15 } END { print s }' \
-                "$folder/cycles/manifest.tsv")
-            [[ $stall =~ ^[0-9]+$ ]] ||
-                finish "cycle $cycle stored no readable summary. Run /handoff $slug in this session, fix the measure, then hq loop $slug"
-            ((stall >= 4)) &&
-                finish "$stall cycles without progress and no stall ruling. Run /handoff $slug in this session, answer the stall question it asks, then hq loop $slug"
-            if ((cycles >= max)); then
-                while IFS= read -r line; do say "$line"; done < <(ceiling_report)
-                finish "reached --max-cycles $max at cycle $cycle"
-            fi
-            payload=$(awk -F'\t' '
-                !NF { next }
-                !header { for (i = 1; i <= NF; i++) if ($i == "payload_tokens") p = i
-                          header = 1; next }
-                { prev_label = last_label; prev = last
-                  last_label = $1; last = p ? $p : "" }
-                END {
-                    if (last !~ /^[0-9]+$/) exit
-                    printf ", %d tok", last
-                    if (prev ~ /^[0-9]+$/)
-                        printf " %+d since c%s", last - prev, prev_label
-                }' "$folder/cycles/manifest.tsv") || payload=
-            say "cycle $cycle written$payload, clearing"
-            type_line "/clear"
-            wait_session_start clear "$CLEAR_TIMEOUT" ||
-                finish "no SessionStart after /clear, so the read was not typed"
-            type_line "/handoff read $slug"
-            ((++cycles))
-            base=$cycle
-            sent=-1
-            nudges=0
-            retries=0
-            idle_nudges=0
-        else
-            budget=$(jq -r '[.band // -1, .context // 0, .handoff // 0, .escalate // 0]
-                | map(tostring) | join(" ")' "$BUDGET_STATE_DIR/$sid.json" 2>/dev/null) ||
-                budget=
-            read -r band ctx hp ep _ <<<"${budget:--1 0 0 0}"
-            [[ "$band $ctx $hp $ep" =~ ^-?[0-9]+\ [0-9]+\ [0-9]+\ [0-9]+$ ]] ||
-                { band=-1 ctx=0 hp=0 ep=0; }
-            # Within one write's growth of the handoff point, a write
-            # begun now ends about where the budget calls for one.
-            near=0
-            ((hp > 0 && ep > hp && ctx >= hp - (ep - hp))) && near=1
-            # A question about /handoff under the budget gets "continue".
-            # Past the budget the write goes in, unless the session ends
-            # on another question, which waits for the user. After
-            # MAX_NUDGES answers that left the question standing, the
-            # write goes in once. An idle session that did not end on a
-            # question gets the same "continue", then the write after
-            # MAX_IDLE_NUDGES idle notices in one cycle.
-            if ((band >= 0 && band > sent)); then
-                if ((endsq && !ask)) && [[ ! -e $dir/stop ]]; then
-                    alert "the session asked you a question, so the write waits for your answer"
-                else
-                    type_line "/handoff write $slug"
-                    sent=$band
+            if ((turn == 0 && stop_due == 0 && read_due == 0)); then
+                if [[ -e $folder/.hq.done ]]; then
+                    finish "$slug is marked done"
+                elif [[ -e $dir/stop && ! -e $folder/.hq.lock ]] &&
+                    ((stop_sent == 0)); then
+                    stop_decisions
+                elif [[ $park == lock && ! -e $folder/.hq.lock ]]; then
+                    park=''
+                    stop_decisions
                 fi
-            elif [[ -e $dir/stop ]] && ((sent < 0)); then
-                type_line "/handoff write $slug"
-                sent=0
-            elif ((ask && near && sent < 0)); then
-                type_line "/handoff write $slug"
-                sent=0
-            elif ((ask && band < 0 && nudges < MAX_NUDGES)); then
-                type_line "$NUDGE_TEXT"
-                ((++nudges))
-            elif ((ask && sent < 0)); then
-                type_line "/handoff write $slug"
-                sent=0
-            elif ((sent >= 0)); then
-                alert "a write was typed but cycle $((base + 1)) has not finished. Check the claude pane"
-            elif ((idle && !endsq && idle_nudges < MAX_IDLE_NUDGES)); then
-                type_line "$NUDGE_TEXT"
-                ((++idle_nudges))
-            elif ((idle && !endsq)); then
-                type_line "/handoff write $slug"
-                sent=0
-            elif ((idle)); then
-                alert "claude is waiting for you (idle_prompt)"
-            elif ((endsq && !ask)); then
-                alert "the session asked a question and waits for the answer"
-                nudges=0
-            else
-                nudges=0
             fi
         fi
     done
@@ -458,13 +413,11 @@ launch() {
         ".handoff/$slug/cycles/manifest.tsv" 2>/dev/null ||
         die "$slug has no cycle with a readable summary - run /hq-loop $slug to audit it"
 
-    local self dir hook_cmd notice_cmd dpane running hq_bin rc=0
+    local self dir hook_cmd notice notice_cmd dpane running rc=0
     running=$(tmux list-panes -a -F '#{@hqloop_slug}')
     grep -qx -- "$slug" <<<"$running" && die "a loop for $slug is already running"
 
     self=$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0")
-    hq_bin=${self%/*}/hq
-    [[ -x $hq_bin ]] || die "no hq beside $self"
     # hq loop starts this script at the root it resolved, which can
     # differ from the git top level that hq falls back to.
     export HQ_ROOT=$PWD
@@ -474,8 +427,8 @@ launch() {
     printf '%s\n' "$slug" >"$dir/slug"
     # A plugin update removes the versioned path, so the notice hook
     # exits quietly once its script is gone.
-    printf -v notice_cmd '[ -f %q ] || exit 0; python3 %q' \
-        "${self%/*}/../scripts/handoff_nudge.py" "${self%/*}/../scripts/handoff_nudge.py"
+    notice=${self%/*}/../scripts/handoff_nudge.py
+    printf -v notice_cmd '[ -f %q ] || exit 0; python3 %q' "$notice" "$notice"
     # The hook runs this script once per event, so a redeploy during the
     # run would pair a new hook with the old driver. Both run a copy,
     # and the hook exits quietly once the driver has removed it.
@@ -500,7 +453,7 @@ launch() {
     # find.
     dpane=$(tmux split-window -d -P -F '#{pane_id}' -l 5 -t "$TMUX_PANE" \
         -e "PATH=$PATH" -e "HOME=$HOME" -e "HQ_ROOT=$HQ_ROOT" \
-        "$self" drive "$dir" "$slug" "$max" "$TMUX_PANE" "$hq_bin" "$$") || {
+        "$self" drive "$dir" "$slug" "$max" "$TMUX_PANE" "$$") || {
         rm -rf -- "$dir"
         die "could not split the pane for the driver"
     }
