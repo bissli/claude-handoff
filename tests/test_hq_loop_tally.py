@@ -132,17 +132,19 @@ def test_a_malformed_state_row_names_its_line(tmp_path, monkeypatch):
 
 
 def test_argument_refusals_exit_2_and_write_nothing(tmp_path, monkeypatch):
-    """Verify a wrong argument count, a bad name or one name twice exits 2.
+    """Verify a wrong argument count, a bad name, one name twice or a bad step
+    exits 2.
 
-    Mutation: the remaining == tally check dropped, or the name pattern
-    not applied to both names.
+    Mutation: the remaining == tally check dropped, the name pattern
+    not applied to both names, or a step of 0 or no number accepted.
     Oracle: a valid empty run on stdin, so only the arguments refuse.
     """
     state_path = tmp_path / 's.tally.tsv'
     state = str(state_path)
     for argv in (
             [state, 'r'], [state, 'r', 't', 'x'], [state, '1bad', 't'],
-            [state, 'r', '1bad'], [state, 'r', 'bad-name'], [state, 'n', 'n']):
+            [state, 'r', '1bad'], [state, 'r', 'bad-name'], [state, 'n', 'n'],
+            [state, 'r@0', 't'], [state, 'r@', 't'], [state, 'r@x', 't']):
         monkeypatch.setattr('sys.stdin', io.StringIO('end\n'))
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
@@ -150,3 +152,16 @@ def test_argument_refusals_exit_2_and_write_nothing(tmp_path, monkeypatch):
         assert rc == 2, argv
         assert out.getvalue().startswith('tally: ')
         assert list(tmp_path.iterdir()) == []
+
+
+def test_the_step_reaches_both_tokens(tmp_path, monkeypatch):
+    """Verify R@5 puts the step on the remaining and the tally token.
+
+    Mutation: the step on one token.
+    Oracle: one open unit and one closed one under R@5.
+    """
+    monkeypatch.setattr('sys.stdin', io.StringIO('open a\nclosed b\nend\n'))
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rc = tally.main([str(tmp_path / 's.tally.tsv'), 'R@5', 'T'])
+    assert (rc, out.getvalue().strip()) == (0, 'R=1->0@5 T=+0@5')
