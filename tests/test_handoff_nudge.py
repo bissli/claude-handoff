@@ -354,3 +354,102 @@ def test_nudge_arms_on_the_sentinel_path_the_readme_names(tmp_path):
     assert 'additionalContext' in hook(), 'creating the file must arm the hook'
     sentinel.unlink()
     assert hook() == '', 'removing the file must disarm the hook'
+
+
+def _arm_loop(tmp_path, monkeypatch, mark):
+    """Arm a loop past its handoff point with the sentinel absent.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Directory the workspace and loop directory are built under.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that sets HQ_LOOP and HQ_ROOT.
+    mark : int
+        Manifest cycle the loop's mark file records.
+
+    Returns
+    -------
+    tuple[pathlib.Path, pathlib.Path]
+        The workspace, which is HQ_ROOT, and the thread folder, whose
+        manifest ends at c7.
+    """
+    work = _arm(tmp_path, monkeypatch, context=290000, handoff_at=290000,
+                sentinel=False)
+    loop_dir = tmp_path / 'loop'
+    loop_dir.mkdir()
+    (loop_dir / 'slug').write_text('a-thread\n')
+    (loop_dir / 'mark').write_text(f'{mark}\n')
+    monkeypatch.setenv('HQ_LOOP', str(loop_dir))
+    monkeypatch.setenv('HQ_ROOT', str(work))
+    folder = _seed_thread(work)
+    (folder / 'cycles' / 'manifest.tsv').write_text('cycle\n6\n7\n')
+    return work, folder
+
+
+def test_notice_stops_once_a_cycle_is_written(tmp_path, monkeypatch):
+    """Verify the loop notice speaks until a cycle is written or begun.
+
+    Mutation: the mark test or the lock test dropped, so the notice
+    repeats through the write it asked for or after it.
+    Oracle: a manifest at c7 against a mark of 7, then a lock, then a
+    mark of 6, so c7 counts as written since the last clear.
+    """
+    work, folder = _arm_loop(tmp_path, monkeypatch, mark=7)
+    _feed(monkeypatch, work, hook_event_name='PostToolUse')
+    rc, out = _run()
+    assert json.loads(out) == {'hookSpecificOutput': {
+        'hookEventName': 'PostToolUse',
+        'additionalContext': (
+            'Context is past the handoff point: finish the step in hand,'
+            ' then run /handoff write a-thread.')}}
+    (folder / '.hq.lock').write_text(f'session={_SESSION}\n')
+    _feed(monkeypatch, work, hook_event_name='PostToolUse')
+    assert _run() == (0, '')
+    (folder / '.hq.lock').unlink()
+    (tmp_path / 'loop' / 'mark').write_text('6\n')
+    _feed(monkeypatch, work, hook_event_name='PostToolUse')
+    assert _run() == (0, '')
+
+
+def test_notice_skips_agent_tool_calls(tmp_path, monkeypatch):
+    """Verify a subagent's tool call gets no loop notice.
+
+    Mutation: the agent_id test dropped, so the notice lands in a
+    subagent's context, where no /handoff write can answer it.
+    Oracle: the same armed loop speaks for the main call and is silent
+    with agent_id set.
+    """
+    work, _ = _arm_loop(tmp_path, monkeypatch, mark=7)
+    _feed(monkeypatch, work, hook_event_name='PostToolUse', agent_id='a7f')
+    assert _run() == (0, '')
+    _feed(monkeypatch, work, hook_event_name='PostToolUse')
+    assert _run()[1] != ''
+
+
+def test_notice_speaks_before_the_first_stop_stores_a_point(
+        tmp_path, monkeypatch):
+    """Verify the loop notice computes the point a new session lacks.
+
+    Mutation: the transcript fallback dropped, so the first turn after a
+    /clear, which has no stored point until its first Stop, never hears
+    the notice however far it runs.
+    Oracle: no stored point, and a transcript that grows from 20K by 2K
+    a call to 418K, far past the point its own growth rate sets.
+    """
+    work, _ = _arm_loop(tmp_path, monkeypatch, mark=7)
+    state = pathlib.Path(context_budget.STATE_DIR) / f'{_SESSION}.json'
+    state.unlink()
+    records = [
+        json.dumps({'message': {
+            'id': f'm{idx}', 'role': 'assistant', 'model': 'claude-opus-5',
+            'usage': {'cache_read_input_tokens': 20000 + 2000 * idx,
+                      'cache_creation_input_tokens': 0,
+                      'input_tokens': 0, 'output_tokens': 0}}})
+        for idx in range(200)]
+    (tmp_path / 'transcript.jsonl').write_text('\n'.join(records) + '\n')
+    _feed(monkeypatch, work, hook_event_name='PostToolUse')
+    rc, out = _run()
+    assert json.loads(out)['hookSpecificOutput']['additionalContext'] == (
+        'Context is past the handoff point: finish the step in hand,'
+        ' then run /handoff write a-thread.')

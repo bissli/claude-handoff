@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""UserPromptSubmit hook that asks for a handoff once context is spent.
+"""Prompt and tool-call hook that asks for a handoff once context is spent.
 
 The context-budget hook names the handoff point at the end of every
 turn, but it names it to the user: a Stop hook's ``systemMessage``
@@ -7,7 +7,9 @@ reaches the terminal and never the model. So an agent works on past the
 point it should have handed off, and only the user knows.
 
 This hook puts the same fact in front of the agent, at the top of a
-turn, while the sentinel ``~/.claude/.nudge-handoff`` exists.
+turn, while the sentinel ``~/.claude/.nudge-handoff`` exists. Under
+``hq loop`` it also runs after each main tool call, so a turn that never
+ends still hears it, until a cycle is written.
 
 Notes
 -----
@@ -103,47 +105,84 @@ def open_cycle_above(start: pathlib.Path, now: str) -> bool:
 
 
 def main() -> int:
-    """Ask for a handoff when the sentinel is armed and the budget is spent.
+    """Ask for a handoff once context passes the session's handoff point.
 
     Returns
     -------
     int
         Always 0. Exit status 2 blocks the prompt, which no advisory
         message may do, and any other non-zero shows the user an error.
+
+    Notes
+    -----
+    - A PostToolUse payload speaks only under its own ``hq loop``, where
+      ``$HQ_LOOP/slug`` names the thread, and ignores the sentinel. It
+      stays silent for a subagent's call, inside an open cycle, and once
+      the manifest's last cycle is above ``$HQ_LOOP/mark``.
     """
     try:
         payload: dict[str, Any] = json.load(sys.stdin)
-        if not os.path.exists(SENTINEL):
+        loop = payload.get('hook_event_name') == 'PostToolUse'
+        if loop:
+            loop_dir = os.environ.get('HQ_LOOP')
+            if not loop_dir or payload.get('agent_id'):
+                return 0
+            slug = (pathlib.Path(loop_dir) / 'slug').read_text().strip()
+            root = os.environ.get('HQ_ROOT') or str(payload.get('cwd') or '')
+            folder = pathlib.Path(root) / hq.HANDOFF_DIRNAME / slug
+            if (folder / '.hq.lock').exists():
+                return 0
+            manifest = hq._read_tsv(
+                folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS)
+            mark = int((pathlib.Path(loop_dir) / 'mark').read_text())
+            if manifest and int(manifest[-1]['cycle']) > mark:
+                return 0
+        elif not os.path.exists(SENTINEL):
             return 0
         session = str(payload.get('session_id') or 'unknown').replace('/', '_')
         state_path = os.path.join(context_budget.STATE_DIR, f'{session}.json')
         handoff_at = context_budget.load_state(state_path)[2]
+        context, model, per_call, cycle = context_budget.read_transcript(
+            str(payload.get('transcript_path') or ''))
+        tier = context_budget.budget.model_tier(model)
+        if loop and cycle is not None and tier is not None:
+            # A /clear issues a new session id, which has no stored
+            # point until its first Stop, and that turn may never end.
+            handoff_at = context_budget.latched(
+                context_budget.budget.handoff_point(cycle, per_call, tier),
+                handoff_at)
         if not handoff_at:
             return 0
-        context = context_budget.read_transcript(
-            str(payload.get('transcript_path') or ''))[0]
         if context < handoff_at:
             return 0
-        now = (os.environ.get('HQ_NOW')
-               or datetime.datetime.now().isoformat(timespec='seconds'))
-        start = pathlib.Path(str(payload.get('cwd') or ''))
-        if open_cycle_above(start, now):
-            return 0
+        if not loop:
+            now = (os.environ.get('HQ_NOW')
+                   or datetime.datetime.now().isoformat(timespec='seconds'))
+            start = pathlib.Path(str(payload.get('cwd') or ''))
+            if open_cycle_above(start, now):
+                return 0
     except (ValueError, AttributeError, TypeError, OSError):
         return 0
 
-    message = (
-        f"Context {context // 1000}K, past this session's"
-        f' {handoff_at // 1000}K handoff point. If work remains for a later'
-        ' session - a task in flight, an edit not yet committed, an open'
-        ' plan step, an open question, a decision or finding the repo does'
-        ' not record - run /handoff at the next natural stopping point. A'
-        ' task that is finished and committed, with nothing left open or'
-        ' unrecorded, needs no handoff. Do not start work that will not fit'
-        ' in what is left.')
+    if loop:
+        event = 'PostToolUse'
+        message = (
+            'Context is past the handoff point: finish the step in hand,'
+            f' then run /handoff write {slug}.')
+    else:
+        event = 'UserPromptSubmit'
+        message = (
+            f"Context {context // 1000}K, past this session's"
+            f' {handoff_at // 1000}K handoff point. If work remains for a'
+            ' later session - a task in flight, an edit not yet committed, an'
+            ' open plan step, an open question, a decision or finding the'
+            ' repo does not record - run /handoff at the next natural'
+            ' stopping point. A task that is finished and committed, with'
+            ' nothing left open or unrecorded, needs no handoff. Do not start'
+            ' work that will not fit in what is left.')
     json.dump({
         'hookSpecificOutput': {
-            'hookEventName': 'UserPromptSubmit',
+            'hookEventName': event,
             'additionalContext': message,
             }}, sys.stdout)
     return 0

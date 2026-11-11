@@ -1,6 +1,7 @@
 """Tests for the hq run and hq loop verbs and bin/hq-completion.bash."""
 
 import contextlib
+import json
 import os
 import pathlib
 import re
@@ -946,3 +947,169 @@ def test_launch_guards(tmp_path):
     assert launch() == no_summary
     manifest.write_text(f'cycle\n{row14}\t0\n')
     assert launch()[0] == 0
+
+
+def _loop_text(name: str) -> str:
+    """The value bin/hq-loop assigns to name, with $TAIL expanded.
+    """
+    script = (ROOT / 'bin' / 'hq-loop').read_text()
+    values = dict(re.findall(r'^([A-Z_]+)="(.*)"$', script, re.MULTILINE))
+    return values[name].replace('$TAIL', values['TAIL'])
+
+
+def _hook(loop_dir: pathlib.Path, payload: dict) -> str:
+    """Pipe one hook payload to bin/hq-loop hook and return its stdout.
+
+    Parameters
+    ----------
+    loop_dir : pathlib.Path
+        The loop directory; it doubles as HQ_ROOT, so a thread folder
+        goes under its ``.handoff``.
+    payload : dict
+        The hook's JSON input.
+
+    Returns
+    -------
+    str
+        The hook's stdout. Exit 0 and an empty stderr are asserted.
+    """
+    proc = subprocess.run(
+        [str(ROOT / 'bin' / 'hq-loop'), 'hook', str(loop_dir)],
+        input=json.dumps(payload), capture_output=True, text=True,
+        env={**os.environ, 'HQ_ROOT': str(loop_dir)}, timeout=30)
+    assert (proc.returncode, proc.stderr) == (0, '')
+    return proc.stdout
+
+
+def _events(loop_dir: pathlib.Path) -> list[str]:
+    """The lines the hook appended to the events file.
+    """
+    return (loop_dir / 'events').read_text().splitlines()
+
+
+def test_hook_fields_by_event(tmp_path):
+    """Verify each event's src field comes from its own payload key.
+
+    Mutation: a source field swapped, such as the error read at
+    Notification, or PostToolUse's main and agent_id reversed.
+    Oracle: the design's src table, one hand-written line per event.
+    """
+    for payload in (
+            {'hook_event_name': 'SessionStart', 'source': 'startup'},
+            {'hook_event_name': 'StopFailure', 'error': 'rate_limit',
+             'last_assistant_message': 'API Error: Rate limit reached'},
+            {'hook_event_name': 'Notification',
+             'notification_type': 'idle_prompt'},
+            {'hook_event_name': 'PostToolUse', 'tool_name': 'Bash'},
+            {'hook_event_name': 'PostToolUse', 'agent_id': 'a7f'},
+            {'hook_event_name': 'Stop', 'last_assistant_message': 'Done.',
+             'background_tasks': []},
+            {'hook_event_name': 'UserPromptSubmit', 'prompt': 'go on'}):
+        _hook(tmp_path, {**payload, 'session_id': 'S1'})
+    assert _events(tmp_path) == [
+        'SessionStart startup S1 0 0',
+        'StopFailure rate_limit S1 0 0',
+        'Notification idle_prompt S1 0 0',
+        'PostToolUse main S1 0 0',
+        'PostToolUse a7f S1 0 0',
+        'Stop - S1 0 0',
+        'UserPromptSubmit - S1 0 0']
+
+
+def test_tasks_leave_out_monitors_and_shells(tmp_path):
+    """Verify the tasks field counts neither a monitor nor a shell task.
+
+    Mutation: the monitor or shell filter dropped, so a background
+    command or a monitor keeps the session counted as busy.
+    Oracle: a monitor, a shell and a subagent task count 1.
+    """
+    _hook(tmp_path, {
+        'hook_event_name': 'Stop', 'session_id': 'S1',
+        'last_assistant_message': 'Waiting.',
+        'background_tasks': [
+            {'id': 't1', 'type': 'monitor'},
+            {'id': 't2', 'type': 'shell'},
+            {'id': 't3', 'type': 'subagent'}]})
+    assert _events(tmp_path) == ['Stop - S1 1 0']
+
+
+def test_endsq_reads_the_last_character(tmp_path):
+    """Verify endsq is 1 only when ? is the last character but whitespace.
+
+    Mutation: the markdown tolerance kept, so ?** reads 1, or no
+    trailing-whitespace trim, so ? then a newline reads 0.
+    Oracle: the LOOP_RULE wording, ? as the last character.
+    """
+    for message in ('Ship it?', 'Ship it?\n', 'Ship it?**', 'Ship it?.'):
+        _hook(tmp_path, {
+            'hook_event_name': 'Stop', 'session_id': 'S1',
+            'last_assistant_message': message})
+    assert [line.split()[-1] for line in _events(tmp_path)] == [
+        '1', '1', '0', '0']
+
+
+def test_last_line_is_cut_at_160(tmp_path):
+    """Verify a Stop writes its last non-blank line, cut to 160 characters.
+
+    Mutation: the cut dropped, or the blank-line skip dropped so a
+    trailing blank line writes an empty last.
+    Oracle: a 200-character last line followed by blank lines.
+    """
+    _hook(tmp_path, {
+        'hook_event_name': 'Stop', 'session_id': 'S1',
+        'last_assistant_message': 'First line.\n' + 'x' * 200 + '\n\n  \n'})
+    assert (tmp_path / 'last').read_text() == 'x' * 160 + '\n'
+
+
+def test_session_start_writes_the_mark(tmp_path):
+    """Verify a SessionStart writes the manifest's last cycle to mark.
+
+    Mutation: mark left unwritten, or the first row's cycle written.
+    Oracle: a manifest whose rows end at c7, with a trailing blank line.
+    """
+    (tmp_path / 'slug').write_text('auth-refresh\n')
+    cycles = tmp_path / '.handoff' / 'auth-refresh' / 'cycles'
+    cycles.mkdir(parents=True)
+    (cycles / 'manifest.tsv').write_text('cycle\twritten\n6\t-\n7\t-\n\n')
+    _hook(tmp_path, {
+        'hook_event_name': 'SessionStart', 'source': 'clear',
+        'session_id': 'S2'})
+    assert (tmp_path / 'mark').read_text() == '7\n'
+
+
+def test_a_held_prompt_becomes_the_ruling(tmp_path):
+    """Verify only a prompt from the user or a peer becomes the ruling.
+
+    Mutation: the /, tag or Tail skip dropped, so a driver line, a task
+    event or a teammate message rules; the 160 cut dropped; or a later
+    prompt overwrites the first ruling.
+    Oracle: the driver's own NUDGE_TEXT and RETRY_TEXT, the two tags
+    the evidence records, and a two-line prompt with a 200-character
+    first line.
+    """
+    (tmp_path / 'slug').write_text('auth-refresh\n')
+    (tmp_path / 'hold').write_text('stall: held at 4 (no measured gain).\n')
+    for prompt in (
+            '/handoff read auth-refresh', _loop_text('NUDGE_TEXT'),
+            _loop_text('RETRY_TEXT'),
+            '<task-notification>\n<task-id>t1</task-id>',
+            '<agent-message from="probe">done</agent-message>'):
+        out = _hook(tmp_path, {
+            'hook_event_name': 'UserPromptSubmit', 'session_id': 'S1',
+            'prompt': prompt})
+        assert out == ''
+        assert not (tmp_path / 'ruling').exists()
+    first = 'r' * 200
+    out = _hook(tmp_path, {
+        'hook_event_name': 'UserPromptSubmit', 'session_id': 'S1',
+        'prompt': f'{first}\nSecond line.'})
+    assert (tmp_path / 'ruling').read_text() == 'r' * 160 + '\n'
+    assert json.loads(out) == {'hookSpecificOutput': {
+        'hookEventName': 'UserPromptSubmit',
+        'additionalContext': (
+            'This prompt ends the hold. Act on it by the loop rule, then run'
+            ' /handoff write auth-refresh.')}}
+    _hook(tmp_path, {
+        'hook_event_name': 'UserPromptSubmit', 'session_id': 'S1',
+        'prompt': 'A later word.'})
+    assert (tmp_path / 'ruling').read_text() == 'r' * 160 + '\n'
