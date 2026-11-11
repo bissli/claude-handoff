@@ -1,5 +1,5 @@
 """Tests for the stall count: the summary grammar, the progress test, and
-how finish, open and begin store, enforce and report it.
+how finish and open store and report it.
 """
 
 import contextlib
@@ -14,23 +14,10 @@ _SLUG = 'stall-slug'
 _SESSION = 'session-st'
 _HOST = 'test-host'
 _NOW = '2026-11-10T12:00:00'
-_STALL_DUE = (
-    'hq finish: the stall question is due - 3 cycles without progress and'
-    ' this one shows none. Put the question to the user, then carry stall'
-    ' review: <ruling> first after the summary tokens')
 _OPEN_LINE = (
-    'stall: {n} cycles without progress since c{k}'
-    f' - hq arc {_SLUG} shows the summaries')
-_SUFFIX_TWO = (
-    ' - close a unit on another workable - [ ] this cycle where one exists')
-_SUFFIX_THREE = (
-    ' - work this cycle first; put the stall question the Stall Directive'
-    " names only if hq finish refuses, or once the cycle's measure shows"
-    ' no progress')
-_BEGIN_LINE = (
-    "  stall: 3 cycles without progress - this cycle's --log shows progress,"
-    ' or carries stall review: <ruling> first after the summary tokens once'
-    ' the user has answered the stall question')
+    'stall: {n} cycles without progress ({cause})'
+    ' - close a unit on another workable item')
+D = decimal.Decimal
 
 
 def _root(tmp_path, monkeypatch):
@@ -70,20 +57,38 @@ def _manifest(folder):
     return hq._read_tsv(folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS)
 
 
-def _live_loop(tmp_path, monkeypatch):
-    loop_dir = tmp_path / 'loop'
-    loop_dir.mkdir()
-    monkeypatch.setenv('HQ_LOOP', str(loop_dir))
-
-
 def _stalls(logs):
-    """The stored stall of each row, as finish computes it row by row."""
-    rows = [{'cycle': str(i + 1), 'log': log} for i, log in enumerate(logs)]
+    """The stored stall of each row, as finish computes it row by row.
+
+    A log with no bar is composed with an empty log text.
+    """
+    rows = [
+        {'cycle': str(i + 1), 'log': log if ' | ' in log else f'{log} | -'}
+        for i, log in enumerate(logs)]
     return [hq.stall_count(rows[:i + 1])['stall'] for i in range(len(rows))]
 
 
 def _counting(series, name='a', goal='0'):
-    return [f'summary: {name}={value}->{goal}' for value in series]
+    return [f'summary: {name}={value}->{goal} | -' for value in series]
+
+
+def _probe(folder, body):
+    """Write an executable probes/hq-measure running body under sh."""
+    probe = folder / 'probes' / 'hq-measure'
+    probe.parent.mkdir(parents=True, exist_ok=True)
+    probe.write_text(f'#!/bin/sh\n{body}\n')
+    probe.chmod(0o755)
+
+
+def _measured(folder, lines, log='work'):
+    """Finish one cycle per probe token line, each with the same log."""
+    out = ''
+    for line in lines:
+        _probe(folder, f"echo '{line}'")
+        assert _run(['begin', _SLUG])[0] == 0
+        rc, out, _ = _run(['finish', _SLUG, '--log', log])
+        assert rc == 0, out
+    return out
 
 
 _STREAK_THREE = _counting([5, 5, 5, 5])
@@ -93,59 +98,40 @@ _STREAK_THREE = _counting([5, 5, 5, 5])
 
 
 def test_each_of_the_four_forms_parses():
-    """Verify counting, gate, tally and spend each parse to their kind.
+    """Verify counting and tally parse with and without a step, and gate and
+    spend fail.
 
-    Mutation: the tally form read as counting, or one form's pattern
-    dropped.
+    Mutation: the tally form read as counting, the step dropped from one
+    form, or a removed gate or spend form left in.
     Oracle: hand-written token map for a line holding all four forms.
     """
     tokens, free_text, error = hq.parse_summary(
-        'summary: a=31->0 g=MET h=OPEN t=+45 s=40/300')
-    D = decimal.Decimal
+        'summary: a=31->0 s=72->80@1 t=+45 u=+45@5 | fixed x')
     assert error is None
-    assert free_text == ''
+    assert free_text == 'fixed x'
     assert tokens == {
-        'a': ('counting', (D(31), D(0))),
-        'g': ('gate', True),
-        'h': ('gate', False),
-        't': ('tally', D(45)),
-        's': ('spend', None),
+        'a': ('counting', (D(31), D(0), None)),
+        's': ('counting', (D(72), D(80), D(1))),
+        't': ('tally', (D(45), None)),
+        'u': ('tally', (D(45), D(5))),
         }
-
-
-def test_trailing_punctuation_is_stripped():
-    """Verify a trailing '.', ',' or ';' leaves the token parsing.
-
-    Mutation: the strip dropped, so tests=MET. voids the row.
-    Oracle: the same tokens written with each trailing mark.
-    """
-    tokens, _, error = hq.parse_summary('summary: a=1->0, b=+2; tests=MET.')
-    assert error is None
-    assert set(tokens) == {'a', 'b', 'tests'}
+    for gone in ('g=MET', 'h=OPEN', 's=40/300'):
+        assert hq.parse_summary(f'summary: a=1->0 {gone} | x')[0] is None
 
 
 def test_a_failing_token_voids_the_row():
-    """Verify a token with '=' that matches no form makes the row unparsed.
+    """Verify a failed probe row and a token matching no form both void it.
 
-    Mutation: the failing token skipped as free text, so open_sites=12
-    passes.
-    Oracle: a pre-grammar bare count beside a good token.
+    Mutation: the probe-failed prefix read as a token, or a failing token
+    skipped, so open_sites=12 passes.
+    Oracle: a failed row with its cause, and a bare count beside a good
+    token.
     """
-    tokens, _, error = hq.parse_summary('summary: a=1->0 open_sites=12 done')
+    assert hq.parse_summary('summary: probe-failed: exited 2: boom | x') == (
+        None, 'x', 'probe-failed: exited 2: boom')
+    tokens, _, error = hq.parse_summary('summary: a=1->0 open_sites=12 | done')
     assert tokens is None
-    assert error == '--log token open_sites=12 matches no summary form'
-
-
-def test_free_text_starts_at_the_first_word_without_equals():
-    """Verify a token-shaped word inside the free text is ignored.
-
-    Mutation: tokens read across the whole line.
-    Oracle: x=1->0 sits after the word 'then'.
-    """
-    tokens, free_text, error = hq.parse_summary('summary: a=5->0 then x=1->0')
-    assert error is None
-    assert set(tokens) == {'a'}
-    assert free_text == 'then x=1->0'
+    assert error == 'token open_sites=12 matches no summary form'
 
 
 def test_the_prefix_matches_any_case_after_leading_space():
@@ -157,50 +143,46 @@ def test_the_prefix_matches_any_case_after_leading_space():
     tokens, _, error = hq.parse_summary('  Summary: a=1->0')
     assert error is None
     assert set(tokens) == {'a'}
-    assert hq.parse_summary('a=1->0')[2] == (
-        'under hq loop --log starts with summary: and its tokens')
+    assert hq.parse_summary('a=1->0')[2] == 'the row does not start with summary:'
 
 
 def test_spend_and_tally_alone_do_not_parse():
-    """Verify a row needs one counting or gate token, wherever spend sits.
+    """Verify a row of tallies alone fails, and parses beside a counting token.
 
-    Mutation: spend or tally counted toward the one counting or gate
-    token a row needs.
-    Oracle: a spend-and-tally row, and the same spend first beside a
-    counting token.
+    Mutation: a tally counted toward the one counting token a row needs.
+    Oracle: two tallies, one stepped, then the same tally beside a=1->0.
     """
-    tokens, _, error = hq.parse_summary('summary: s=40/300 t=+4')
+    tokens, _, error = hq.parse_summary('summary: t=+4 u=+2@1 | x')
     assert tokens is None
-    assert error == '--log summary holds no counting or gate token'
-    assert hq.parse_summary('summary: s=40/300 a=1->0')[2] is None
+    assert error == 'the summary holds no counting token'
+    assert hq.parse_summary('summary: t=+4 a=1->0 | x')[2] is None
 
 
 def test_the_last_occurrence_of_a_name_wins():
-    """Verify a repeated name keeps its last token, across kinds.
+    """Verify a repeated name keeps its last token.
 
     Mutation: the first occurrence wins.
-    Oracle: a=5->0 then a=3->0, and a=5->0 then a=MET.
+    Oracle: a=5->0 then a=3->0, and a=5->0 then a=3->0@1.
     """
-    D = decimal.Decimal
     assert hq.parse_summary('summary: a=5->0 a=3->0')[0] == {
-        'a': ('counting', (D(3), D(0)))}
-    assert hq.parse_summary('summary: a=5->0 a=MET')[0] == {'a': ('gate', True)}
+        'a': ('counting', (D(3), D(0), None))}
+    assert hq.parse_summary('summary: a=5->0 a=3->0@1')[0] == {
+        'a': ('counting', (D(3), D(0), D(1)))}
 
 
 def test_the_counting_check_reads_the_tokens_last_wins_leaves():
     """Verify a counting token a later tally of its name replaces voids the row.
 
-    Mutation: the counting-or-gate check run over every token the row
-    names, before a repeated name keeps its last token.
+    Mutation: the counting check run over every token the row names,
+    before a repeated name keeps its last token.
     Oracle: a=5->0 a=+3 leaves the tally alone; a=+3 a=5->0 leaves the
     counting token.
     """
-    D = decimal.Decimal
     tokens, _, error = hq.parse_summary('summary: a=5->0 a=+3')
     assert tokens is None
-    assert error == '--log summary holds no counting or gate token'
+    assert error == 'the summary holds no counting token'
     assert hq.parse_summary('summary: a=+3 a=5->0')[0] == {
-        'a': ('counting', (D(5), D(0)))}
+        'a': ('counting', (D(5), D(0), None))}
 
 
 def test_goals_compare_as_numbers():
@@ -214,15 +196,23 @@ def test_goals_compare_as_numbers():
 
 
 def test_pre_grammar_rows():
-    """Verify spend=40/300 reads as spend and a bare count voids the row.
+    """Verify a bare count voids the row.
 
     Mutation: a bare number accepted as counting.
-    Oracle: the two pre-grammar shapes the spec names.
+    Oracle: the pre-grammar shape beside a good token.
     """
-    tokens, _, error = hq.parse_summary('summary: tests=MET spend=40/300')
-    assert error is None
-    assert tokens['spend'] == ('spend', None)
-    assert hq.parse_summary('summary: open_sites=12 tests=MET')[0] is None
+    assert hq.parse_summary('summary: open_sites=12 a=1->0')[0] is None
+
+
+def test_tokens_end_at_the_first_bar():
+    """Verify the tokens stop at the first bar.
+
+    Mutation: tokens read past the bar.
+    Oracle: b=9->0 sits after the bar.
+    """
+    tokens, free_text, _ = hq.parse_summary('summary: a=1->0 | b=9->0')
+    assert set(tokens) == {'a'}
+    assert free_text == 'b=9->0'
 
 
 # --- progress test ---------------------------------------------------
@@ -255,10 +245,49 @@ def test_a_value_crossing_the_goal_is_progress():
     Oracle: the side fixed at the first entry, below the goal.
     """
     rows = [
-        {'cycle': '1', 'log': 'summary: a=94.9->95'},
-        {'cycle': '2', 'log': 'summary: a=95.2->95'},
+        {'cycle': '1', 'log': 'summary: a=94.9->95 | -'},
+        {'cycle': '2', 'log': 'summary: a=95.2->95 | -'},
         ]
     assert hq.stall_count(rows)['row_class'] == 'progress'
+
+
+def test_stepped_gains_add_up_to_a_credit():
+    """Verify a stepped name credits once its gains since the best reach the
+    step.
+
+    Mutation: '<' for '<=', or best moved on a stuck vote.
+    Oracle: score=72->80@1, then 72.5 stuck, 73 improved.
+    """
+    logs = [f'summary: score={value}->80@1' for value in ('72', '72.5', '73')]
+    assert _stalls(logs) == [0, 1, 0]
+
+
+def test_stepped_tally_needs_a_full_step():
+    """Verify a stepped tally credits only a rise of a full step.
+
+    Mutation: the step left off the tally rule.
+    Oracle: done=+45@5, then 49 silent, 50 improved, beside a stuck a.
+    """
+    logs = [f'summary: a=5->0 done=+{value}@5' for value in (45, 49, 50)]
+    assert _stalls(logs) == [0, 1, 0]
+
+
+def test_a_changed_step_restarts_the_name():
+    """Verify a changed step votes stuck.
+
+    Mutation: the step left out of the restart test.
+    Oracle: @1 then @2 on one name, the value a full step better.
+    """
+    assert _stalls(['summary: a=5->0@1', 'summary: a=3->0@2']) == [0, 1]
+
+
+def test_side_waits_for_the_first_entry_off_goal():
+    """Verify side is set at the first entry off goal, not at an at-goal one.
+
+    Mutation: side set at an at-goal first entry.
+    Oracle: a=0->0, then a=-2->0 is no progress.
+    """
+    assert _stalls(['summary: a=0->0', 'summary: a=-2->0']) == [0, 1]
 
 
 def test_a_held_row_leaves_the_streak():
@@ -293,41 +322,89 @@ def test_renamed_coordinates_add_one_per_row():
 
 
 def test_a_ruling_row_resets_the_streak_and_every_best():
-    """Verify a ruling row stores 0, parsed or not, and restarts the bests.
+    """Verify a composed ruling stores 0 at any streak and restarts the bests.
 
     Mutation: the streak reset with the state kept, so a value worse
-    than the old best reads as stuck after the ruling.
-    Oracle: best 2 before the ruling, 8 at it, then 6.
+    than the old best reads as stuck after the ruling; or a carried-streak
+    guard on the ruling.
+    Oracle: best 2 before the ruling, 8 at it, then 6; and a ruling at a
+    carried 1.
     """
     stuck = _counting([10, 2, 5, 5, 5])
-    parsed = stuck + ['summary: a=8->0 stall review: split it', 'summary: a=6->0']
+    parsed = stuck + ['summary: a=8->0 | stall review: split it', 'summary: a=6->0']
     assert _stalls(parsed)[-3:] == [3, 0, 0]
+    early = _counting([5, 5]) + ['summary: a=8->0 | stall review: x', 'summary: a=6->0']
+    assert _stalls(early) == [0, 1, 0, 0]
     unparsed = stuck + [
-        'summary: open_sites=12 stall review: drop it',
+        'summary: open_sites=12 | stall review: drop it',
         'summary: a=9->0', 'summary: a=8->0']
     assert _stalls(unparsed)[-3:] == [0, 0, 0]
 
 
-def test_a_stray_marker_resets_nothing():
-    """Verify a marker mid free text, or under a carried streak of 2, is text.
+def test_a_ruling_reads_at_any_carried_streak():
+    """Verify a ruling on a measured, unmeasured or failed row resets at 1.
 
-    Mutation: the marker matched anywhere in the log, or the
-    carried-streak condition dropped.
-    Oracle: the streak counted on past each stray marker.
+    Mutation: the carried >= 3 or tokens != {} guard kept, or a failed
+    ruling row counted as no progress.
+    Oracle: a streak of 1, then each kind of ruling row stores 0.
     """
-    mid = _STREAK_THREE + ['summary: a=5->0 note stall review: x']
+    for row in ('a=5->0', 'unmeasured', 'probe-failed: exited 2: x'):
+        logs = _counting([5, 5]) + [f'summary: {row} | stall review: go']
+        assert _stalls(logs) == [0, 1, 0], row
+
+
+def test_stall_review_after_the_second_bar_is_text():
+    """Verify stall review: after the second bar is no ruling.
+
+    Mutation: the ruling read anywhere in the row.
+    Oracle: three stuck rows, then the marker after a second bar.
+    """
+    logs = _STREAK_THREE + ['summary: a=5->0 | x | stall review: y']
+    assert _stalls(logs)[-1] == 4
+
+
+def test_a_failed_row_is_no_progress():
+    """Verify a failed probe row adds one to the streak.
+
+    Mutation: the failed row read as neutral.
+    Oracle: a measured row, then two failed rows store 1 and 2.
+    """
+    logs = _counting([5]) + ['summary: probe-failed: ran past 60 s | -'] * 2
+    assert _stalls(logs) == [0, 1, 2]
+
+
+def test_rows_without_a_bar_are_history():
+    """Verify a row with no bar is skipped and the first composed row opens
+    the window.
+
+    Mutation: an old typed row parsed as composed.
+    Oracle: three stuck old typed rows, then a composed row stores 0 and
+    opens the window at its cycle.
+    """
+    rows = [{'cycle': str(i), 'log': 'summary: a=5->0'} for i in (1, 2, 3)]
+    rows.append({'cycle': '4', 'log': 'summary: a=5->0 | x'})
+    result = hq.stall_count(rows)
+    assert (result['stall'], result['window']) == (0, 4)
+
+
+def test_a_stray_marker_resets_nothing():
+    """Verify a marker mid free text is text.
+
+    Mutation: the marker matched anywhere after the first bar.
+    Oracle: the streak counted on past the stray marker.
+    """
+    mid = _STREAK_THREE + ['summary: a=5->0 | note stall review: x']
     assert _stalls(mid)[-1] == 4
-    early = _counting([5, 5, 5]) + ['summary: a=5->0 stall review: x']
-    assert _stalls(early)[-1] == 3
 
 
 def test_an_unparsed_row_stores_nothing_and_leaves_the_streak():
     """Verify an unparsed row stores None and the next row counts on.
 
     Mutation: an unparsed row resets the streak or adds to it.
-    Oracle: streak 1, a plain-text row, then one more stuck row.
+    Oracle: streak 1, a composed row that does not parse, then one more
+    stuck row.
     """
-    logs = _counting([5, 5]) + ['wrote the plan', 'summary: a=5->0']
+    logs = _counting([5, 5]) + ['summary: open_sites=12 | wrote', 'summary: a=5->0']
     assert _stalls(logs) == [0, 1, None, 2]
     result = hq.stall_count([
         {'cycle': str(i + 1), 'log': log} for i, log in enumerate(logs[:3])])
@@ -390,44 +467,34 @@ def test_a_tally_first_entry_is_silent():
     """
     assert _stalls(['summary: a=5->0', 'summary: a=5->0 t=+3']) == [0, 1]
     ruled = _STREAK_THREE + [
-        'summary: a=5->0 stall review: keep going', 'summary: a=5->0 t=+3']
+        'summary: a=5->0 | stall review: keep going', 'summary: a=5->0 t=+3']
     assert _stalls(ruled)[-2:] == [0, 1]
 
 
 def test_a_name_that_changes_kind_is_stuck():
-    """Verify a kind change is stuck in every direction and restarts the name.
+    """Verify a kind change is stuck in both directions and restarts the name.
 
-    Mutation: a tally over counting state classed silent; or the kind
-    test dropped from the gate branch, so a gate read over tally or
-    counting state keeps the old state.
-    Oracle: a held gate g beside b changing kind; b=+9 then b=MET then
-    b=OPEN regresses from c2, the cycle of its new first entry.
+    Mutation: a tally over counting state classed silent, or the kind
+    test dropped, so a counting token read over tally state keeps it.
+    Oracle: a held z beside b changing kind each way.
     """
-    assert _stalls(['summary: g=MET b=4->0', 'summary: g=MET b=+9']) == [0, 1]
-    assert _stalls(['summary: g=MET b=+9', 'summary: g=MET b=4->0']) == [0, 1]
-    assert _stalls(['summary: g=MET b=+9', 'summary: g=MET b=MET']) == [0, 1]
-    assert _stalls(['summary: g=MET b=4->0', 'summary: g=MET b=MET']) == [0, 1]
-    assert _stalls(['summary: g=MET b=MET', 'summary: g=MET b=+9']) == [0, 1]
-    for first in ('b=+9', 'b=4->0'):
-        rows = [
-            {'cycle': str(i + 1), 'log': f'summary: g=MET {tok}'}
-            for i, tok in enumerate([first, 'b=MET', 'b=OPEN'])]
-        assert hq.stall_count(rows)['regressed'] == [('b', 2)]
+    assert _stalls(['summary: z=0->0 b=4->0', 'summary: z=0->0 b=+9']) == [0, 1]
+    assert _stalls(['summary: z=0->0 b=+9', 'summary: z=0->0 b=4->0']) == [0, 1]
 
 
-# --- finish, open, begin ---------------------------------------------
+# --- finish and open -------------------------------------------------
 
 
 def test_finish_counts_its_pending_log(tmp_path, monkeypatch):
-    """Verify finish stores the streak with the pending log counted.
+    """Verify finish stores the streak with the pending row counted.
 
     Mutation: the result computed over the stored rows alone, so the
     progress row stores the streak of 3 before it.
     Oracle: three stuck rows then a new low stores 0.
     """
     folder = _root(tmp_path, monkeypatch)
-    _cycles(_STREAK_THREE)
-    out = _cycles(['summary: a=4->0'])
+    folder.mkdir(parents=True)
+    out = _measured(folder, ['a=5->0'] * 4 + ['a=4->0'])
     assert [row['stall'] for row in _manifest(folder)] == ['0', '1', '2', '3', '0']
     lines = out.splitlines()
     path_idx = next(i for i, ln in enumerate(lines) if 'cursor lines' in ln)
@@ -435,161 +502,20 @@ def test_finish_counts_its_pending_log(tmp_path, monkeypatch):
 
 
 def test_open_recomputes_the_stall_line(tmp_path, monkeypatch):
-    """Verify open prints the carried streak over an unparsed newest row.
+    """Verify open prints the carried streak over a newest row with no probe.
 
     Mutation: open reads the newest row's stored field in place of
     recomputing, so the '-' row hides the streak.
-    Oracle: rows store 0, 1, 2 and '-'; the streak since c1 is 2.
+    Oracle: rows store 0, 1, 2 and '-'; the streak is 2.
     """
     folder = _root(tmp_path, monkeypatch)
-    _cycles(_counting([5, 5, 5]) + ['wrote notes'])
+    folder.mkdir(parents=True)
+    _measured(folder, ['a=5->0'] * 3)
+    (folder / 'probes' / 'hq-measure').unlink()
+    _cycles(['wrote notes'])
     assert [row['stall'] for row in _manifest(folder)] == ['0', '1', '2', '-']
     _, out, _ = _run(['open', _SLUG])
-    assert _OPEN_LINE.format(n=2, k=1) in out.splitlines()
-
-
-def test_open_thresholds_and_suffixes(tmp_path, monkeypatch):
-    """Verify no line at 1, the first suffix at 2, the second at 3.
-
-    Mutation: a threshold off by one, or the suffixes swapped.
-    Oracle: the spec's three suffix cases, read with and without a live
-    HQ_LOOP.
-    """
-    _root(tmp_path, monkeypatch)
-    _cycles(_counting([5, 5]))
-    _, out, _ = _run(['open', _SLUG])
-    assert 'stall:' not in out
-    _cycles(_counting([5]))
-    _live_loop(tmp_path, monkeypatch)
-    _, out, _ = _run(['open', _SLUG])
-    assert _OPEN_LINE.format(n=2, k=1) + _SUFFIX_TWO in out.splitlines()
-    monkeypatch.delenv('HQ_LOOP')
-    _cycles(_counting([5]))
-    _, out, _ = _run(['open', _SLUG])
-    assert _OPEN_LINE.format(n=3, k=1) in out.splitlines()
-    monkeypatch.setenv('HQ_LOOP', str(tmp_path / 'loop'))
-    _, out, _ = _run(['open', _SLUG])
-    lines = out.splitlines()
-    assert _OPEN_LINE.format(n=3, k=1) + _SUFFIX_THREE in lines
-    assert lines.index(_OPEN_LINE.format(n=3, k=1) + _SUFFIX_THREE) > lines.index(
-        'hq loop: no one is watching this session')
-
-
-def test_begin_prints_its_line_on_an_armed_thread_at_three(tmp_path, monkeypatch):
-    """Verify begin's stall line needs an armed thread and a streak of 3.
-
-    Mutation: the armed test dropped, or the threshold moved.
-    Oracle: the same logs with the stall column blanked, which leaves
-    the thread unarmed, and a streak of 2.
-    """
-    folder = _root(tmp_path, monkeypatch)
-    _cycles(_counting([5, 5, 5]))
-    _, out, _ = _run(['begin', _SLUG])
-    assert 'stall:' not in out
-    _run(['finish', _SLUG, '--log', 'summary: a=5->0'])
-    _, out, _ = _run(['begin', _SLUG])
-    lines = out.splitlines()
-    assert lines[lines.index(_BEGIN_LINE) + 1].startswith('cycle 5 begun by')
-    _run(['finish', _SLUG, '--log', 'summary: a=5->0'])
-    manifest_path = folder / 'cycles' / 'manifest.tsv'
-    rows = manifest_path.read_text().splitlines()
-    blanked = [rows[0]] + [
-        '\t'.join(row.split('\t')[:14] + ['-', '-']) for row in rows[1:]]
-    manifest_path.write_text('\n'.join(blanked) + '\n')
-    _, out, _ = _run(['begin', _SLUG])
-    assert 'stall:' not in out
-
-
-# --- refusals --------------------------------------------------------
-
-
-def test_an_unparsed_log_is_refused_under_the_loop(tmp_path, monkeypatch):
-    """Verify each unparsed cause exits 1, keeps the lock and writes nothing.
-
-    Mutation: the refusal placed after the first write, or the lock
-    removed.
-    Oracle: the folder's bytes before and after each refused finish.
-    """
-    folder = _root(tmp_path, monkeypatch)
-    _cycles(['summary: a=5->0'])
-    _live_loop(tmp_path, monkeypatch)
-    assert _run(['begin', _SLUG])[0] == 0
-    before = {
-        p: p.read_bytes() for p in folder.rglob('*') if p.is_file()}
-    forms = ' - forms: name=31->0 name=MET name=OPEN name=+45 name=40/300'
-    for log, cause in (
-            ('wrote the plan',
-             'under hq loop --log starts with summary: and its tokens'),
-            ('summary: a=4->0 open_sites=12',
-             '--log token open_sites=12 matches no summary form'),
-            ('summary: s=40/300', '--log summary holds no counting or gate token'),
-            ):
-        rc, out, _ = _run(['finish', _SLUG, '--log', log])
-        assert rc == 1
-        assert out.splitlines()[-1] == f'hq finish: {cause}{forms}'
-        after = {p: p.read_bytes() for p in folder.rglob('*') if p.is_file()}
-        assert after == before
-    assert (folder / '.hq.lock').is_file()
-
-
-def test_no_refusal_off_the_loop_or_unarmed(tmp_path, monkeypatch):
-    """Verify finish refuses nothing unarmed, without HQ_LOOP, or with a gone dir.
-
-    Mutation: the armed test dropped, or HQ_LOOP read as a plain flag;
-    or finish prints no stall line for an unparsed row on an armed thread.
-    Oracle: rc 0 in each of the three cases with an unparsed log.
-    """
-    folder = _root(tmp_path, monkeypatch)
-    _live_loop(tmp_path, monkeypatch)
-    assert 'stall:' not in _cycles(['wrote the plan', 'more notes'])
-    monkeypatch.delenv('HQ_LOOP')
-    assert 'stall: -' in _cycles(['summary: a=5->0', 'plain']).splitlines()
-    monkeypatch.setenv('HQ_LOOP', str(tmp_path / 'gone'))
-    _cycles(['plain again'])
-    assert [row['stall'] for row in _manifest(folder)] == ['-', '-', '0', '-', '-']
-
-
-def test_the_stall_question_is_due_at_three(tmp_path, monkeypatch):
-    """Verify the refusal at a carried 3, the ruling and progress that pass it.
-
-    Mutation: the threshold moved, the marker accepted in any position,
-    or a progress row refused.
-    Oracle: streak 3 stored by four stuck rows; a carried 2 stores 3.
-    """
-    folder = _root(tmp_path, monkeypatch)
-    _cycles(_counting([5, 5, 5]))
-    _live_loop(tmp_path, monkeypatch)
-    _cycles(['summary: a=5->0'])
-    assert _manifest(folder)[-1]['stall'] == '3'
-    assert _run(['begin', _SLUG])[0] == 0
-    for log in ('summary: a=5->0', 'summary: a=5->0 note stall review: x'):
-        rc, out, _ = _run(['finish', _SLUG, '--log', log])
-        assert rc == 1
-        assert out.splitlines()[-1] == _STALL_DUE
-    rc, out, _ = _run([
-        'finish', _SLUG, '--log', 'summary: a=5->0 stall review: split a'])
-    assert rc == 0, out
-    assert _manifest(folder)[-1]['stall'] == '0'
-    _cycles(_counting([5, 5, 5]))
-    assert _run(['begin', _SLUG])[0] == 0
-    assert _run(['finish', _SLUG, '--log', 'summary: a=4->0'])[0] == 0
-    assert _manifest(folder)[-1]['stall'] == '0'
-
-
-def test_a_neutral_row_at_three_is_refused(tmp_path, monkeypatch):
-    """Verify a held-only pending row at a carried 3 is refused.
-
-    Mutation: the refusal tests non-progress in place of not progress.
-    Oracle: b held at 0->0 alone, after a stuck a built the streak.
-    """
-    folder = _root(tmp_path, monkeypatch)
-    _cycles(['summary: a=5->0 b=0->0'] * 4)
-    assert _manifest(folder)[-1]['stall'] == '3'
-    _live_loop(tmp_path, monkeypatch)
-    assert _run(['begin', _SLUG])[0] == 0
-    rc, out, _ = _run(['finish', _SLUG, '--log', 'summary: b=0->0'])
-    assert rc == 1
-    assert out.splitlines()[-1] == _STALL_DUE
+    assert _OPEN_LINE.format(n=2, cause='no measured gain') in out.splitlines()
 
 
 # --- old manifest ----------------------------------------------------
@@ -600,7 +526,7 @@ def test_old_manifests_take_the_new_columns_by_position(tmp_path, monkeypatch):
 
     Mutation: stall placed before rewrite_sha.
     Oracle: an adopt row read by live_sha, and finish over a manifest cut
-    to 13 and to 14 fields, whose window opens at the adopt cycle.
+    to 13 and to 14 fields, whose window opens at the first probe cycle.
     """
     folder = _root(tmp_path, monkeypatch)
     folder.mkdir(parents=True)
@@ -614,29 +540,31 @@ def test_old_manifests_take_the_new_columns_by_position(tmp_path, monkeypatch):
     assert adopt_fields[14:] == ['-', '-']
     assert hq.live_sha(_manifest(folder)[0]) == adopt_fields[13]
     assert hq._sha12((folder / 'HANDOFF.md').read_bytes()) == adopt_fields[13]
+    _probe(folder, "echo 'a=5->0'")
+    first_composed = str(int(adopt_fields[0]) + 1)
     for width, stall in ((13, '0'), (14, '1')):
         rows = manifest_path.read_text().splitlines()
         manifest_path.write_text('\n'.join(
             [rows[0]] + ['\t'.join(row.split('\t')[:width]) for row in rows[1:]])
             + '\n')
-        _cycles(['summary: a=5->0'])
+        _cycles(['work'])
         fields = manifest_path.read_text().splitlines()[-1].split('\t')
         assert len(fields) == 16
-        assert fields[14:] == [stall, adopt_fields[0]]
+        assert fields[14:] == [stall, first_composed]
 
 
-# --- cadence, advisories, gate regressions ---------------------------
+# --- unmeasured rows and Plan advisories ----------------------------
 
 
 def test_unmeasured_parses_with_no_tokens():
     """Verify summary: unmeasured parses empty and its free text follows it.
 
-    Mutation: the word read as free text, so the row is unparsed; or the
-    trailing-mark strip skipped, so unmeasured. fails.
+    Mutation: the word read as a token, so the row is unparsed; or the
+    match made case-sensitive.
     Oracle: hand-written parse of two unmeasured lines.
     """
     assert hq.parse_summary('summary: unmeasured') == ({}, '', None)
-    assert hq.parse_summary('Summary: UNMEASURED. stall review: x') == (
+    assert hq.parse_summary('Summary: UNMEASURED | stall review: x') == (
         {}, 'stall review: x', None)
 
 
@@ -656,194 +584,51 @@ def test_unmeasured_rows_leave_the_streak():
         ) == [None, None, 0, 1]
 
 
-def test_an_unmeasured_row_is_no_ruling_row():
-    """Verify the marker on an unmeasured row at a carried 3 resets nothing.
-
-    Mutation: the unmeasured test dropped from the ruling marker, so a
-    ruling skips the measure.
-    Oracle: three stuck rows after a neutral first; the marker row keeps 3.
-    """
-    logs = _counting([5, 5, 5, 5]) + ['summary: unmeasured stall review: park a']
-    assert _stalls(logs) == [0, 1, 2, 3, 3]
-
-
-def test_the_measure_is_due_at_a_stall_and_after_three_unmeasured(
-        tmp_path, monkeypatch):
-    """Verify both measure-due triggers refuse an unmeasured row under the loop.
-
-    Mutation: either trigger dropped, the count off by one, or the
-    stall-question refusal checked first.
-    Oracle: the spec's message at a carried streak of 3, and at the
-    fifth unmeasured row with a carried streak of 0; a fourth passes.
-    """
-    folder = _root(tmp_path, monkeypatch)
-    _cycles(['summary: a=5->0'])
-    _live_loop(tmp_path, monkeypatch)
-    _cycles(['summary: unmeasured'] * 4)
-    assert _run(['begin', _SLUG])[0] == 0
-    rc, out, _ = _run(['finish', _SLUG, '--log', 'summary: unmeasured'])
-    assert rc == 1
-    assert out.splitlines()[-1] == (
-        'hq finish: the measure is due after 0 cycles without progress and 4'
-        ' unmeasured - run the measure and carry its tokens in --log')
-    assert _run(['finish', _SLUG, '--log', 'summary: a=4->0'])[0] == 0
-    _cycles(_counting([4, 4, 4]))
-    assert _manifest(folder)[-1]['stall'] == '3'
-    assert _run(['begin', _SLUG])[0] == 0
-    rc, out, _ = _run(['finish', _SLUG, '--log', 'summary: unmeasured'])
-    assert rc == 1
-    assert out.splitlines()[-1] == (
-        'hq finish: the measure is due after 3 cycles without progress and 0'
-        ' unmeasured - run the measure and carry its tokens in --log')
-    assert (folder / '.hq.lock').is_file()
-
-
-def test_an_unparsed_summary_warns_off_the_loop(tmp_path, monkeypatch):
-    """Verify a summary: line with a bad token prints an advisory, loop or not.
-
-    Mutation: the advisory gated on HQ_LOOP or an armed thread; or the
-    = guard dropped, so a prose Summary: line warns.
-    Oracle: the parse error of commits=115, and silence for prose.
-    """
-    _root(tmp_path, monkeypatch)
-    out = _cycles(['summary: commits=115 backtest=FAIL'])
-    assert (
-        'advisory: --log summary does not parse: --log token commits=115'
-        ' matches no summary form - the measure writes each token in a form'
-        ' - forms: name=31->0 name=MET name=OPEN name=+45 name=40/300'
-        ) in out.splitlines()
-    assert 'does not parse' not in _cycles(['Summary: refactored the parser'])
-
-
-def _plan_cycle(folder, plan, log):
+def _plan_cycle(folder, plan, line):
+    _probe(folder, f"echo '{line}'")
     assert _run(['begin', _SLUG])[0] == 0
     handoff = folder / 'HANDOFF.md'
     text = handoff.read_text()
     text = re.sub(r'(?ms)^## Plan\n.*?(?=^## )', f'## Plan\n{plan}\n\n', text)
     handoff.write_text(text)
-    rc, out, _ = _run(['finish', _SLUG, '--log', log])
+    rc, out, _ = _run(['finish', _SLUG, '--log', 'work'])
     assert rc == 0, out
     return [line for line in out.splitlines() if line.startswith('advisory: Plan')]
 
 
 def test_plan_names_are_checked_in_finish_and_open(tmp_path, monkeypatch):
-    """Verify a Coordinate written as spend and an absent wrapped Tally warn.
+    """Verify a Coordinate written as a tally and an absent wrapped Tally warn.
 
-    Mutation: the kind test dropped, so clean=115/204 passes as the
+    Mutation: the kind test dropped, so clean=+115 passes as the
     Coordinate; the continuation line not joined; the bullet scope
-    dropped, so prose names count; open reads the newest row in
-    place of the newest measured one; the Coordinate kinds narrowed to
-    counting, so a gate warns; or a name written twice warns twice.
-    Oracle: the objection's ratio, a prose line naming a Coordinate,
-    a gate Coordinate, a Coordinate named twice, and a row carrying
-    every name in form.
+    dropped, so prose names count; open reads the newest row in place of
+    the newest measured one; or a name written twice warns twice.
+    Oracle: a prose line naming a Coordinate, a Coordinate named twice,
+    and a row carrying every name in form.
     """
     folder = _root(tmp_path, monkeypatch)
-    _cycles(['summary: a=5->0'])
+    folder.mkdir(parents=True)
+    _measured(folder, ['a=5->0'])
     plan = (
         '- [ ] Clean the corpus. Coordinate: clean. Tally:\n'
         '  clean_done. Done when clean reads 0.\n'
-        '- [ ] Gate it. Coordinate: shipped. Done when shipped reads MET.\n'
         '- [ ] Twice. Coordinate: dup. Also Coordinate: dup.\n'
         'Prose names Coordinate: other. here.')
     expected = [
-        ('advisory: Plan Coordinate clean reads as spend in the c2 summary'
-         ' - the measure writes name=<value>-><goal>, name=MET or name=OPEN'),
+        ('advisory: Plan Coordinate clean reads as tally in the c2 summary'
+         ' - the measure writes name=<value>-><goal>'),
         ('advisory: Plan Coordinate dup is absent from the c2 summary'
-         ' - the measure writes name=<value>-><goal>, name=MET or name=OPEN'),
+         ' - the measure writes name=<value>-><goal>'),
         ('advisory: Plan Tally clean_done is absent from the c2 summary'
          ' - the measure writes name=+<closed>'),
         ]
-    assert _plan_cycle(
-        folder, plan, 'summary: a=4->0 clean=115/204 shipped=MET') == expected
-    _cycles(['summary: unmeasured'])
+    assert _plan_cycle(folder, plan, 'a=4->0 clean=+115') == expected
+    _measured(folder, ['unmeasured'])
     _, out, _ = _run(['open', _SLUG])
     assert [ln for ln in out.splitlines() if ln.startswith('advisory: Plan')] == (
         expected)
     assert _plan_cycle(
-        folder, plan,
-        'summary: clean=89->0 clean_done=+115 shipped=OPEN dup=MET') == []
-
-
-def test_open_names_a_regressed_gate_until_a_measure_repairs_it(
-        tmp_path, monkeypatch):
-    """Verify the regression line needs a MET, outlasts an unmeasured row
-    and ends at a measure that reads the gate MET again.
-
-    Mutation: any OPEN gate tracked as regressed; the line read from
-    the newest row in place of the newest measured row; or an earlier
-    regression kept after a measured row with none.
-    Oracle: tests OPEN, OPEN, MET, MET, OPEN, unmeasured, MET; no line
-    before the fifth row or after the fourth, the same line after the
-    sixth, none after the seventh.
-    """
-    _root(tmp_path, monkeypatch)
-    line = (
-        'gate tests read MET in c3 and reads OPEN in c5 - repair it before'
-        ' other work')
-    _cycles([f'summary: a={v}->0 tests=OPEN' for v in (6, 5)])
-    _, out, _ = _run(['open', _SLUG])
-    assert 'gate tests' not in out
-    _cycles(['summary: a=4->0 tests=MET', 'summary: a=3->0 tests=MET'])
-    _, out, _ = _run(['open', _SLUG])
-    assert 'gate tests' not in out
-    _cycles(['summary: a=2->0 tests=OPEN'])
-    _, out, _ = _run(['open', _SLUG])
-    assert line in out.splitlines()
-    _cycles(['summary: unmeasured'])
-    _, out, _ = _run(['open', _SLUG])
-    assert line in out.splitlines()
-    _cycles(['summary: a=1->0 tests=MET'])
-    _, out, _ = _run(['open', _SLUG])
-    assert 'gate tests' not in out
-
-
-def test_open_prints_the_measure_line_at_four_unmeasured(tmp_path, monkeypatch):
-    """Verify open says the measure is due at 4 unmeasured rows, not at 3.
-
-    Mutation: the threshold off by one, or the since cycle taken from
-    the newest row.
-    Oracle: a measured c1, then unmeasured rows.
-    """
-    _root(tmp_path, monkeypatch)
-    _cycles(['summary: a=5->0'] + ['summary: unmeasured'] * 3)
-    _, out, _ = _run(['open', _SLUG])
-    assert 'measure: due' not in out
-    _cycles(['summary: unmeasured'])
-    _, out, _ = _run(['open', _SLUG])
-    assert (
-        "measure: due - 4 cycles unmeasured since c1 - this cycle's --log"
-        ' carries measured tokens') in out.splitlines()
-
-
-def test_a_ruling_row_clears_the_regressed_gates():
-    """Verify a regressed gate is no longer reported after a ruling row.
-
-    Mutation: the regressed list kept at a ruling row that carries no
-    tokens, so the old regression outlives the reset.
-    Oracle: g MET then OPEN three times regresses from c1 with a carried
-    streak of 3; the unparsed ruling row at c5 empties the list.
-    """
-    logs = ['summary: a=5->0 g=MET'] + ['summary: a=5->0 g=OPEN'] * 3
-    rows = [{'cycle': str(i + 1), 'log': log} for i, log in enumerate(logs)]
-    assert hq.stall_count(rows)['regressed'] == [('g', 1)]
-    ruling = {'cycle': '5', 'log': 'summary: open_sites=12 stall review: x'}
-    result = hq.stall_count(rows + [ruling])
-    assert result['ruling'] is True
-    assert result['regressed'] == []
-
-
-def test_a_gate_met_at_its_first_entry_is_regressed_from_that_cycle():
-    """Verify a gate first seen MET and later OPEN names its first cycle.
-
-    Mutation: met_cycle left None on a gate's first entry.
-    Oracle: g MET at c3 then OPEN at c4 gives [('g', 3)].
-    """
-    rows = [
-        {'cycle': '3', 'log': 'summary: g=MET'},
-        {'cycle': '4', 'log': 'summary: g=OPEN'},
-        ]
-    assert hq.stall_count(rows)['regressed'] == [('g', 3)]
+        folder, plan, 'clean=89->0 clean_done=+115 dup=0->0') == []
 
 
 def test_a_row_with_no_numeric_cycle_counts_toward_nothing():
@@ -854,7 +639,7 @@ def test_a_row_with_no_numeric_cycle_counts_toward_nothing():
     Oracle: stuck rows at cycles '-' and '' after c1 leave the streak at
     0; the same rows before c7 leave c7 the window's first row.
     """
-    stuck = 'summary: a=5->0'
+    stuck = 'summary: a=5->0 | -'
     skipped = [{'cycle': '-', 'log': stuck}, {'cycle': '', 'log': stuck}]
     after = hq.stall_count([{'cycle': '1', 'log': stuck}] + skipped)
     assert (after['stall'], after['measured']) == (0, 1)
@@ -873,18 +658,3 @@ def test_plan_names_need_a_plan_section():
     """
     cursor = '# Handoff: x\n\n## Task\n\n- Coordinate: a.\n\n## Now\n\nGo.\n'
     assert hq.plan_name_advisories(cursor, {}, 3) == []
-
-
-def test_open_prints_no_measure_line_before_a_measured_row(
-        tmp_path, monkeypatch):
-    """Verify open prints no measure line when no row was ever measured.
-
-    Mutation: the measured-cycle test dropped from the measure-due
-    guard, so the line prints with since cNone.
-    Oracle: four unmeasured rows and no measured one.
-    """
-    _root(tmp_path, monkeypatch)
-    _cycles(['summary: unmeasured'] * 4)
-    _, out, _ = _run(['open', _SLUG])
-    assert 'measure: due' not in out
-    assert 'cNone' not in out
