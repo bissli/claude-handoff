@@ -8164,16 +8164,16 @@ def _build_parser() -> argparse.ArgumentParser:
         'hq loop <slug> starts claude in the current tmux pane at the\n'
         'project root, with a driver pane below it. The driver types\n'
         '/handoff read <slug>, then a write when the context notice asks\n'
-        'for one, /clear, and the read again, up to --max-cycles cycles\n'
-        '(default 10). It refuses a thread /hq-loop has not prepared. It\n'
-        'stops for the user when the thread is done, a question waits on\n'
-        'an answer, a cycle fails to finish, or a written cycle stores no\n'
-        'readable summary or a fourth cycle in a row without progress.\n'
-        'hq loop stop <slug> has the running loop write the next handoff\n'
-        'and end. HQ_CLAUDE_CMD replaces claude as it does for hq run,\n'
-        'with --settings <file> last in place of /handoff <slug>; a value\n'
-        'that does not split exits 2. Needs bash 4 or later, tmux, jq,\n'
-        'and the command on PATH.')
+        'for one, /clear, and the read again. It parks and rings when the\n'
+        'session asks a question, a write fails to finish, or a thread\n'
+        'with a measure probe stalls or meets its finish line. It ends,\n'
+        'and closes claude, when the thread is done, after --max-cycles\n'
+        'written cycles (default 10), or at hq loop stop <slug>, which has\n'
+        'the running loop write the next handoff first. HQ_CLAUDE_CMD\n'
+        'replaces claude as it does for hq run, with --settings <file>\n'
+        'last in place of /handoff <slug>; a value that does not split\n'
+        'exits 2. Needs bash 4 or later, tmux, jq, and the command on\n'
+        'PATH.')
     lp = sub.add_parser(
         'loop',
         usage='hq loop [--max-cycles N] slug | hq loop stop slug',

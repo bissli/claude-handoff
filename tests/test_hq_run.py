@@ -1276,54 +1276,51 @@ def test_end_terms_descendants_of_a_hung_launcher(tmp_path):
 
 
 def test_launch_guards(tmp_path):
-    """Verify launch dies on a leftover lock, a missing Loop directive, and
-    a manifest with no integer in field 15, in that order.
+    """Verify launch dies on a leftover lock, and once it starts, hands
+    claude the slug and a settings file that hooks all six events.
 
-    Mutation: a guard dropped; the lock check placed after a guard that
-    also fails; the Loop line matched anywhere in the file; or field 14
-    read, or '-' accepted.
-    Oracle: the die line each fixture draws, and exit 0 once all hold.
+    Mutation: the lock guard dropped; a Loop-directive or manifest guard
+    restored; the slug file left unwritten; or a hook event left out of
+    settings.json.
+    Oracle: the die line the lock draws; the files a claude stub copies
+    out, read against the six event names the hook handles.
     """
     bin_dir = tmp_path / 'stub'
     bin_dir.mkdir()
     (bin_dir / 'tmux').write_text('#!/bin/sh\necho 40\n')
     (bin_dir / 'tmux').chmod(0o755)
     folder = tmp_path / '.handoff' / 'auth-refresh'
-    (folder / 'cycles').mkdir(parents=True)
-    handoff = folder / 'HANDOFF.md'
-    loop_line = '- Loop (user, 2026-11-10): run unattended\n'
-    env = {
-        **os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}',
-        'TMUX': 'stub', 'TMUX_PANE': '%0'}
+    folder.mkdir(parents=True)
+    (folder / 'HANDOFF.md').write_text('# Handoff\n\n## Task\nWork.\n')
+    out = tmp_path / 'out'
+    out.mkdir()
+    claude = ['sh', '-c', f'cp "$HQ_LOOP/slug" "$HQ_LOOP/settings.json" {out}']
 
     def launch() -> tuple[int, str]:
         proc = subprocess.run(
-            [str(ROOT / 'bin' / 'hq-loop'), 'launch', '10', 'auth-refresh', 'true'],
-            cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30)
+            [str(ROOT / 'bin' / 'hq-loop'), 'launch', '10', 'auth-refresh', *claude],
+            cwd=tmp_path,
+            env={
+                **os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}',
+                'TMUX': 'stub', 'TMUX_PANE': '%0'},
+            capture_output=True,
+            text=True,
+            timeout=30)
         return proc.returncode, proc.stderr.strip()
 
-    handoff.write_text(f'# Handoff\n\n## Task\n{loop_line}\n')
     (folder / '.hq.lock').write_text('session=S1\n')
     assert launch() == (
         1, ('hq loop: auth-refresh has an open cycle (.hq.lock) - finish it in'
             ' its session, or run hq begin auth-refresh --force once that session'
             ' is dead'))
+    assert not (out / 'slug').exists()
     (folder / '.hq.lock').unlink()
-    no_loop = (
-        1, ('hq loop: auth-refresh has no Loop directive - run /hq-loop'
-            ' auth-refresh first'))
-    assert launch() == no_loop
-    handoff.write_text(f'# Handoff\n\n## Directives\n{loop_line}\n## Task\nWork.\n')
-    no_summary = (
-        1, ('hq loop: auth-refresh has no cycle with a readable summary - run'
-            ' /hq-loop auth-refresh to audit it'))
-    assert launch() == no_summary
-    manifest = folder / 'cycles' / 'manifest.tsv'
-    row14 = '\t'.join(['1'] + ['-'] * 12 + ['5'])
-    manifest.write_text(f'cycle\n{row14}\t-\n')
-    assert launch() == no_summary
-    manifest.write_text(f'cycle\n{row14}\t0\n')
-    assert launch()[0] == 0
+    assert launch() == (0, '')
+    assert (out / 'slug').read_text() == 'auth-refresh\n'
+    hooks = json.loads((out / 'settings.json').read_text())['hooks']
+    assert sorted(hooks) == sorted([
+        'Stop', 'StopFailure', 'Notification', 'UserPromptSubmit',
+        'SessionStart', 'PostToolUse'])
 
 
 def test_launch_prints_the_end_reason(tmp_path):
@@ -1338,11 +1335,8 @@ def test_launch_prints_the_end_reason(tmp_path):
     (bin_dir / 'tmux').write_text('#!/bin/sh\necho 40\n')
     (bin_dir / 'tmux').chmod(0o755)
     folder = tmp_path / '.handoff' / 'auth-refresh'
-    (folder / 'cycles').mkdir(parents=True)
-    (folder / 'HANDOFF.md').write_text(
-        '# Handoff\n\n## Directives\n- Loop (user, 2026-11-10): run\n\n## Task\nWork.\n')
-    row = '\t'.join(['1'] + ['-'] * 12 + ['5', '0'])
-    (folder / 'cycles' / 'manifest.tsv').write_text(f'cycle\n{row}\n')
+    folder.mkdir(parents=True)
+    (folder / 'HANDOFF.md').write_text('# Handoff\n\n## Task\nWork.\n')
     claude = ['sh', '-c', 'echo "reached --max-cycles 1 at cycle 3" > "$HQ_LOOP/end"']
     proc = subprocess.run(
         [str(ROOT / 'bin' / 'hq-loop'), 'launch', '1', 'auth-refresh', *claude],

@@ -465,13 +465,6 @@ launch() {
     [[ ! -e .handoff/$slug/.hq.done ]] || die "$slug is marked done"
     [[ ! -e .handoff/$slug/.hq.lock ]] ||
         die "$slug has an open cycle (.hq.lock) - finish it in its session, or run hq begin $slug --force once that session is dead"
-    awk '/^## / { in_dir = ($0 ~ /^## Directives[ \t]*$/); next }
-        in_dir && /^- Loop \(user,/ { found = 1 }
-        END { exit !found }' ".handoff/$slug/HANDOFF.md" ||
-        die "$slug has no Loop directive - run /hq-loop $slug first"
-    awk -F'\t' 'NR > 1 && $15 ~ /^[0-9]+$/ { found = 1 } END { exit !found }' \
-        ".handoff/$slug/cycles/manifest.tsv" 2>/dev/null ||
-        die "$slug has no cycle with a readable summary - run /hq-loop $slug to audit it"
 
     local self dir hook_cmd notice notice_cmd dpane running rc=0
     running=$(tmux list-panes -a -F '#{@hqloop_slug}')
