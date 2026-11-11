@@ -33,8 +33,9 @@ Under the loop, `hq open` prints `hq loop: no one is watching this
 session` and the loop rule. The rule outranks the reading steps, and
 the session follows it as printed:
 
-- The session decides every question by the Directives. It asks only
-  about a step the user did not ask for that would weaken security or
+- The session decides every question, by the Directives where one
+  applies and on the evidence where none does. It asks only about a
+  step the user did not ask for that would weaken security or
   stability, as the last line of the turn, ending on `?`.
 - A finished step never ends the turn. With nothing workable, the
   session starts a background monitor on the file or job it waits on,
@@ -84,7 +85,9 @@ reachable.
 
 1. `/hq-loop <slug>` works on an existing thread. With no thread, run
    `/handoff write` first, since the handoff skill owns creation. Run
-   `hq open <slug>` and read HANDOFF.md.
+   `hq open <slug>` and read HANDOFF.md. Never open `ledger.tsv` or
+   `standing.md`. `hq standing <slug> <id>` prints one item whole.
+   Read a `cycles/` file only by line range.
 2. Ask the user in one message, with an example beside each question:
    - Measure: whether a command can print the thread's progress as a
      number, as in "the suite's failing count reaches 0" or "coverage
