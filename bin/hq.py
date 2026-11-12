@@ -6465,15 +6465,16 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
     stored_log = log_text
     ruling_text = None
     met, met_reason = False, ''
+    if loop_dir is not None:
+        with contextlib.suppress(OSError):
+            ruling_text = ' '.join((loop_dir / 'ruling').read_text(
+                encoding='utf-8', errors='replace').split())
     if has_probe:
         root = folder.parent.parent
         probe_row, met, met_reason = run_probe(
             probe, root / pathlib.Path(wd_value).expanduser() if wd_value else root)
-        if loop_dir is not None:
-            with contextlib.suppress(OSError):
-                ruling_text = ' '.join((loop_dir / 'ruling').read_text(
-                    encoding='utf-8', errors='replace').split())
-        elif typed_ruling and stall_count(manifest)['reported'] >= 3:
+        if (loop_dir is None and typed_ruling
+            and stall_count(manifest)['reported'] >= 3):
             ruling_text = log_text
         if ruling_text is None:
             stored_log = f'summary: {probe_row} | {log_text or "-"}'
@@ -6484,6 +6485,9 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
             stored_log = (
                 f'summary: {probe_row} | stall review: {ruling_text}'
                 f' | {log_text or "-"}')
+    elif ruling_text is not None:
+        ruling_text = ruling_text.replace('|', '/') or '-'
+        stored_log = f'stall review: {ruling_text} | {log_text or "-"}'
     stall_result = stall_count(
         manifest + [{'cycle': str(anch['cycle']), 'log': stored_log}])
     probe_tokens = parse_summary(stored_log)[0] if has_probe else None
@@ -6987,7 +6991,9 @@ def _verb_open(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
         for line in plan_name_advisories(
                 parsed['cursor'], stall_result['measured_tokens'], measured):
             print(line)
-    if stall_result['reported'] >= 2:
+    probe = folder / 'probes' / 'hq-measure'
+    has_probe = probe.is_file() and os.access(probe, os.X_OK)
+    if has_probe and stall_result['reported'] >= 2:
         print(
             f'stall: {stall_result["reported"]} cycles without progress'
             f' ({stall_result["cause"] or "no measured gain"})'

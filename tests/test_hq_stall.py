@@ -514,6 +514,7 @@ def test_open_recomputes_the_stall_line(tmp_path, monkeypatch):
     (folder / 'probes' / 'hq-measure').unlink()
     _cycles(['wrote notes'])
     assert [row['stall'] for row in _manifest(folder)] == ['0', '1', '2', '-']
+    _probe(folder, "echo 'a=5->0'")
     _, out, _ = _run(['open', _SLUG])
     assert _OPEN_LINE.format(n=2, cause='no measured gain') in out.splitlines()
 

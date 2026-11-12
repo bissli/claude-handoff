@@ -305,6 +305,22 @@ def test_a_ruling_file_ends_the_hold(tmp_path, monkeypatch):
     assert not (loop_dir / 'ruling').exists()
 
 
+def test_a_ruling_with_no_probe_still_ends_the_hold(tmp_path, monkeypatch):
+    """Verify a ruling file lifts the hold and is logged after the probe goes.
+
+    Mutation: the ruling file read only where a probe exists, or the
+    ruling dropped from the row when no probe runs.
+    Oracle: a held loop dir with a ruling and no probes/hq-measure.
+    """
+    folder = _root(tmp_path, monkeypatch)
+    loop_dir = _loop(tmp_path, monkeypatch)
+    (loop_dir / 'hold').write_text('stall: held at 4 (no measured gain).\n')
+    (loop_dir / 'ruling').write_text('drop the probe\n')
+    _cycle()
+    assert not (loop_dir / 'hold').exists()
+    assert _rows(folder)[-1]['log'] == 'stall review: drop the probe | work'
+
+
 def test_stalls_from_four_hold(tmp_path, monkeypatch):
     """Verify a stall of 3 holds nothing and stalls of 4 and 5 hold.
 
@@ -381,3 +397,20 @@ def test_open_prints_the_hold_only_for_its_loop(tmp_path, monkeypatch):
     monkeypatch.setenv('HQ_LOOP', str(tmp_path / f'loop-{_SLUG}'))
     _, out, _ = _run(['open', _SLUG])
     assert f'{hold_line} {hq._HOLD_TEXT}' in out.splitlines()
+
+
+def test_open_prints_no_stall_line_once_the_probe_is_gone(tmp_path, monkeypatch):
+    """Verify open drops the stall advisory after the probe is removed.
+
+    Mutation: stall_count run on the manifest with no probe present.
+    Oracle: a stuck probe to stall 2, then the probe removed and a plain cycle.
+    """
+    folder = _root(tmp_path, monkeypatch)
+    _probe(folder, "echo 'a=5->0'")
+    for _ in range(3):
+        _cycle()
+    assert _STALL_LINE.format(n=2, cause='no measured gain') in _run(
+        ['open', _SLUG])[1].splitlines()
+    (folder / 'probes' / 'hq-measure').unlink()
+    _cycle()
+    assert 'cycles without progress' not in _run(['open', _SLUG])[1]
