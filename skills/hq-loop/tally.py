@@ -83,8 +83,8 @@ def apply_run(unit_by_id: dict[str, dict], run_text: str) -> None:
     Raises
     ------
     ValueError
-        A line of no form, a repeated id, ``closed:<n>``, or no ``end``
-        line last.
+        A line of no form, a repeated id, ``closed:<n>``, ``open:0``, or
+        no ``end`` line last.
     """
     lines = [line.strip() for line in run_text.splitlines() if line.strip()]
     if not lines or lines[-1] != 'end':
@@ -94,10 +94,11 @@ def apply_run(unit_by_id: dict[str, dict], run_text: str) -> None:
     run_by_id: dict[str, tuple[str, int]] = {}
     for line in lines[:-1]:
         line_m = _LINE.fullmatch(line)
-        if not line_m or (line_m.group(1) == 'closed' and line_m.group(2)):
+        if (not line_m or (line_m.group(1) == 'closed' and line_m.group(2))
+            or int(line_m.group(2) or 1) == 0):
             raise ValueError(
-                f'line {line!r} matches no form - open <id>, open:<n> <id>,'
-                ' closed <id>, end')
+                f'line {line!r} matches no form - open <id>, open:<n> <id>'
+                ' with n above 0, closed <id>, end')
         unit_id = line_m.group(3)
         if unit_id in run_by_id:
             raise ValueError(f'id {unit_id!r} appears twice in the run')

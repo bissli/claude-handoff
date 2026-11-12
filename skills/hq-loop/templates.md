@@ -21,8 +21,10 @@ Rules every probe keeps:
 For work whose open count can rise as the work finds more of it. Each
 unit prints one line, `open:<n> <id>` for an open unit holding n sites,
 `open <id>` for one site, or `closed <id>`, then `end` once the tool has
-exited cleanly. `tally.py` keeps the known set and prints the remaining
-count and the tally of closed units, with the step on both.
+exited cleanly. A unit the state file holds and the listing lacks, such
+as a deleted file, prints as closed. `tally.py` keeps the known set and
+prints the remaining count and the tally of closed units, with the step
+on both.
 
 ```sh
 #!/bin/sh
@@ -34,7 +36,9 @@ if [ "$HQ_MEASURE" != 1 ]; then
     [ ! -f "$state" ] || cp "$state" "$scratch/tally.tsv"
     state="$scratch/tally.tsv"
 fi
-files=$(git ls-files 'src/*.py')
+files=$(git ls-files 'src/*.py' | while IFS= read -r file; do
+    [ ! -f "$file" ] || printf '%s\n' "$file"
+done)
 units=$(printf '%s\n' "$files" | while IFS= read -r file; do
     [ -n "$file" ] || continue
     sites=$(grep -c 'TODO' "$file") || [ $? -eq 1 ] || exit 1
@@ -44,7 +48,9 @@ units=$(printf '%s\n' "$files" | while IFS= read -r file; do
         echo "closed $file"
     fi
 done)
-line=$(printf '%s\nend\n' "$units" |
+gone=$([ ! -f "$state" ] || tail -n +2 "$state" | cut -f1 |
+    grep -vxF -e "$files" | sed 's/^/closed /')
+line=$(printf '%s\n%s\nend\n' "$units" "$gone" |
     python3 "$HQ_TALLY" "$state" open_sites@1 sites_closed) ||
     { echo "$line" >&2; exit 1; }
 echo "$line"
@@ -54,9 +60,9 @@ echo "$line"
 
 For a suite whose failing count is the measure. The suite runs once,
 and only when it fails, its failed and erroring tests run once more. A
-test counts as failing only when it fails both times. A run that does
-not complete, or exits 1 with no test named, exits nonzero, which
-stores a failed row.
+test counts as failing only when it fails both times. The rerun takes
+its list from pytest's cache, so the cache plugin stays on. A run that
+does not complete exits nonzero, which stores a failed row.
 
 ```sh
 #!/bin/sh
@@ -65,9 +71,8 @@ trap 'rm -f "$out"' EXIT
 python3 -m pytest -q -rfE >"$out" 2>&1
 rc=$?
 [ "$rc" -eq 0 ] && { echo 'failing=0->0'; exit 0; }
-failed=$(sed -nE 's/^(FAILED|ERROR) ([^ ]*).*/\2/p' "$out")
-[ "$rc" -eq 1 ] && [ -n "$failed" ] || { tail -1 "$out" >&2; exit 1; }
-python3 -m pytest -q -rfE $failed >"$out" 2>&1
+[ "$rc" -eq 1 ] || { tail -1 "$out" >&2; exit 1; }
+python3 -m pytest -q -rfE --lf >"$out" 2>&1
 rc=$?
 [ "$rc" -le 1 ] || { tail -1 "$out" >&2; exit 1; }
 echo "failing=$(grep -cE '^(FAILED|ERROR) ' "$out")->0"
@@ -80,8 +85,8 @@ smallest gain that counts, and the value is capped at its goal.
 
 ```sh
 #!/bin/sh
-value=$(python3 -m coverage report --format=total 2>&1) ||
-    { echo "$value" | tail -1 >&2; exit 1; }
+value=$(python3 -m coverage report --format=total --fail-under=0) ||
+    { [ -z "$value" ] || printf '%s\n' "$value" | tail -1 >&2; exit 1; }
 awk -v value="$value" -v goal=90 'BEGIN {
     if (value > goal) value = goal
     printf "score=%s->%s@1\n", value, goal
