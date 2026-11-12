@@ -1138,6 +1138,56 @@ def test_agent_cap_rings_once(tmp_path):
         drive.close()
 
 
+def test_write_retry_at_the_retry_cap_waits_beside_a_task(tmp_path):
+    """Verify a write retry at RETRY_CAP beside a background task rings
+    no write bell until a Stop with no task.
+
+    Mutation: the tasks test missing from the write bell, so a session
+    that started an agent before taking the lock hears a false bell.
+    Oracle: band 0 over three Stops spends both retries; then a Stop
+    with tasks 1 rings nothing, and one with tasks 0 rings.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.set_band('S1', 0)
+        drive.start()
+        for count in (2, 3, 4):
+            drive.stop()
+            assert _wait_for(lambda: len(drive.typed()) == count)
+        drive.stop(tasks=1)
+        assert _wait_for(lambda: any(' waits: ' in line for line in drive.said()))
+        assert drive.rang('a write was typed') == 0
+        drive.stop()
+        assert _wait_for(lambda: drive.rang('a write was typed 3 times and cycle 1 is not written') == 1)
+        assert drive.typed() == [READ] + [WRITE] * 3
+    finally:
+        drive.close()
+
+
+def test_stop_failure_keeps_the_task_gate(tmp_path):
+    """Verify a StopFailure leaves the Stop's task count in place, so a
+    rest tick after it types no write while the agent still runs.
+
+    Mutation: StopFailure sets stop_tasks from its own event, whose
+    payload carries no tasks, so the gate reopens.
+    Oracle: Stop file set, a Stop with tasks 1, a prompt, a StopFailure
+    with tasks 0, then two rest ticks: only the read typed.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        (drive.driver_dir / 'stop').write_text('')
+        drive.stop(tasks=1)
+        assert _wait_for(lambda: any(' waits: ' in line for line in drive.said()))
+        drive.emit('UserPromptSubmit - S1 0 0')
+        drive.emit('StopFailure rate_limit S1 0 0')
+        assert _wait_for(lambda: drive.rang('claude stopped on an API error') == 1)
+        time.sleep(QUIET + 5)
+        assert drive.typed() == [READ]
+    finally:
+        drive.close()
+
+
 def test_stop_failure_parks_with_the_error(tmp_path):
     """Verify a StopFailure rings the error and types nothing.
 
@@ -1679,3 +1729,81 @@ def test_a_held_prompt_becomes_the_ruling(tmp_path):
         'hook_event_name': 'UserPromptSubmit', 'session_id': 'S1',
         'prompt': 'A later word.'})
     assert (tmp_path / 'ruling').read_text() == 'r' * 160 + '\n'
+
+
+def test_end_keeps_a_compacting_turn(tmp_path):
+    """Verify a compact during the END wait leaves the turn open, so no
+    /exit is typed into it.
+
+    Mutation: SessionStart compact sets turn=0 during END.
+    Oracle: END waits on a dialog; a prompt starts a turn; a compact
+    arrives: no /exit. A Stop after it: /exit.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        (drive.folder / '.hq.done').write_text('')
+        drive.emit('Notification permission_prompt S1 0 0')
+        drive.stop()
+        assert _wait_for(lambda: any('is marked done' in x for x in drive.said()))
+        drive.emit('UserPromptSubmit - S1 0 0')
+        drive.emit('SessionStart compact S1 0 0')
+        time.sleep(QUIET)
+        assert drive.typed() == [READ]
+        drive.stop()
+        assert drive.driver.wait(timeout=15) == 0
+        assert drive.typed() == [READ, '/exit']
+    finally:
+        drive.close()
+
+
+def test_end_ignores_subagent_tool_calls(tmp_path):
+    """Verify subagent tool calls during the END wait do not delay /exit.
+
+    Mutation: the non-main PostToolUse test dropped from END's quiet
+    check, so each agent call pushes quiet_due out.
+    Oracle: a Stop after a dialog starts the quiet wait; subagent calls
+    every 0.5 s for up to 20 s, until the driver exits.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        (drive.folder / '.hq.done').write_text('')
+        drive.emit('Notification permission_prompt S1 0 0')
+        drive.stop()
+        assert _wait_for(lambda: any('is marked done' in x for x in drive.said()))
+        drive.emit('PostToolUse main S1 0 0')
+        drive.stop()
+        for _ in range(40):
+            if drive.driver.poll() is not None:
+                break
+            drive.emit('PostToolUse agent1 S1 0 0')
+            time.sleep(0.5)
+        assert drive.driver.wait(timeout=1) == 0
+        assert drive.typed() == [READ, '/exit']
+    finally:
+        drive.close()
+
+
+def test_end_deadline_skips_exit_in_a_turn(tmp_path):
+    """Verify END with a turn still open at its deadline types no /exit
+    and sends TERM.
+
+    Mutation: the turn test dropped from close_claude, so /exit lands in
+    a working turn.
+    Oracle: a hung launcher, END under a dialog, a prompt: after the
+    deadline the TERM marker exists and only the read was typed.
+    """
+    drive = _Drive(tmp_path, 10, launcher=_hung_launcher(tmp_path))
+    try:
+        drive.start()
+        (drive.folder / '.hq.done').write_text('')
+        drive.emit('Notification permission_prompt S1 0 0')
+        drive.stop()
+        assert _wait_for(lambda: any('is marked done' in x for x in drive.said()))
+        drive.emit('UserPromptSubmit - S1 0 0')
+        assert drive.driver.wait(timeout=60) == 0
+        assert (tmp_path / 'termed').exists()
+        assert drive.typed() == [READ]
+    finally:
+        drive.close()

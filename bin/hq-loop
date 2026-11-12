@@ -308,7 +308,7 @@ drive() {
             return 0
         fi
         if ((sent >= 0)); then
-            if ((retries < RETRY_CAP)); then
+            if ((retries < RETRY_CAP || stop_tasks > 0)); then
                 if type_write; then ((++retries)); fi
             else
                 park_with write alert "a write was typed $((retries + 1)) times and cycle $((base + 1)) is not written"
@@ -366,7 +366,7 @@ drive() {
                 stop_due=$((SECONDS + DEBOUNCE + 1))
                 ;;
             StopFailure)
-                turn=0 stop_due=0 stop_tasks=$tasks stop_endsq=$endsq
+                turn=0 stop_due=0 stop_endsq=$endsq
                 park_with error alert "claude stopped on an API error: $src"
                 ;;
             UserPromptSubmit)
