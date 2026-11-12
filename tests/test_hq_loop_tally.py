@@ -19,17 +19,20 @@ _SPEC.loader.exec_module(tally)
 
 
 def _run(monkeypatch, state_path, lines):
+    """Run tally.py under HQ_MEASURE=1; stdout on exit 0, else stderr.
+    """
+    monkeypatch.setenv('HQ_MEASURE', '1')
     monkeypatch.setattr('sys.stdin', io.StringIO(''.join(f'{x}\n' for x in lines)))
-    out = io.StringIO()
-    with contextlib.redirect_stdout(out):
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         rc = tally.main([str(state_path), 'open_tests', 'tests_closed'])
-    return rc, out.getvalue().strip()
+    return rc, (out if rc == 0 else err).getvalue().strip()
 
 
 def test_a_regression_counts_in_r_and_takes_one_from_t(tmp_path, monkeypatch):
     """Verify a unit seen closed then open stays out of K and lowers T.
 
-    Mutation: admission ignores seen-closed, so a flaky unit closes for
+    Mutation: admission on any open line, so a flaky unit closes for
     free and lifts T; or T counts only K minus O, so fix-one-break-one
     reads as progress.
     Oracle: hand-traced runs: a open, b closed; then b open; then a
@@ -123,16 +126,55 @@ def test_a_malformed_state_row_names_its_line(tmp_path, monkeypatch):
     field the row form bars.
     """
     state_path = tmp_path / 's.tally.tsv'
-    header = 'id\tadmitted\tseen_closed\tlast\tsites'
+    header = 'id\tadmitted\tlast\tsites'
     for bad in (
-            'b\t2\t0\topen\t1', 'b\t1\t2\topen\t1', 'b\t1\t0\tshut\t1',
-            'b\t1\t0\topen\tmany', 'b\t1\t0\topen'):
-        state_path.write_text(f'{header}\na\t1\t0\topen\t1\n{bad}\n')
+            'b\t2\topen\t1', 'b\t1\tshut\t1', 'b\t1\topen\tmany',
+            'b\t1\topen', 'b\t1\t0\topen\t1'):
+        state_path.write_text(f'{header}\na\t1\topen\t1\n{bad}\n')
         state_bytes = state_path.read_bytes()
         rc, out = _run(monkeypatch, state_path, ['end'])
         assert rc == 2
         assert out == f'tally: {state_path}:3 is no tally row'
         assert state_path.read_bytes() == state_bytes
+
+
+def test_an_old_five_column_state_reads_by_position(tmp_path, monkeypatch):
+    """Verify a state file with the seen_closed column keeps each unit.
+
+    Mutation: the old header refused, the wrong column dropped, or the
+    dropped column left unchecked.
+    Oracle: a admitted and open with 3 sites, b first named closed; a
+    run naming b open reads as a regression and rewrites both rows; a
+    seen_closed of 2 is refused.
+    """
+    state_path = tmp_path / 's.tally.tsv'
+    state_path.write_text(
+        'id\tadmitted\tseen_closed\tlast\tsites\n'
+        'a\t1\t0\topen\t3\nb\t0\t1\tclosed\t0\n')
+    assert _run(monkeypatch, state_path, ['open b', 'end']) == (
+        0, 'open_tests=4->0 tests_closed=+-1')
+    assert state_path.read_text().splitlines() == [
+        'id\tadmitted\tlast\tsites', 'a\t1\topen\t3', 'b\t0\topen\t1']
+    state_path.write_text(
+        'id\tadmitted\tseen_closed\tlast\tsites\na\t1\t2\topen\t1\n')
+    assert _run(monkeypatch, state_path, ['end']) == (
+        2, f'tally: {state_path}:2 is no tally row')
+
+
+def test_a_dry_run_writes_no_state(tmp_path, monkeypatch):
+    """Verify a run without HQ_MEASURE=1 prints its tokens and writes nothing.
+
+    Mutation: the HQ_MEASURE gate dropped, so a dry run moves the known
+    set and the next measured cycle reads no change.
+    Oracle: the directory listing after one dry run.
+    """
+    monkeypatch.delenv('HQ_MEASURE', raising=False)
+    monkeypatch.setattr('sys.stdin', io.StringIO('open a\nend\n'))
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        rc = tally.main([str(tmp_path / 'probes' / 's.tally.tsv'), 'R', 'T'])
+    assert (rc, out.getvalue().strip()) == (0, 'R=1->0 T=+0')
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_argument_refusals_exit_2_and_write_nothing(tmp_path, monkeypatch):
@@ -150,11 +192,11 @@ def test_argument_refusals_exit_2_and_write_nothing(tmp_path, monkeypatch):
             [state, 'r', '1bad'], [state, 'r', 'bad-name'], [state, 'n', 'n'],
             [state, 'r@0', 't'], [state, 'r@', 't'], [state, 'r@x', 't']):
         monkeypatch.setattr('sys.stdin', io.StringIO('end\n'))
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
             rc = tally.main(argv)
         assert rc == 2, argv
-        assert out.getvalue().startswith('tally: ')
+        assert err.getvalue().startswith('tally: ')
         assert list(tmp_path.iterdir()) == []
 
 

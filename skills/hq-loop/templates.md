@@ -30,12 +30,6 @@ on both.
 #!/bin/sh
 set -e
 state="$(dirname "$0")/tally.tsv"
-if [ "$HQ_MEASURE" != 1 ]; then
-    scratch=$(mktemp -d)
-    trap 'rm -rf "$scratch"' EXIT
-    [ ! -f "$state" ] || cp "$state" "$scratch/tally.tsv"
-    state="$scratch/tally.tsv"
-fi
 files=$(git ls-files 'src/*.py' | while IFS= read -r file; do
     [ ! -f "$file" ] || printf '%s\n' "$file"
 done)
@@ -51,8 +45,7 @@ done)
 gone=$([ ! -f "$state" ] || tail -n +2 "$state" | cut -f1 |
     grep -vxF -e "$files" | sed 's/^/closed /')
 line=$(printf '%s\n%s\nend\n' "$units" "$gone" |
-    python3 "$HQ_TALLY" "$state" open_sites@1 sites_closed) ||
-    { echo "$line" >&2; exit 1; }
+    python3 "$HQ_TALLY" "$state" open_sites@1 sites_closed) || exit 1
 echo "$line"
 ```
 

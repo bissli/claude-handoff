@@ -7,12 +7,13 @@ for the summary line:
 
 Notes
 -----
-- K, the known set, never shrinks. A unit enters it on its first open
-  line, unless a run named it closed first: a unit seen closed and then
-  open is a regression, which counts in R and takes one from T.
+- K, the known set, never shrinks. A unit enters it when the first
+  line that names it is open. A unit first named closed and later open
+  is a regression, which counts in R and takes one from T.
 - A known unit the run does not name keeps its last state, so a crash
   or a masking error never closes it. A grep probe names each clean
   file in its definition as closed.
+- The state file changes only under ``HQ_MEASURE=1``.
 """
 
 import decimal
@@ -24,7 +25,8 @@ import sys
 _NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
 _STEP = re.compile(r'[0-9]+(?:\.[0-9]+)?')
 _LINE = re.compile(r'(open|closed)(?::([0-9]+))?[ \t]+([^\s](?:[^\t]*[^\s])?)')
-_HEADER = 'id\tadmitted\tseen_closed\tlast\tsites'
+_HEADER = 'id\tadmitted\tlast\tsites'
+_OLD_HEADER = 'id\tadmitted\tseen_closed\tlast\tsites'
 
 
 def read_state(state_path: pathlib.Path) -> dict[str, dict]:
@@ -33,36 +35,42 @@ def read_state(state_path: pathlib.Path) -> dict[str, dict]:
     Parameters
     ----------
     state_path : pathlib.Path
-        The tab-separated state file this script writes.
+        The tab-separated state file this script writes. A file with
+        the older five-column header, which holds a seen_closed column
+        third, reads with that column dropped.
 
     Returns
     -------
     dict[str, dict]
-        Per id: ``admitted`` and ``seen_closed`` as bool, ``last`` as
-        ``open`` or ``closed``, ``sites`` as int.
+        Per id: ``admitted`` as bool, ``last`` as ``open`` or
+        ``closed``, ``sites`` as int.
 
     Raises
     ------
     ValueError
-        The header differs, or a row is not five fields in the written
-        form. The message names the file and line.
+        The header differs, or a row is not in the written form. The
+        message names the file and line.
     """
     if not state_path.is_file():
         return {}
     lines = state_path.read_text(encoding='utf-8').splitlines()
-    if not lines or lines[0] != _HEADER:
+    if not lines or lines[0] not in {_HEADER, _OLD_HEADER}:
         raise ValueError(f'{state_path}:1 is no tally header')
+    old = lines[0] == _OLD_HEADER
     unit_by_id: dict[str, dict] = {}
     for line_no, line in enumerate(lines[1:], start=2):
         fields = line.split('\t')
-        if (len(fields) != 5 or fields[1] not in {'0', '1'}
-            or fields[2] not in {'0', '1'}
-            or fields[3] not in {'open', 'closed'}
-            or not fields[4].isdigit()):
+        if old:
+            if len(fields) != 5 or fields[2] not in {'0', '1'}:
+                raise ValueError(f'{state_path}:{line_no} is no tally row')
+            del fields[2]
+        if (len(fields) != 4 or fields[1] not in {'0', '1'}
+            or fields[2] not in {'open', 'closed'}
+            or not fields[3].isdigit()):
             raise ValueError(f'{state_path}:{line_no} is no tally row')
         unit_by_id[fields[0]] = {
-            'admitted': fields[1] == '1', 'seen_closed': fields[2] == '1',
-            'last': fields[3], 'sites': int(fields[4]),
+            'admitted': fields[1] == '1', 'last': fields[2],
+            'sites': int(fields[3]),
             }
     return unit_by_id
 
@@ -105,14 +113,12 @@ def apply_run(unit_by_id: dict[str, dict], run_text: str) -> None:
         run_by_id[unit_id] = (line_m.group(1), int(line_m.group(2) or 1))
     for unit_id, (run_state, sites) in run_by_id.items():
         unit = unit_by_id.setdefault(unit_id, {
-            'admitted': False, 'seen_closed': False, 'last': 'closed', 'sites': 0,
+            'admitted': run_state == 'open', 'last': 'closed', 'sites': 0,
             })
         if run_state == 'open':
-            if not unit['seen_closed']:
-                unit['admitted'] = True
             unit.update(last='open', sites=sites)
         else:
-            unit.update(seen_closed=True, last='closed')
+            unit['last'] = 'closed'
 
 
 def tokens(
@@ -151,7 +157,7 @@ def tokens(
 
 
 def main(argv: list[str]) -> int:
-    """Update the state file from stdin and print the tokens.
+    """Print the tokens for the run on stdin; under HQ_MEASURE=1, store it.
 
     Parameters
     ----------
@@ -163,36 +169,38 @@ def main(argv: list[str]) -> int:
     -------
     int
         0 after printing the tokens; 2 on bad arguments, a bad run or a
-        bad state file, with the cause printed and nothing written.
+        bad state file, with the cause on stderr and nothing written.
     """
     if len(argv) != 3:
-        print('tally: takes <state file> <remaining>[@<step>] <tally>')
+        print('tally: takes <state file> <remaining>[@<step>] <tally>', file=sys.stderr)
         return 2
     state_path = pathlib.Path(argv[0])
     remaining, _, step = argv[1].partition('@')
     tally = argv[2]
     names_ok = bool(_NAME.fullmatch(remaining) and _NAME.fullmatch(tally))
     if not names_ok or remaining == tally:
-        print('tally: <remaining> and <tally> are two distinct summary names')
+        print(
+            'tally: <remaining> and <tally> are two distinct summary names',
+            file=sys.stderr)
         return 2
     if '@' in argv[1] and not (_STEP.fullmatch(step) and decimal.Decimal(step) > 0):
-        print(f'tally: step {step!r} is no decimal above 0')
+        print(f'tally: step {step!r} is no decimal above 0', file=sys.stderr)
         return 2
     try:
         unit_by_id = read_state(state_path)
         apply_run(unit_by_id, sys.stdin.read())
     except ValueError as exc:
-        print(f'tally: {exc}')
+        print(f'tally: {exc}', file=sys.stderr)
         return 2
-    rows = [_HEADER] + [
-        f'{unit_id}\t{int(unit["admitted"])}\t{int(unit["seen_closed"])}'
-        f'\t{unit["last"]}\t{unit["sites"]}'
-        for unit_id, unit in sorted(unit_by_id.items())
-        ]
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    staged = state_path.with_name(state_path.name + '.tmp')
-    staged.write_text('\n'.join(rows) + '\n', encoding='utf-8')
-    os.replace(staged, state_path)
+    if os.environ.get('HQ_MEASURE') == '1':
+        rows = [_HEADER] + [
+            f'{unit_id}\t{int(unit["admitted"])}\t{unit["last"]}\t{unit["sites"]}'
+            for unit_id, unit in sorted(unit_by_id.items())
+            ]
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        staged = state_path.with_name(state_path.name + '.tmp')
+        staged.write_text('\n'.join(rows) + '\n', encoding='utf-8')
+        os.replace(staged, state_path)
     print(tokens(unit_by_id, remaining, tally, f'@{step}' if step else ''))
     return 0
 
