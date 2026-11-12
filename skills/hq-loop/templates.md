@@ -30,7 +30,8 @@ units.
 #!/bin/sh
 set -e
 state="$(dirname "$0")/tally.tsv"
-files=$(git ls-files 'src/*.py' | while IFS= read -r file; do
+listed=$(git ls-files 'src/*.py')
+files=$(printf '%s\n' "$listed" | while IFS= read -r file; do
     [ ! -f "$file" ] || printf '%s\n' "$file"
 done)
 units=$(printf '%s\n' "$files" | while IFS= read -r file; do

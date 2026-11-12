@@ -331,7 +331,8 @@ def test_a_ruling_with_no_probe_still_ends_the_hold(tmp_path, monkeypatch):
     (loop_dir / 'ruling').write_text('drop the probe\n')
     _cycle()
     assert not (loop_dir / 'hold').exists()
-    assert _rows(folder)[-1]['log'] == 'stall review: drop the probe | work'
+    assert _rows(folder)[-1]['log'] == (
+        'summary: unmeasured | stall review: drop the probe | work')
 
 
 def test_stalls_from_four_hold(tmp_path, monkeypatch):

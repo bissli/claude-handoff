@@ -6431,7 +6431,9 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
                 f' | {log_text or "-"}')
     elif ruling_text is not None:
         ruling_text = ruling_text.replace('|', '/') or '-'
-        stored_log = f'stall review: {ruling_text} | {log_text or "-"}'
+        stored_log = (
+            f'summary: unmeasured | stall review: {ruling_text}'
+            f' | {log_text or "-"}')
     stall_result = stall_count(
         manifest + [{'cycle': str(anch['cycle']), 'log': stored_log}])
     last_worked = anch['now'][:10]

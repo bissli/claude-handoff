@@ -471,6 +471,21 @@ def test_a_tally_first_entry_is_silent():
     assert _stalls(ruled)[-2:] == [0, 1]
 
 
+def test_a_no_probe_ruling_row_resets_the_streak():
+    """Verify the stored no-probe ruling row zeroes the count for a later probe.
+
+    Mutation: a ruling read only on a row with tokens, so the unmeasured
+    ruling row is skipped and a restored probe's first row continues the
+    streak.
+    Oracle: hand-counted stuck rows 0,1,2,3 on one name, the ruling row,
+    then the same stuck value again.
+    """
+    ruled = _STREAK_THREE + [
+        'summary: unmeasured | stall review: drop the probe | work',
+        'summary: a=5->0 | work']
+    assert _stalls(ruled) == [0, 1, 2, 3, 0, 0]
+
+
 def test_a_name_that_changes_kind_is_stuck():
     """Verify a kind change is stuck in both directions and restarts the name.
 

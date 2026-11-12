@@ -320,3 +320,124 @@ def test_custom_score_template_ignores_stderr(tmp_path):
     done = subprocess.run(
         [str(probe)], cwd=tmp_path, env=env, capture_output=True, text=True)
     assert done.stdout.strip().splitlines()[-1] == 'score=85->90@1', done
+
+
+def _git_repo_with_todo(tmp_path):
+    """Init a repo in tmp_path holding a committed src/a.py with one TODO.
+    """
+    def git(*args):
+        subprocess.run(
+            ['git', '-c', 'user.name=t', '-c', 'user.email=t@example.com',
+             *args], cwd=tmp_path, check=True, capture_output=True)
+
+    git('init', '-q')
+    (tmp_path / 'src').mkdir()
+    (tmp_path / 'src' / 'a.py').write_text('# TODO fix\n')
+    git('add', 'src/a.py')
+    git('commit', '-qm', 'add')
+
+
+def _tally_env():
+    """The environment with HQ_MEASURE=1 and HQ_TALLY set to tally.py.
+    """
+    return {**os.environ, 'HQ_MEASURE': '1', 'HQ_TALLY': str(_SCRIPT)}
+
+
+def test_tally_template_fails_outside_a_git_repo(tmp_path):
+    """Verify a failed git ls-files fails the probe and writes no state.
+
+    Mutation: git ls-files piped straight into the filter loop, so its
+    exit status is lost, the listing reads empty and every known unit
+    reads closed.
+    Oracle: a state file seeded by a run in a repo, then the probe run in
+    a plain directory with its bytes compared.
+    """
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    _git_repo_with_todo(repo)
+    probe = _template(tmp_path, 'Tally', tmp_path / 'probes' / 'hq-measure')
+    state = tmp_path / 'probes' / 'tally.tsv'
+    seeded = subprocess.run(
+        [str(probe)], cwd=repo, env=_tally_env(), capture_output=True, text=True)
+    assert seeded.stdout.startswith('open_sites=1->0'), seeded
+    state_bytes = state.read_bytes()
+    plain = tmp_path / 'plain'
+    plain.mkdir()
+    ceiling_env = {**_tally_env(), 'GIT_CEILING_DIRECTORIES': str(tmp_path)}
+    done = subprocess.run(
+        [str(probe)], cwd=plain, env=ceiling_env,
+        capture_output=True, text=True)
+    assert done.returncode != 0, done
+    assert done.stdout == ''
+    assert state.read_bytes() == state_bytes
+
+
+def test_tally_template_closes_a_file_removed_from_disk_only(tmp_path):
+    """Verify a file still in the index but gone from disk reads closed.
+
+    Mutation: the existing-file filter dropped, so grep -c fails on the
+    missing file and the probe exits nonzero.
+    Oracle: hand-traced runs, one TODO in src/a.py, then a plain rm.
+    """
+    _git_repo_with_todo(tmp_path)
+    probe = _template(tmp_path, 'Tally', tmp_path / 'probes' / 'hq-measure')
+
+    def run_probe():
+        return subprocess.run(
+            [str(probe)], cwd=tmp_path, env=_tally_env(),
+            capture_output=True, text=True)
+
+    assert run_probe().stdout.startswith('open_sites=1->0')
+    (tmp_path / 'src' / 'a.py').unlink()
+    second = run_probe()
+    assert second.returncode == 0, second
+    assert second.stdout.startswith('open_sites=0->0'), second
+
+
+def test_pass_or_fail_template_does_not_count_a_flaky_pass(tmp_path):
+    """Verify a test failing once and passing on the rerun counts as 0 failing.
+
+    Mutation: --lf dropped from the rerun, so a full rerun also runs
+    the test that fails on any second run; or the first run's failures
+    counted.
+    Oracle: a flaky test failing until its marker exists, and a test
+    that passes once and fails if it runs again.
+    """
+    (tmp_path / 'test_x.py').write_text(
+        'import pathlib\n\n'
+        'def test_flaky():\n'
+        "    marker = pathlib.Path('marker')\n"
+        '    seen = marker.exists()\n'
+        '    marker.touch()\n'
+        '    assert seen\n\n'
+        'def test_once_only():\n'
+        "    marker = pathlib.Path('ran')\n"
+        '    seen = marker.exists()\n'
+        '    marker.touch()\n'
+        '    assert not seen\n')
+    env = _shim_python3(tmp_path, f'exec {sys.executable} "$@"')
+    probe = _template(tmp_path, 'Pass or Fail', tmp_path / 'probe.sh')
+    done = subprocess.run(
+        [str(probe)], cwd=tmp_path, env=env, capture_output=True, text=True)
+    assert (done.returncode, done.stdout.strip()) == (0, 'failing=0->0'), done
+
+
+def test_custom_score_template_relays_a_failed_coverage_run(tmp_path):
+    """Verify a failing coverage run exits nonzero with its stdout on stderr.
+
+    Mutation: the stdout relay dropped, so the failure exits with
+    nothing for the stored row to name.
+    Oracle: a python3 shim printing a message to stdout and exiting 2.
+    """
+    env = _shim_python3(
+        tmp_path,
+        'if [ "$*" = "-m coverage report --format=total --fail-under=0" ]; then\n'
+        '    echo "coverage: no data to report"\n'
+        '    exit 2\n'
+        'fi')
+    probe = _template(tmp_path, 'Custom Score', tmp_path / 'probe.sh')
+    done = subprocess.run(
+        [str(probe)], cwd=tmp_path, env=env, capture_output=True, text=True)
+    assert done.returncode == 1, done
+    assert done.stderr.strip().splitlines()[-1] == 'coverage: no data to report'
+    assert done.stdout == ''
