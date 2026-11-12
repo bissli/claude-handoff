@@ -1414,6 +1414,32 @@ def test_end_terms_descendants_of_a_hung_launcher(tmp_path):
         drive.close()
 
 
+def test_end_under_a_dialog_waits_for_work_to_resume(tmp_path):
+    """Verify END begun under an open dialog types no /exit until a main
+    tool call and a Stop clear it.
+
+    Mutation: the dialog gate dropped from END's quiet check, so /exit
+    lands in the open dialog.
+    Oracle: a dialog, then a Stop on a done thread: no /exit; a main tool
+    call, then a Stop: /exit.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        (drive.folder / '.hq.done').write_text('')
+        drive.emit('Notification permission_prompt S1 0 0')
+        drive.stop()
+        assert _wait_for(lambda: any('is marked done' in x for x in drive.said()))
+        time.sleep(QUIET)
+        assert drive.typed() == [READ]
+        drive.emit('PostToolUse main S1 0 0')
+        drive.stop()
+        assert drive.driver.wait(timeout=15) == 0
+        assert drive.typed() == [READ, '/exit']
+    finally:
+        drive.close()
+
+
 def test_launch_guards(tmp_path):
     """Verify launch dies on a leftover lock, and once it starts, hands
     claude the slug and a settings file that hooks all six events.

@@ -33,27 +33,39 @@ die() {
 # never reads half a line. A field never prints empty, because read
 # would collapse it. A monitor lists as type shell, so neither counts
 # as a task that keeps the session busy.
+# The one jq call prints four lines: the event line, the event name,
+# the last nonblank line of the reply, and the prompt read as a ruling.
 hook() {
-    local dir=$1 payload event slug ruling
-    payload=$(cat)
-    jq -r '[.hook_event_name,
-            (if .hook_event_name == "PostToolUse"
-             then ((.agent_id | strings | select(. != "")) // "main")
-             else ([.source, .error, .notification_type]
-                   | map(select(. != null and . != "")) | first // "-") end),
-            (.session_id // "-"),
-            ([.background_tasks | arrays | .[]
-              | select(.type != "monitor" and .type != "shell")] | length),
-            (if ((.last_assistant_message | strings) // "") | test("[?]\\s*$")
-             then 1 else 0 end)
-           ] | map(tostring) | join(" ")' <<<"$payload" >>"$dir/events" || true
-    event=$(jq -r '.hook_event_name // ""' <<<"$payload" 2>/dev/null) || exit 0
+    local dir=$1 line='' event='' last='' ruling='' slug
+    {
+        IFS= read -r line && IFS= read -r event &&
+            IFS= read -r last && IFS= read -r ruling
+    } < <(jq -r --arg tail "$TAIL" '
+        ([.hook_event_name,
+          (if .hook_event_name == "PostToolUse"
+           then ((.agent_id | strings | select(. != "")) // "main")
+           else ([.source, .error, .notification_type]
+                 | map(select(. != null and . != "")) | first // "-") end),
+          (.session_id // "-"),
+          ([.background_tasks | arrays | .[]
+            | select(.type != "monitor" and .type != "shell")] | length),
+          (if ((.last_assistant_message | strings) // "") | test("[?]\\s*$")
+           then 1 else 0 end)
+         ] | map(tostring) | join(" ")),
+        (.hook_event_name // ""),
+        ((.last_assistant_message | strings) // ""
+         | [splits("\n") | select(test("\\S"))] | last // "" | .[:160]),
+        ((.prompt | strings) // "" | sub("^\\s+"; "") | sub("\\s+$"; "")
+         | if startswith("/") or startswith("<task-notification>")
+              or startswith("<agent-message") or endswith($tail)
+           then "skip"
+           else "rule " + ((split("\n") | first // "")[:160]) end)
+        ' 2>/dev/null) || true
+    [[ -z $line ]] || printf '%s\n' "$line" >>"$dir/events" || true
     slug=$(cat "$dir/slug" 2>/dev/null) || slug=
     case $event in
         Stop)
-            jq -r '(.last_assistant_message | strings) // ""
-                   | [splits("\n") | select(test("\\S"))] | last // ""
-                   | .[:160]' <<<"$payload" >"$dir/last" || true
+            printf '%s\n' "$last" >"$dir/last" || true
             ;;
         SessionStart)
             awk -F'\t' 'NR > 1 && NF { c = $1 } END { print c + 0 }' \
@@ -65,15 +77,7 @@ hook() {
         # tag. Any other prompt is the user's or a peer's, and the first
         # one after the hold is its ruling.
         UserPromptSubmit)
-            [[ -e $dir/hold && ! -e $dir/ruling ]] || exit 0
-            ruling=$(jq -r --arg tail "$TAIL" '
-                (.prompt | strings) // "" | sub("^\\s+"; "") | sub("\\s+$"; "")
-                | if startswith("/") or startswith("<task-notification>")
-                     or startswith("<agent-message") or endswith($tail)
-                  then "skip"
-                  else "rule " + ((split("\n") | first // "")[:160]) end
-                ' <<<"$payload") || exit 0
-            [[ $ruling == rule\ * ]] || exit 0
+            [[ -e $dir/hold && ! -e $dir/ruling && $ruling == rule\ * ]] || exit 0
             printf '%s\n' "${ruling#rule }" >"$dir/ruling"
             jq -n --arg c "This prompt ends the hold. Act on it by the loop rule, then run /handoff write $slug." \
                 '{hookSpecificOutput:
@@ -90,6 +94,7 @@ drive() {
     local launch_cycle base turn=0 tools=0 dialog=0 sent=-1 retries=0
     local stop_sent=0 compacts=0 agent_calls=0 park=''
     local stop_tasks=0 stop_endsq=0 read_due=0 stop_due=0 tick_due
+    local ending='' end_due=0 quiet_due=0 rest
 
     # The trap runs after this function returns, when its locals are gone.
     # shellcheck disable=SC2064
@@ -134,34 +139,17 @@ drive() {
     }
 
     # END. launch prints the reason from $dir/end, rings, closes this
-    # pane and removes $dir.
+    # pane and removes $dir. The main loop closes claude once the
+    # session is quiet, or at the deadline.
     finish() {
-        local reason=$1 deadline quiet_due=$SECONDS rc
-        printf '%s\n' "$reason" >"$dir/end"
-        say "$reason"
-        deadline=$((SECONDS + EXIT_TIMEOUT))
-        while ((turn || dialog || SECONDS < quiet_due)) && ((SECONDS < deadline)); do
-            rc=0
-            read -r -t 1 -u 3 event src ev_sid tasks endsq _ || rc=$?
-            ((rc > 128)) && continue
-            ((rc == 0)) || break
-            if [[ $event == SessionStart ]]; then
-                sid=$ev_sid
-            elif [[ $ev_sid != "$sid" ]]; then
-                continue
-            fi
-            case $event in
-                Stop | StopFailure) turn=0 ;;
-                SessionStart) turn=0 dialog=0 ;;
-                UserPromptSubmit) turn=1 dialog=0 ;;
-                PostToolUse)
-                    [[ $src == main ]] || continue
-                    turn=1 dialog=0
-                    ;;
-                Notification) if is_dialog "$src"; then dialog=1; fi ;;
-            esac
-            quiet_due=$((SECONDS + DEBOUNCE + 1))
-        done
+        [[ -z $ending ]] || return 0
+        ending=$1
+        printf '%s\n' "$ending" >"$dir/end"
+        say "$ending"
+        end_due=$((SECONDS + EXIT_TIMEOUT)) quiet_due=$SECONDS
+    }
+
+    close_claude() {
         if ((turn == 0 && dialog == 0 && SECONDS >= quiet_due)); then
             send_line /exit || true
             sleep "$DEBOUNCE"
@@ -180,7 +168,7 @@ drive() {
         # launch still needs $dir/end once claude exits.
         if ! launcher_gone_within "$DEBOUNCE"; then
             trap - EXIT
-            alert "$reason. claude did not exit: close it by hand"
+            alert "$ending. claude did not exit: close it by hand"
         fi
         exit 0
     }
@@ -261,9 +249,11 @@ drive() {
         local cycle=$1
         if [[ -e $dir/stop ]]; then
             finish "stopped after cycle $cycle as requested"
+            return 0
         fi
         if ((cycle - launch_cycle >= max)); then
             finish "reached --max-cycles $max at cycle $cycle"
+            return 0
         fi
         if ((stop_tasks > 0)); then
             return 0
@@ -279,6 +269,7 @@ drive() {
         last=$(cat "$dir/last" 2>/dev/null) || last=
         if [[ -e $folder/.hq.done ]]; then
             finish "$slug is marked done"
+            return 0
         fi
         if ((stop_endsq)); then
             park_with question alert "$slug asks: $last"
@@ -349,16 +340,18 @@ drive() {
         for due in "$read_due" "$stop_due"; do
             ((due > 0 && due - SECONDS < wait_secs)) && wait_secs=$((due - SECONDS))
         done
-        ((wait_secs < 1)) && wait_secs=1
+        if [[ -n $ending ]] || ((wait_secs < 1)); then
+            wait_secs=1
+        fi
         rc=0
         read -r -t "$wait_secs" -u 3 event src ev_sid tasks endsq _ || rc=$?
         if ((rc > 128)); then
             event=-
         elif ((rc != 0)); then
             finish "event stream closed"
-        else
-            ring_hold
+            close_claude
         fi
+        ring_hold
 
         # Another session's event still lets the due checks below run.
         if [[ $event == SessionStart ]]; then
@@ -425,33 +418,47 @@ drive() {
                 ;;
         esac
 
-        if ((read_due > 0 && SECONDS >= read_due)); then
-            read_due=0 turn=0
-            type_line "/handoff read $slug" || true
-        fi
-        if ((stop_due > 0 && SECONDS >= stop_due)); then
-            stop_due=0
-            stop_decisions
-        fi
-        # The Stop decisions keep their order at a tick, so the Stop file
-        # never writes over a question or past a written cycle. A pending
-        # decision or read comes first.
-        if ((SECONDS >= tick_due)); then
-            tick_due=$((SECONDS + TICK_SECS))
-            if ((turn == 0)); then
-                ring_hold
+        if [[ -n $ending ]]; then
+            # A subagent's tool call leaves the main session quiet.
+            if [[ $event != - && ! ($event == PostToolUse && $src != main) ]]; then
+                quiet_due=$((SECONDS + DEBOUNCE + 1))
             fi
-            if ((turn == 0 && stop_due == 0 && read_due == 0)); then
-                if [[ -e $folder/.hq.done ]]; then
-                    finish "$slug is marked done"
-                elif [[ -e $dir/stop && ! -e $folder/.hq.lock ]] &&
-                    ((stop_sent == 0)); then
-                    stop_decisions
-                elif [[ $park == lock && ! -e $folder/.hq.lock ]]; then
-                    park=''
-                    stop_decisions
+        else
+            if ((read_due > 0 && SECONDS >= read_due)); then
+                read_due=0 turn=0
+                type_line "/handoff read $slug" || true
+            fi
+            if ((stop_due > 0 && SECONDS >= stop_due)); then
+                stop_due=0
+                stop_decisions
+            fi
+            # The Stop decisions keep their order at a tick, so the Stop
+            # file never writes over a question or past a written cycle.
+            # A pending decision or read comes first.
+            if [[ -z $ending ]] && ((SECONDS >= tick_due)); then
+                tick_due=$((SECONDS + TICK_SECS))
+                if ((turn == 0 && stop_due == 0 && read_due == 0)); then
+                    rest=0
+                    if [[ -e $folder/.hq.done ]]; then
+                        rest=1
+                    elif [[ ! -e $folder/.hq.lock ]]; then
+                        if [[ -e $dir/stop ]] && ((stop_sent == 0)); then
+                            rest=1
+                        fi
+                        if [[ $park == lock ]]; then
+                            park='' rest=1
+                        fi
+                    fi
+                    if ((rest)); then
+                        stop_decisions
+                    fi
                 fi
             fi
+        fi
+        if [[ -n $ending ]] &&
+            { ((turn == 0 && dialog == 0 && SECONDS >= quiet_due)) ||
+                ((SECONDS >= end_due)); }; then
+            close_claude
         fi
     done
 }
