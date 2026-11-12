@@ -27,7 +27,10 @@ The user runs `hq loop [--max-cycles N] <slug>` inside a tmux pane.
 Claude starts in that pane, and a driver pane opens below it. The
 driver types `/handoff read <slug>` at each session start, a nudge
 after a turn that made a tool call, `/handoff write <slug>` at the
-context budget, and `/clear` once the cycle is written.
+context budget, and `/clear` once the cycle is written. While a
+background task of the session runs, other than a shell or a monitor,
+the driver types only the read. The task's report starts the next
+turn, and the rest waits for a turn that ends with no such task.
 
 Under the loop, `hq open` prints `hq loop: no one is watching this
 session` and the loop rule. The rule outranks the reading steps, and
@@ -145,25 +148,17 @@ or `stall review:` from it.
 ### Templates
 
 `templates.md`, beside this file, holds the run contract, the rules
-every probe keeps and four starting probes. Read it before writing a
-probe.
+every probe keeps and four starting probes: Tally, Pass or Fail,
+Custom Score and Slow Measure. Read it before writing a probe.
 
-| Template     | Fits                                                |
-| ------------ | --------------------------------------------------- |
-| Tally        | Work whose open count can rise as the work finds it |
-| Pass or Fail | A suite whose failing count is the measure          |
-| Custom Score | A score that rises toward a goal by a step          |
-| Slow Measure | A measure that runs past the 60-second cap          |
-
-1. Adapt the template with the user. The probe holds every goal and
-   pattern it reads. Change one only at the user's word: at setup, at
-   an audit, or by a ruling (Hold).
+1. With the user, adapt the template that fits. Change a goal or a
+   pattern in it only at the user's word: at setup, at an audit, or
+   by a ruling (Hold).
 2. Write it to `.handoff/<slug>/probes/hq-measure` and make it
    executable.
-3. Run it from the thread's work dir, else the root, with `HQ_TALLY`
-   set to the `tally.py` beside this file and `HQ_MEASURE` unset, so
-   a probe that keeps state leaves it alone. A Slow Measure probe
-   prints nothing that way: run its slow command once instead.
+3. Run it by the run contract, but with `HQ_MEASURE` unset and
+   `HQ_TALLY` set to the `tally.py` beside this file. A Slow Measure
+   probe prints nothing that way: run its slow command once instead.
 4. The user watches the run and confirms the token line reads the
    right thing. Two runs with no edit between print the same line.
    The line reads off its goal: a probe at its goal holds the loop at
@@ -185,6 +180,8 @@ probe.
 - The finish line is met at exit 3, or by a measured row whose every
   counting token is at its goal. Its reason is that stderr line, else
   the token line.
+- With no probe, a ruling under the loop stores `unmeasured` as its
+  `<row>`, and every other finish stores the `--log` text alone.
 
 ### Grammar
 
@@ -193,15 +190,12 @@ probe.
 | `name=value->goal`      | counting | `open=31->0`     |
 | `name=value->goal@step` | counting | `score=72->80@1` |
 | `name=+N`               | tally    | `done=+45`       |
-| `name=+N@step`          | tally    | `done=+45@5`     |
 
 - A name is ASCII letters, digits and `_`, with no leading digit. A
-  number is a plain decimal, with an optional leading `-`. A step is
-  a decimal above 0. The line holds no `|`.
-- A row needs a counting token. Pass or fail is a failing count,
-  `failing=3->0`.
-- A probe prints the same names every run, 0 included, since a row of
-  new names is no progress.
+  number is a plain decimal, with an optional leading `-`. A counting
+  token's step is a decimal above 0, and a step on a tally is
+  ignored. The line holds no `|`.
+- A row needs a counting token.
 
 ### Progress
 
@@ -212,22 +206,24 @@ A row is progress when one token improves:
     unstepped: improved when distance < best
     stepped:   improved when distance <= best - step,
                or distance == 0 and best > 0
-    tally unstepped: improved when value > max
-    tally stepped:   improved when value >= max + step
+    tally:     improved when value > max
 
 - A name's first entry off its goal sets `side` to the sign of
   `current - goal`.
 - A name's `best` and `max` move only when that name improves, so
   gains below the step add up toward the next credit.
-- A changed goal or step restarts that name's state from that row.
-- The first row of a window and an at-goal row leave the stall as it
-  stands. A tally's first entry counts for nothing.
-- A ruling sets the stall to 0, opens a window and clears every
-  name's state.
+- A changed kind, or a counting token's changed goal or step,
+  restarts that name's state from that row.
+- A thread's first measured row and an at-goal row leave the stall as
+  it stands. A tally's first entry counts for nothing.
+- A ruling sets the stall to 0 and clears every name's state. The
+  first measured row from the ruling row on counts as a thread's
+  first.
 
-At a stall of 2 or more, `hq open` prints `stall: <n> cycles without
-progress (<cause>) - close a unit on another workable item`. The
-cause is the newest row's probe-failed cause, else `no measured
+At a stall of 2 or more, and only while an executable
+`probes/hq-measure` exists, `hq open` prints `stall: <n> cycles
+without progress (<cause>) - close a unit on another workable item`.
+The cause is the newest row's probe-failed cause, else `no measured
 gain`.
 
 ## Hold
@@ -280,38 +276,59 @@ user for the driver pane's last lines or the `hq loop:` line.
 
 ### Pane lines
 
-- `<slug> asks: <last line>`, with a bell: the turn ended on `?`. The
-  user answers in the claude pane. A grant in Directives keeps that
-  question from coming again, except for a step no grant covers
-  (Setup step 2).
-- `<slug> waits: <last line>`: nothing is workable, or every Plan
-  item is done. The user's prompt starts the next turn, as does the
-  end of a monitor the session started.
-- `<slug> holds: <hold line>`, with a bell. At a stall, read the rows
-  in `hq arc` and repair a probe that failed. Otherwise the user
-  rules (Hold). At a met finish line, the user gives a new goal, or
-  ends the thread with `/handoff done <slug>`.
-- `hq finish has not passed after 2 retries`, with a bell: fix what
-  the `hq finish` message in the claude pane names.
-- `a write was typed 3 times and cycle <c> is not written`, with a
-  bell: the user reads the claude pane for what stops the write.
+The lines group by outcome. All but the waits ring the bell.
+
+Asks:
+
+- `<slug> asks: <last line>`: the turn ended on `?`. The user answers
+  in the claude pane. A grant in Directives keeps that question from
+  coming again, except for a step no grant covers (Setup step 2).
+- `claude is waiting for you (<type>)`: the user answers the dialog.
+  Until a prompt or a tool call follows, the driver types nothing.
+  Setup step 5 names the lasting fix.
+
+Waits:
+
+- `<slug> waits: <last line>`: nothing is workable, every Plan item
+  is done, or a background task of the session runs. The user's
+  prompt starts the next turn, as does the task's report or the end
+  of a monitor the session started.
 - `waits on the lock of <session>`: another session holds an open
   cycle on the thread. Finish it there, or run `hq begin <slug>
-  --force` once that session is dead.
-- `claude is waiting for you (<type>)`, with a bell: the user answers
-  the dialog. Setup step 5 names the lasting fix.
-- `claude stopped on an API error: <error>`, with a bell: any prompt
-  starts the next turn.
-- `compacted twice in cycle <n> with no write`, with a bell: the
-  context fills and no write follows. The user types `/handoff write
-  <slug>`.
-- `agents made 500 tool calls in cycle <c> with no write`, with a
-  bell, once a cycle: the user reads what the agents do.
-- `could not type into the claude pane`, with a bell: tmux refused
-  the keys. The next event that decides a line types it again.
-- `<reason>. claude did not exit: close it by hand`, with a bell.
-- No line and no typing: a denied dialog or an Escape ended the turn.
-  Any prompt starts the next one.
+  --force` once that session is dead. Once the lock is gone, the
+  driver goes on by itself.
+
+Holds:
+
+- `<slug> holds: <hold line>`. At a stall, read the rows in `hq arc`
+  and repair a probe that failed. Otherwise the user rules (Hold). At
+  a met finish line, the user gives a new goal, or ends the thread
+  with `/handoff done <slug>`. Each later turn end prints the hold
+  line alone, with no bell.
+
+Broken:
+
+- `hq finish has not passed after 2 retries`: fix what the `hq
+  finish` message in the claude pane names.
+- `a write was typed 3 times and cycle <c> is not written`: the user
+  reads the claude pane for what stops the write.
+- `claude stopped on an API error: <error>`: any prompt starts the
+  next turn.
+- `could not type into the claude pane`: tmux refused the keys. The
+  next event that decides a line types it again.
+- `<reason>. claude did not exit: close it by hand`.
+- `compacted twice in cycle <n> with no write`: the context fills and
+  no write follows. The user types `/handoff write <slug>`.
+- `agents made 500 tool calls in cycle <c> with no write`: the user
+  reads what the agents do.
+
+The last two are alarms. Each rings once a cycle and parks nothing,
+so the driver keeps typing.
+
+No line:
+
+- No typing either: a denied dialog or an Escape ended the turn. Any
+  prompt starts the next one.
 - A turn that never ends: one tool call never returns, and no bound
   reads it. The user interrupts it, and the command takes its own
   timeout.
@@ -334,10 +351,6 @@ summary, a stall question and a wind-down the loop does not have.
   other form fails the row. Write a pass or fail as a failing count.
 - A probe that runs a copied `probes/tally.py` runs `"$HQ_TALLY"` in
   its place.
-- A Plan line may name its tokens as `Coordinate: <name>.` and
-  `Tally: <name>.`. `hq finish` and `hq open` print an `advisory:
-  Plan` line for a name the newest measured row lacks. Print the
-  name from the probe, or cut it from the Plan line.
 - `hq finish` skips a stored row that holds no ` | `. A typed row
   that starts with `summary:` and holds ` | ` reads as a probe row:
   its tokens seed each name's state, and a stall such rows carry
