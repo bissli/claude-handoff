@@ -417,10 +417,11 @@ class _Drive:
         self.emit(f'SessionStart startup {sid} 0 0')
         assert _wait_for(lambda: len(self.typed()) == 1)
 
-    def stop(self, sid='S1', tasks=0, endsq=0, last='Waiting.'):
-        """Write the hook's last file, then emit a Stop.
+    def stop(self, sid='S1', tasks=0, endsq=0, last='Waiting.', jobs=0):
+        """Write the hook's last and jobs files, then emit a Stop.
         """
         (self.driver_dir / 'last').write_text(last + '\n')
+        (self.driver_dir / 'jobs').write_text(f'{jobs}\n')
         self.emit(f'Stop - {sid} {tasks} {endsq}')
 
     def said(self):
@@ -983,6 +984,135 @@ def test_no_nudge_beside_a_task(tmp_path):
         drive.emit('PostToolUse main S1 0 0')
         drive.stop()
         assert _wait_for(lambda: drive.typed() == [READ, _loop_text('NUDGE_TEXT')])
+    finally:
+        drive.close()
+
+
+NUDGE_PROMPT = 'UserPromptSubmit nudge S1 0 0'
+
+
+def _nudge_then_reply(drive, jobs):
+    """Run one working turn to its nudge, then one tool call in the
+    nudge's own turn, and Stop it with jobs running.
+    """
+    drive.start()
+    drive.emit('PostToolUse main S1 0 0')
+    drive.stop(jobs=jobs)
+    assert _wait_for(lambda: len(drive.typed()) == 2)
+    drive.emit(NUDGE_PROMPT)
+    drive.emit('PostToolUse main S1 0 0')
+    drive.stop(jobs=jobs, last='Waiting on the meter.')
+
+
+def test_nudge_reply_beside_a_job_parks(tmp_path):
+    """Verify a nudge's own turn that ends beside a running shell or
+    monitor parks as waiting, with no second nudge.
+
+    Mutation: the nudge keyed to tools alone, so a reply that checks on
+    its job earns a nudge per Stop for as long as the job runs.
+    Oracle: a recorded loop's event trace: nudge, one tool call,
+    Stop with a job running, which typed a second nudge.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        _nudge_then_reply(drive, jobs=1)
+        assert _wait_for(lambda: '[1/10] auth-refresh waits: Waiting on the meter.' in drive.said())
+        time.sleep(1)
+        assert drive.typed() == [READ, _loop_text('NUDGE_TEXT')]
+    finally:
+        drive.close()
+
+
+def test_nudge_repeats_with_no_job(tmp_path):
+    """Verify a nudge's own turn that worked, with no shell or monitor
+    running, gets the nudge again.
+
+    Mutation: the cap keyed to the nudge alone, so a session that stops
+    after each step parks with no event coming to wake it.
+    Oracle: the same trace with jobs 0 types a second nudge.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        _nudge_then_reply(drive, jobs=0)
+        nudge = _loop_text('NUDGE_TEXT')
+        assert _wait_for(lambda: drive.typed() == [READ, nudge, nudge])
+    finally:
+        drive.close()
+
+
+def test_a_wake_after_the_park_rearms_the_nudge(tmp_path):
+    """Verify a prompt the driver did not type, such as a task's
+    notice or the user's line, earns one nudge again beside a job.
+
+    Mutation: a nudged flag set at the nudge and never cleared, so every
+    later wake ends without a push for the rest of the cycle.
+    Oracle: park, then a foreign prompt, a tool call and a Stop with a
+    job: the nudge; its own reply then parks.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        _nudge_then_reply(drive, jobs=1)
+        assert _wait_for(lambda: '[1/10] auth-refresh waits: Waiting on the meter.' in drive.said())
+        drive.emit('UserPromptSubmit - S1 0 0')
+        drive.emit('PostToolUse main S1 0 0')
+        drive.stop(jobs=1)
+        nudge = _loop_text('NUDGE_TEXT')
+        assert _wait_for(lambda: drive.typed() == [READ, nudge, nudge])
+        drive.emit(NUDGE_PROMPT)
+        drive.emit('PostToolUse main S1 0 0')
+        drive.stop(jobs=1, last='Still waiting.')
+        assert _wait_for(lambda: '[1/10] auth-refresh waits: Still waiting.' in drive.said())
+        time.sleep(1)
+        assert drive.typed() == [READ, nudge, nudge]
+    finally:
+        drive.close()
+
+
+def test_a_notice_inside_the_nudge_turn_rearms_the_nudge(tmp_path):
+    """Verify a task's notice injected into the nudge's own turn earns
+    the nudge again beside a job.
+
+    Mutation: the cap keyed to the prompt that opened the turn, so a
+    job's result that lands mid-turn and is acted on gets no push.
+    Oracle: nudge prompt, tool call, injected foreign prompt, tool call,
+    Stop with a job: a second nudge.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        drive.emit('PostToolUse main S1 0 0')
+        drive.stop(jobs=1)
+        assert _wait_for(lambda: len(drive.typed()) == 2)
+        drive.emit(NUDGE_PROMPT)
+        drive.emit('PostToolUse main S1 0 0')
+        drive.emit('UserPromptSubmit - S1 0 0')
+        drive.emit('PostToolUse main S1 0 0')
+        drive.stop(jobs=1)
+        nudge = _loop_text('NUDGE_TEXT')
+        assert _wait_for(lambda: drive.typed() == [READ, nudge, nudge])
+    finally:
+        drive.close()
+
+
+def test_a_clear_rearms_the_nudge(tmp_path):
+    """Verify the first working turn after a clear gets the nudge beside
+    a job, even when the last cycle ended parked after a nudge.
+
+    Mutation: prompt set only by a nudge, so it stays nudge through the
+    read the driver types after a clear.
+    Oracle: park, clear, read, tool call, Stop with a job: the nudge.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        _nudge_then_reply(drive, jobs=1)
+        assert _wait_for(lambda: '[1/10] auth-refresh waits: Waiting on the meter.' in drive.said())
+        drive.emit('SessionStart clear S2 0 0')
+        assert _wait_for(lambda: len(drive.typed()) == 3)
+        drive.emit('UserPromptSubmit - S2 0 0')
+        drive.emit('PostToolUse main S2 0 0')
+        drive.stop(sid='S2', jobs=1)
+        nudge = _loop_text('NUDGE_TEXT')
+        assert _wait_for(lambda: drive.typed() == [READ, nudge, READ, nudge])
     finally:
         drive.close()
 
@@ -1646,6 +1776,54 @@ def test_tasks_leave_out_monitors_and_shells(tmp_path):
             {'id': 't2', 'type': 'shell'},
             {'id': 't3', 'type': 'subagent'}]})
     assert _events(tmp_path) == ['Stop - S1 1 0']
+
+
+def test_prompt_src_tags_the_nudge_alone(tmp_path):
+    """Verify a UserPromptSubmit carries src nudge only for the nudge.
+
+    Mutation: the tag keyed to the Tail, so every driver line, the
+    retry included, reads as the nudge.
+    Oracle: the nudge, the retry, a task notice and a user line, each
+    hand-mapped to its src.
+    """
+    for prompt in (
+            _loop_text('NUDGE_TEXT') + '\n',
+            _loop_text('RETRY_TEXT'),
+            '<task-notification>shell t1 done</task-notification>',
+            'how long until the meter finishes'):
+        _hook(tmp_path, {
+            'hook_event_name': 'UserPromptSubmit', 'session_id': 'S1',
+            'prompt': prompt})
+    assert _events(tmp_path) == [
+        'UserPromptSubmit nudge S1 0 0',
+        'UserPromptSubmit - S1 0 0',
+        'UserPromptSubmit - S1 0 0',
+        'UserPromptSubmit - S1 0 0']
+
+
+def test_jobs_count_monitors_and_shells_alone(tmp_path):
+    """Verify a Stop writes the count of monitor and shell tasks to the
+    jobs file.
+
+    Mutation: the jobs filter inverted or widened, so a subagent or an
+    idle teammate counts as a job and caps the nudge.
+    Oracle: a monitor, two shells, a subagent and a teammate write 3,
+    where the inverted filter writes 2; a Stop with no tasks writes 0.
+    """
+    _hook(tmp_path, {
+        'hook_event_name': 'Stop', 'session_id': 'S1',
+        'last_assistant_message': 'Waiting.',
+        'background_tasks': [
+            {'id': 't1', 'type': 'monitor'},
+            {'id': 't2', 'type': 'shell'},
+            {'id': 't3', 'type': 'shell'},
+            {'id': 't4', 'type': 'subagent'},
+            {'id': 't5', 'type': 'teammate', 'status': 'running'}]})
+    assert (tmp_path / 'jobs').read_text() == '3\n'
+    _hook(tmp_path, {
+        'hook_event_name': 'Stop', 'session_id': 'S1',
+        'last_assistant_message': 'Done.'})
+    assert (tmp_path / 'jobs').read_text() == '0\n'
 
 
 def test_tasks_leave_out_teammates(tmp_path):

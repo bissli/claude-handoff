@@ -34,17 +34,22 @@ die() {
 # would collapse it. A monitor lists as type shell, and an idle
 # teammate stays listed as running, so none of the three counts as a
 # task that keeps the session busy.
-# The one jq call prints four lines: the event line, the event name,
-# the last nonblank line of the reply, and the prompt read as a ruling.
+# The one jq call prints five lines: the event line, the event name,
+# the last nonblank line of the reply, the prompt read as a ruling, and
+# the count of monitor and shell tasks.
 hook() {
-    local dir=$1 line='' event='' last='' ruling='' slug
+    local dir=$1 line='' event='' last='' ruling='' jobs='' slug
     {
         IFS= read -r line && IFS= read -r event &&
-            IFS= read -r last && IFS= read -r ruling
-    } < <(jq -r --arg tail "$TAIL" '
+            IFS= read -r last && IFS= read -r ruling && IFS= read -r jobs
+    } < <(jq -r --arg tail "$TAIL" --arg nudge "$NUDGE_TEXT" '
         ([.hook_event_name,
           (if .hook_event_name == "PostToolUse"
            then ((.agent_id | strings | select(. != "")) // "main")
+           elif .hook_event_name == "UserPromptSubmit" and
+                ((.prompt | strings) // "" | sub("^\\s+"; "")
+                 | sub("\\s+$"; "")) == $nudge
+           then "nudge"
            else ([.source, .error, .notification_type]
                  | map(select(. != null and . != "")) | first // "-") end),
           (.session_id // "-"),
@@ -61,13 +66,16 @@ hook() {
          | if startswith("/") or startswith("<task-notification>")
               or startswith("<agent-message") or endswith($tail)
            then "skip"
-           else "rule " + ((split("\n") | first // "")[:160]) end)
+           else "rule " + ((split("\n") | first // "")[:160]) end),
+        ([.background_tasks | arrays | .[]
+          | select(.type | IN("monitor", "shell"))] | length)
         ' 2>/dev/null) || true
     [[ -z $line ]] || printf '%s\n' "$line" >>"$dir/events" || true
     slug=$(cat "$dir/slug" 2>/dev/null) || slug=
     case $event in
         Stop)
             printf '%s\n' "$last" >"$dir/last" || true
+            printf '%s\n' "$jobs" >"$dir/jobs" || true
             ;;
         SessionStart)
             awk -F'\t' 'NR > 1 && NF { c = $1 } END { print c + 0 }' \
@@ -96,7 +104,7 @@ drive() {
     local launch_cycle base turn=0 tools=0 dialog=0 sent=-1 retries=0
     local stop_sent=0 compacts=0 agent_calls=0 park=''
     local stop_tasks=0 stop_endsq=0 read_due=0 stop_due=0 tick_due
-    local ending='' end_due=0 quiet_due=0 rest
+    local ending='' end_due=0 quiet_due=0 rest prompt=''
 
     # The trap runs after this function returns, when its locals are gone.
     # shellcheck disable=SC2064
@@ -267,7 +275,7 @@ drive() {
     }
 
     stop_decisions() {
-        local last cycle lock_session budget band=-1
+        local last cycle lock_session budget jobs band=-1
         last=$(cat "$dir/last" 2>/dev/null) || last=
         if [[ -e $folder/.hq.done ]]; then
             finish "$slug is marked done"
@@ -325,7 +333,12 @@ drive() {
             fi
             return 0
         fi
-        if ((tools > 0 && stop_tasks == 0)); then
+        jobs=$(cat "$dir/jobs" 2>/dev/null) || jobs=0
+        # The driver reads a running job as what the session waits on,
+        # and the job's exit wakes it. A job that never exits, such as a
+        # server, parks the loop silently after one nudge.
+        if ((tools > 0 && stop_tasks == 0)) &&
+            { [[ $prompt != nudge ]] || ((jobs == 0)); }; then
             type_line "$NUDGE_TEXT" || true
             return 0
         fi
@@ -372,7 +385,7 @@ drive() {
                 park_with error alert "claude stopped on an API error: $src"
                 ;;
             UserPromptSubmit)
-                turn=1 tools=0 dialog=0 park='' stop_due=0
+                turn=1 tools=0 dialog=0 park='' stop_due=0 prompt=$src
                 ;;
             PostToolUse)
                 if [[ $src == main ]]; then
