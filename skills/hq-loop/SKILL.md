@@ -27,11 +27,14 @@ The user runs `hq loop [--max-cycles N] <slug>` inside a tmux pane.
 Claude starts in that pane, and a driver pane opens below it. The
 driver types `/handoff read <slug>` at each session start, a nudge
 after a turn that made a tool call, `/handoff write <slug>` at the
-context budget, and `/clear` once the cycle is written. While a
-background task of the session runs, other than a shell, a monitor
-or a teammate, the driver types only the read. The task's report
-starts the next turn, and the rest waits for a turn that ends with
-no such task.
+context budget, and `/clear` once the cycle is written. A running
+shell or monitor, or a session cron, holds the nudge, because its
+exit or wakeup starts the next turn. A shell that never exits, such
+as a server, holds the nudge for as long as it runs. Any other
+background task except a teammate holds the write and the clear
+too. Its report starts the next turn, and the driver types only the
+read until a turn ends with no such task. A teammate holds nothing.
+It stays listed as running while it idles, and it starts no turn.
 
 Under the loop, `hq open` prints `hq loop: no one is watching this
 session` and the loop rule. The rule outranks the reading steps, and
