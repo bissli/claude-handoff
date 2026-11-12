@@ -33,10 +33,11 @@ Under the loop, `hq open` prints `hq loop: no one is watching this
 session` and the loop rule. The rule outranks the reading steps, and
 the session follows it as printed:
 
-- The session decides every question, by the Directives where one
-  applies and on the evidence where none does. It asks only about a
-  step the user did not ask for that would weaken security or
-  stability, as the last line of the turn, ending on `?`.
+- The session asks only about a step the user did not ask for that
+  would weaken security or stability, as the last line of the turn,
+  ending on `?`. It decides every other question, including a choice
+  the work turns up, by the Directives where one applies and on the
+  evidence where none does, and leaves none to the user.
 - A finished step never ends the turn. With nothing workable, the
   session starts a background monitor on the file or job it waits on,
   says in one line what it waits on, and ends the turn.
