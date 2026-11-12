@@ -614,6 +614,62 @@ def test_own_lock_retries_twice_then_parks(tmp_path):
         drive.close()
 
 
+def test_own_lock_waits_beside_a_task(tmp_path):
+    """Verify a Stop under the session's own lock beside a background task
+    types no retry and counts none, so the retry waits for the report.
+
+    Mutation: the tasks test missing from the own-lock row, so a write
+    waiting on its Skeptic hears 'hq finish did not pass' and the third
+    such rest rings a false finish bell.
+    Oracle: three Stops with tasks 1: nothing typed, no finish bell, the
+    waits line said; then two Stops with tasks 0: two retries.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        (drive.folder / '.hq.lock').write_text('slug=auth-refresh\nsession=S1\n')
+        for _ in range(3):
+            drive.stop(tasks=1)
+            time.sleep(QUIET)
+        assert drive.typed() == [READ]
+        assert drive.rang('hq finish has not passed') == 0
+        assert '[1/10] auth-refresh waits: Waiting.' in drive.said()
+        for count in (2, 3):
+            drive.stop()
+            assert _wait_for(lambda: len(drive.typed()) == count)
+        assert drive.typed() == [READ] + [_loop_text('RETRY_TEXT')] * 2
+    finally:
+        drive.close()
+
+
+def test_own_lock_at_the_retry_cap_waits_beside_a_task(tmp_path):
+    """Verify a session whose write retries spent RETRY_CAP, then took
+    its lock and started a task, hears no finish bell until a Stop with
+    no task.
+
+    Mutation: the cap tested before the task, so the write's own Skeptic
+    rings 'hq finish has not passed' for retries that were write retries.
+    Oracle: band 0 over three Stops spends both retries; then under the
+    lock a Stop with tasks 1 rings nothing, and one with tasks 0 rings.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.set_band('S1', 0)
+        drive.start()
+        for count in (2, 3, 4):
+            drive.stop()
+            assert _wait_for(lambda: len(drive.typed()) == count)
+        (drive.folder / '.hq.lock').write_text('slug=auth-refresh\nsession=S1\n')
+        drive.stop(tasks=1)
+        time.sleep(QUIET)
+        assert drive.rang('hq finish has not passed') == 0
+        drive.stop()
+        assert _wait_for(lambda: drive.rang('hq finish has not passed after 2 retries') == 1)
+        assert drive.typed() == [READ] + [WRITE] * 3
+    finally:
+        drive.close()
+
+
 def test_rest_tick_runs_beside_agent_events(tmp_path):
     """Verify the rest tick keeps its clock while a background agent works.
 
@@ -791,6 +847,64 @@ def test_budget_band_writes_retry_then_park(tmp_path):
         drive.close()
 
 
+@pytest.mark.parametrize('cause', ['band', 'stop', 'ruling'])
+def test_write_waits_beside_a_task(tmp_path, cause):
+    """Verify each row that types the write waits while a background
+    task runs, and types it at the next Stop with none.
+
+    Mutation: the tasks test missing from the band, Stop-file or ruling
+    row, so a write starts while a review agent is still running.
+    Oracle: a Stop with tasks 1: only the read typed; a Stop with tasks
+    0 after it: the write.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        if cause == 'band':
+            drive.set_band('S1', 0)
+        drive.start()
+        if cause == 'stop':
+            (drive.driver_dir / 'stop').write_text('')
+        if cause == 'ruling':
+            (drive.driver_dir / 'hold').write_text('stall: held at 4.\n')
+            (drive.driver_dir / 'ruling').write_text('split it\n')
+        drive.stop(tasks=1)
+        time.sleep(QUIET)
+        assert drive.typed() == [READ]
+        drive.stop()
+        assert _wait_for(lambda: drive.typed() == [READ, WRITE])
+    finally:
+        drive.close()
+
+
+def test_write_retry_waits_beside_a_task_and_counts_none(tmp_path):
+    """Verify a write retry waits beside a background task, and the wait
+    spends none of RETRY_CAP.
+
+    Mutation: the retry row typing beside a task, or a wait counted as a
+    retry, so the write bell rings before three writes are typed.
+    Oracle: band 0: one write, two Stops with tasks 1 typing nothing,
+    then two retries and the bell naming three writes.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.set_band('S1', 0)
+        drive.start()
+        drive.stop()
+        assert _wait_for(lambda: len(drive.typed()) == 2)
+        for _ in range(2):
+            drive.stop(tasks=1)
+            time.sleep(QUIET)
+        assert drive.typed() == [READ, WRITE]
+        for count in (3, 4):
+            drive.stop()
+            assert _wait_for(lambda: len(drive.typed()) == count)
+        drive.stop()
+        assert _wait_for(lambda: drive.rang('a write was typed 3 times and cycle 1 is not written') == 1)
+        assert drive.typed() == [READ] + [WRITE] * 3
+    finally:
+        drive.close()
+
+
 def test_a_ruling_types_the_write(tmp_path):
     """Verify a hold with a ruling types the write at a Stop.
 
@@ -847,6 +961,31 @@ def test_a_working_turn_gets_a_nudge(tmp_path):
         drive.stop(last='Waiting on the build.')
         assert _wait_for(lambda: '[1/10] auth-refresh waits: Waiting on the build.' in drive.said())
         assert len(drive.typed()) == 2
+    finally:
+        drive.close()
+
+
+def test_no_nudge_beside_a_task(tmp_path):
+    """Verify a working turn that ends beside a background agent gets no
+    nudge, since the agent's report starts the next turn.
+
+    Mutation: row 10 keyed to tools alone, so a session waiting on its
+    own agent hears the nudge and spends a turn saying it still waits.
+    Oracle: tools 1 with tasks 1: the waits line, nothing typed; tools 1
+    with tasks 0 after it: the nudge.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        drive.emit('PostToolUse main S1 0 0')
+        drive.stop(tasks=1, last='Waiting on the review.')
+        assert _wait_for(lambda: '[1/10] auth-refresh waits: Waiting on the review.' in drive.said())
+        time.sleep(1)
+        assert drive.typed() == [READ]
+        drive.emit('UserPromptSubmit - S1 0 0')
+        drive.emit('PostToolUse main S1 0 0')
+        drive.stop()
+        assert _wait_for(lambda: drive.typed() == [READ, _loop_text('NUDGE_TEXT')])
     finally:
         drive.close()
 

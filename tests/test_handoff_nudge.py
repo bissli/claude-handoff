@@ -402,7 +402,8 @@ def test_notice_stops_once_a_cycle_is_written(tmp_path, monkeypatch):
         'hookEventName': 'PostToolUse',
         'additionalContext': (
             'Context is past the handoff point: finish the step in hand,'
-            ' then run /handoff write a-thread.')}}
+            ' wait for every running agent to report, then run'
+            ' /handoff write a-thread.')}}
     (folder / '.hq.lock').write_text(f'session={_SESSION}\n')
     _feed(monkeypatch, work, hook_event_name='PostToolUse')
     assert _run() == (0, '')
@@ -410,6 +411,26 @@ def test_notice_stops_once_a_cycle_is_written(tmp_path, monkeypatch):
     (tmp_path / 'loop' / 'mark').write_text('6\n')
     _feed(monkeypatch, work, hook_event_name='PostToolUse')
     assert _run() == (0, '')
+
+
+def test_notice_waits_for_running_agents_before_the_write(
+        tmp_path, monkeypatch):
+    """Verify the loop notice puts the write after every running agent's
+    report.
+
+    Mutation: the notice asking for the write right after the step in
+    hand, so a session writes while its review agent runs and must write
+    again once the report arrives.
+    Oracle: the notice text, with the agent wait before the write.
+    """
+    work, _ = _arm_loop(tmp_path, monkeypatch, mark=7)
+    _feed(monkeypatch, work, hook_event_name='PostToolUse')
+    rc, out = _run()
+    notice = json.loads(out)['hookSpecificOutput']['additionalContext']
+    assert notice == (
+        'Context is past the handoff point: finish the step in hand,'
+        ' wait for every running agent to report, then run'
+        ' /handoff write a-thread.')
 
 
 def test_notice_skips_agent_tool_calls(tmp_path, monkeypatch):
@@ -452,4 +473,5 @@ def test_notice_speaks_before_the_first_stop_stores_a_point(
     rc, out = _run()
     assert json.loads(out)['hookSpecificOutput']['additionalContext'] == (
         'Context is past the handoff point: finish the step in hand,'
-        ' then run /handoff write a-thread.')
+        ' wait for every running agent to report, then run'
+        ' /handoff write a-thread.')

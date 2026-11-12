@@ -168,7 +168,8 @@ def main() -> int:
         event = 'PostToolUse'
         message = (
             'Context is past the handoff point: finish the step in hand,'
-            f' then run /handoff write {slug}.')
+            ' wait for every running agent to report, then run'
+            f' /handoff write {slug}.')
     else:
         event = 'UserPromptSubmit'
         message = (

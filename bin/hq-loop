@@ -243,8 +243,17 @@ drive() {
         return 0
     }
 
+    # A report that arrives after the write would force a second write.
+    type_toward_write() {
+        if ((stop_tasks > 0)); then
+            park_with waits say "$slug waits: $last"
+            return 1
+        fi
+        type_line "$1"
+    }
+
     type_write() {
-        type_line "/handoff write $slug" || return 1
+        type_toward_write "/handoff write $slug" || return 1
         sent=$((sent < 0 ? 0 : sent))
     }
 
@@ -279,10 +288,10 @@ drive() {
             lock_session=$(awk -F= '$1 == "session" { print $2; exit }' \
                 "$folder/.hq.lock" 2>/dev/null) || lock_session=
             if [[ $lock_session == "$sid" ]]; then
-                if ((retries < RETRY_CAP)); then
-                    if type_line "$RETRY_TEXT"; then ((++retries)); fi
-                else
+                if ((retries >= RETRY_CAP && stop_tasks == 0)); then
                     park_with finish alert "hq finish has not passed after $retries retries"
+                elif type_toward_write "$RETRY_TEXT"; then
+                    ((++retries))
                 fi
             else
                 park_with lock say "waits on the lock of $lock_session"
@@ -323,7 +332,7 @@ drive() {
             fi
             return 0
         fi
-        if ((tools > 0)); then
+        if ((tools > 0 && stop_tasks == 0)); then
             type_line "$NUDGE_TEXT" || true
             return 0
         fi
