@@ -47,90 +47,28 @@ def witnessed_pairs(
     return result
 
 
-def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int:
-    """Adopt a conforming HANDOFF.md that has no ledger.
+def _collect_sections(
+    text: str,
+    header_text: str,
+) -> tuple[dict[str, list[str]], list[str], list[str]]:
+    """Split a foreign HANDOFF.md into its sections and the text above them.
 
     Parameters
     ----------
-    folder : pathlib.Path
-        Handoff folder holding the HANDOFF.md.
-    anch : dict
-        Current ``now``, ``session``, ``branch``, ``sha`` and ``dirty``.
-        ``cycle`` is replaced by the header's cycle.
-    argv : argparse.Namespace
-        Parsed adopt arguments.
+    text : str
+        The whole file.
+    header_text : str
+        The ``Written:`` header line as ``markdown.split_handoff`` found
+        it, or ``''``.
 
     Returns
     -------
-    int
-        0 on success. 1, with nothing written, when HANDOFF.md is absent,
-        a directory or non-conforming, ledger.tsv exists, or the thread
-        is marked done.
+    tuple[dict[str, list[str]], list[str], list[str]]
+        ``(sections_raw, preamble, header_tail)``: the body lines of each
+        ``## `` section by heading, with a repeated heading's bodies
+        joined; each paragraph or item above the first section, wrapped
+        lines joined; and the lines a wrapped header ran on to.
     """
-    refusal = storage.done_refusal(folder, 'adopt')
-    if refusal:
-        print(refusal)
-        return 1
-    handoff_path = folder / 'HANDOFF.md'
-    if handoff_path.is_dir():
-        print('hq: HANDOFF.md is a directory - move the directory aside and re-run')
-        return 1
-    if not handoff_path.exists():
-        print(f'hq adopt: no HANDOFF.md in {folder}')
-        return 1
-    text = handoff_path.read_text(encoding='utf-8-sig', errors='replace')
-    parsed = markdown.split_handoff(text)
-    if parsed['cycle'] is None:
-        ref = (
-            pathlib.Path(__file__).resolve().parents[3]
-            / 'skills' / 'handoff' / 'reference' / 'adoption.md')
-        print(
-            'hq adopt: non-conforming header; write a conforming HANDOFF.md first'
-            f' - the conversion is in {ref.parent.parent}/'
-            'reference/adoption.md')
-        for line in text.splitlines():
-            if line.startswith('#'):
-                print(f'  {line}')
-        return 1
-    cycle = parsed['cycle']
-    if (folder / 'ledger.tsv').exists():
-        print('hq adopt: already adopted; ledger.tsv exists')
-        return 1
-    cycles_dir = folder / 'cycles'
-    cycles_dir.mkdir(exist_ok=True)
-    # --- Step 1: archive ---
-    archive = cycles_dir / f'c{cycle:02d}.md'
-    if not archive.exists():
-        archive.write_text(text, encoding='utf-8')
-    prev_path = folder / 'HANDOFF.prev.md'
-    if prev_path.exists() and cycle > 1:
-        prev_arch = cycles_dir / f'c{cycle - 1:02d}.md'
-        if not prev_arch.exists():
-            prev_arch.write_text(
-                prev_path.read_text(encoding='utf-8'), encoding='utf-8')
-    walk = ledger.walk_folder(folder)
-    stem_entries = [
-        (n, k, (folder / n).stat().st_mtime if (folder / n).exists() else 0.0)
-        for n, k in walk if k != 'skip'
-        ]
-    stem_successors = ledger.apply_stem_rule(stem_entries)
-    ledger_path = folder / 'ledger.tsv'
-    standing_path = folder / 'standing.md'
-    if not ledger_path.exists():
-        ledger_path.write_text(ledger.LEDGER_HEADER + '\n', encoding='utf-8')
-    if not standing_path.exists():
-        standing_path.write_text('', encoding='utf-8')
-    manifest_path = cycles_dir / 'manifest.tsv'
-    if not manifest_path.exists():
-        manifest_path.write_text(storage.MANIFEST_HEADER + '\n', encoding='utf-8')
-    # Standing items take their cycle from anch, so it holds the
-    # header's cycle.
-    anch = dict(anch)
-    anch['cycle'] = cycle
-    ts = anch['now']
-    cycle_str = str(cycle)
-
-    # --- Collect sections (single pass) ---
     sections_raw: dict[str, list[str]] = {}
     preamble: list[str] = []
     header_tail: list[str] = []
@@ -143,7 +81,6 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
         if cur_h2:
             sections_raw.setdefault(cur_h2, []).extend(cur_body)
 
-    header_text = parsed.get('header') or ''
     in_header = False
     preamble_open = False
     item_start = re.compile(r'^\s*(?:[-*+]|\d+[.)]|#+)\s+')
@@ -175,8 +112,41 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
             elif not line.strip():
                 preamble_open = False
     _flush_section()
+    return sections_raw, preamble, header_tail
 
-    # --- Step 2: parse Key files ---
+
+def _parse_key_files(
+    folder: pathlib.Path,
+    kf_lines: list[str],
+) -> tuple[
+    dict[str, tuple[str, str | None, str]],
+    list[tuple[str, str, str]],
+    list[str],
+    list[tuple[str, str]],
+]:
+    """Read the pointers, grades and loose text of a ``## Key files`` body.
+
+    Parameters
+    ----------
+    folder : pathlib.Path
+        Handoff folder; a pointer resolves against it.
+    kf_lines : list[str]
+        The section's body lines.
+
+    Returns
+    -------
+    tuple
+        ``(kf_map, seeded_records, kf_loose, where_dropped)``:
+
+        - ``kf_map``: ``(label, read_before or None, where)`` by stored
+          path, merged across bullets that name one path.
+        - ``seeded_records``: ``(stored_path, raw_bullet_text,
+          label_part)`` per pointer bullet, for ``witnessed_pairs``.
+        - ``kf_loose``: each item that names no file, wrapped lines
+          joined, to file under ``## Unfiled``.
+        - ``where_dropped``: ``(stored_path, anchor)`` per section
+          reference the pointed file does not resolve.
+    """
     kf_map: dict[str, tuple[str, str | None, str]] = {}
     seeded_records: list[tuple[str, str, str]] = []
     kf_path_token = ''
@@ -351,7 +321,7 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
         kf_loose.append(kf_loose_current)
         kf_loose_current = ''
 
-    for line in sections_raw.get('Key files', []):
+    for line in kf_lines:
         # The label test runs first: `- Read now:` is a label bullet,
         # and read as a pointer it would name a file `Read` and cost the
         # bullets under it their grade.
@@ -395,8 +365,46 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
             _close_loose()
     _flush_kf_pointer(kf_path_token, kf_free_text, kf_group, kf_raw_text)
     _close_loose()
+    return kf_map, seeded_records, kf_loose, where_dropped
 
-    # --- Step 3: walk and seed ledger ---
+
+def _seed_ledger(
+    folder: pathlib.Path,
+    walk: list[tuple[str, str]],
+    kf_map: dict[str, tuple[str, str | None, str]],
+    cycle_str: str,
+    ts: str,
+) -> tuple[list[str], dict[str, int], list[str]]:
+    """Append a ledger row per walked file, then per Key files pointer the
+    walk missed.
+
+    Parameters
+    ----------
+    folder : pathlib.Path
+        Handoff folder holding ``ledger.tsv``.
+    walk : list[tuple[str, str]]
+        ``(name, kind)`` per entry of ``ledger.walk_folder``; a ``skip``
+        kind prints a line and gets no row.
+    kf_map : dict[str, tuple[str, str | None, str]]
+        Pointers from ``_parse_key_files``.
+    cycle_str : str
+        The header's cycle, for every row.
+    ts : str
+        Timestamp for every row.
+
+    Returns
+    -------
+    tuple[list[str], dict[str, int], list[str]]
+        ``(seeded_labels, rb_count, gated_names)``: each label written,
+        rows per read_before value, and the stored path of each live
+        gated row.
+    """
+    stem_entries = [
+        (n, k, (folder / n).stat().st_mtime if (folder / n).exists() else 0.0)
+        for n, k in walk if k != 'skip'
+        ]
+    stem_successors = ledger.apply_stem_rule(stem_entries)
+    ledger_path = folder / 'ledger.tsv'
     kf_matched: set[str] = set()
     seeded_labels: list[str] = []
     rb_count: dict[str, int] = {}
@@ -501,8 +509,31 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
             print(
                 f'  Key files pointer not on disk: {stored_again}'
                 ' - stamp the path that exists and archive this row')
+    return seeded_labels, rb_count, gated_names
 
-    # --- Step 4: seed standing ---
+
+def _seed_standing(
+    folder: pathlib.Path,
+    anch: dict,
+    sections_raw: dict[str, list[str]],
+) -> list[str]:
+    """Note each bullet of the Decisions, Constraints and Dead ends sections.
+
+    Parameters
+    ----------
+    folder : pathlib.Path
+        Handoff folder holding ``standing.md``.
+    anch : dict
+        Anchors with ``cycle`` set to the header's cycle.
+    sections_raw : dict[str, list[str]]
+        Section bodies by heading, from ``_collect_sections``.
+
+    Returns
+    -------
+    list[str]
+        Each sentence that opens a section ahead of its first bullet,
+        wrapped lines joined, to file under ``## Unfiled``.
+    """
     section_kind_map = {
         'Decisions': 'decision',
         'Constraints': 'constraint',
@@ -562,8 +593,31 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
                 continue
             bullet_lines = [line]
         _flush_bullet(bullet_lines)
+    return lead_ins
 
-    # --- Step 5: rewrite HANDOFF.md ---
+
+def _adopted_cursor(
+    sections_raw: dict[str, list[str]],
+    header_tail: list[str],
+    loose: list[str],
+) -> tuple[str, list[str]]:
+    """The standard cursor sections, then ``## Unfiled`` for the rest.
+
+    Parameters
+    ----------
+    sections_raw : dict[str, list[str]]
+        Section bodies by heading, from ``_collect_sections``.
+    header_tail : list[str]
+        Lines a wrapped header ran on to; they join ``## Environment``.
+    loose : list[str]
+        Lines no section placed, each filed as one ``- unfiled:`` bullet.
+
+    Returns
+    -------
+    tuple[str, list[str]]
+        ``(cursor_text, unfiled_parts)``. A section absent from the file
+        is written as a bare heading.
+    """
     _cursor_headings = {
         'Directives', 'Task', 'Now', 'Plan', 'State', 'Environment',
         'Open questions',
@@ -582,7 +636,7 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
         cursor_parts.append(f'## {h}\n{body}' if body else f'## {h}')
 
     unfiled_parts: list[str] = [
-        f'- unfiled: {ln}' for ln in preamble + kf_loose + lead_ins]
+        f'- unfiled: {ln}' for ln in loose]
     for h, lines in sections_raw.items():
         if h in _cursor_headings:
             continue
@@ -596,7 +650,53 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     if unfiled_parts:
         cursor_parts.append('## Unfiled\n' + '\n'.join(unfiled_parts))
     cursor_text = '\n\n'.join(cursor_parts)
+    return cursor_text, unfiled_parts
 
+
+def _write_adoption(
+    folder: pathlib.Path,
+    anch: dict,
+    parsed: dict,
+    sections_raw: dict[str, list[str]],
+    header_tail: list[str],
+    cursor_text: str,
+    walk: list[tuple[str, str]],
+) -> tuple[dict[str, storage.Row], list[str]]:
+    """Rewrite HANDOFF.md around the adopted cursor and append the
+    adoption's manifest row.
+
+    Parameters
+    ----------
+    folder : pathlib.Path
+        Handoff folder. Its ledger, standing.md and archive are read.
+    anch : dict
+        Anchors with ``cycle`` set to the header's cycle.
+    parsed : dict
+        ``markdown.split_handoff`` of the foreign file.
+    sections_raw : dict[str, list[str]]
+        Section bodies by heading; the ``Log`` body goes to the manifest
+        note.
+    header_tail : list[str]
+        Lines a wrapped header ran on to, kept in the manifest note.
+    cursor_text : str
+        From ``_adopted_cursor``.
+    walk : list[tuple[str, str]]
+        ``(name, kind)`` per entry of ``ledger.walk_folder``.
+
+    Returns
+    -------
+    tuple[dict[str, storage.Row], list[str]]
+        ``(fresh_live, legacy_log)``: the latest ledger row by stored
+        path, and the nonblank lines of the old ``## Log``.
+    """
+    cycle = anch['cycle']
+    cycle_str = str(cycle)
+    ts = anch['now']
+    handoff_path = folder / 'HANDOFF.md'
+    ledger_path = folder / 'ledger.tsv'
+    standing_path = folder / 'standing.md'
+    manifest_path = folder / 'cycles' / 'manifest.tsv'
+    archive = folder / 'cycles' / f'c{cycle:02d}.md'
     fresh_rows = storage.read_tsv(ledger_path, ledger.LEDGER_FIELDS)
     fresh_live = ledger.latest_rows(fresh_rows)
     fresh_standing_text = (
@@ -683,10 +783,101 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     storage.append_tsv(
         manifest_path, storage.MANIFEST_FIELDS, adopt_manifest_row,
         storage.MANIFEST_HEADER)
+    return fresh_live, legacy_log
+
+
+def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int:
+    """Adopt a conforming HANDOFF.md that has no ledger.
+
+    Parameters
+    ----------
+    folder : pathlib.Path
+        Handoff folder holding the HANDOFF.md.
+    anch : dict
+        Current ``now``, ``session``, ``branch``, ``sha`` and ``dirty``.
+        ``cycle`` is replaced by the header's cycle.
+    argv : argparse.Namespace
+        Parsed adopt arguments.
+
+    Returns
+    -------
+    int
+        0 on success. 1, with nothing written, when HANDOFF.md is absent,
+        a directory or non-conforming, ledger.tsv exists, or the thread
+        is marked done.
+    """
+    refusal = storage.done_refusal(folder, 'adopt')
+    if refusal:
+        print(refusal)
+        return 1
+    handoff_path = folder / 'HANDOFF.md'
+    if handoff_path.is_dir():
+        print('hq: HANDOFF.md is a directory - move the directory aside and re-run')
+        return 1
+    if not handoff_path.exists():
+        print(f'hq adopt: no HANDOFF.md in {folder}')
+        return 1
+    text = handoff_path.read_text(encoding='utf-8-sig', errors='replace')
+    parsed = markdown.split_handoff(text)
+    if parsed['cycle'] is None:
+        ref = (
+            pathlib.Path(__file__).resolve().parents[3]
+            / 'skills' / 'handoff' / 'reference' / 'adoption.md')
+        print(
+            'hq adopt: non-conforming header; write a conforming HANDOFF.md first'
+            f' - the conversion is in {ref.parent.parent}/'
+            'reference/adoption.md')
+        for line in text.splitlines():
+            if line.startswith('#'):
+                print(f'  {line}')
+        return 1
+    cycle = parsed['cycle']
+    if (folder / 'ledger.tsv').exists():
+        print('hq adopt: already adopted; ledger.tsv exists')
+        return 1
+    cycles_dir = folder / 'cycles'
+    cycles_dir.mkdir(exist_ok=True)
+    # --- Archive ---
+    archive = cycles_dir / f'c{cycle:02d}.md'
+    if not archive.exists():
+        archive.write_text(text, encoding='utf-8')
+    prev_path = folder / 'HANDOFF.prev.md'
+    if prev_path.exists() and cycle > 1:
+        prev_arch = cycles_dir / f'c{cycle - 1:02d}.md'
+        if not prev_arch.exists():
+            prev_arch.write_text(
+                prev_path.read_text(encoding='utf-8'), encoding='utf-8')
+    walk = ledger.walk_folder(folder)
+    ledger_path = folder / 'ledger.tsv'
+    standing_path = folder / 'standing.md'
+    if not ledger_path.exists():
+        ledger_path.write_text(ledger.LEDGER_HEADER + '\n', encoding='utf-8')
+    if not standing_path.exists():
+        standing_path.write_text('', encoding='utf-8')
+    manifest_path = cycles_dir / 'manifest.tsv'
+    if not manifest_path.exists():
+        manifest_path.write_text(storage.MANIFEST_HEADER + '\n', encoding='utf-8')
+    # Standing items take their cycle from anch, so it holds the
+    # header's cycle.
+    anch = dict(anch)
+    anch['cycle'] = cycle
+    ts = anch['now']
+    cycle_str = str(cycle)
+
+    sections_raw, preamble, header_tail = _collect_sections(
+        text, parsed.get('header') or '')
+    kf_map, seeded_records, kf_loose, where_dropped = _parse_key_files(
+        folder, sections_raw.get('Key files', []))
+    seeded_labels, rb_count, gated_names = _seed_ledger(
+        folder, walk, kf_map, cycle_str, ts)
+    lead_ins = _seed_standing(folder, anch, sections_raw)
+    cursor_text, unfiled_parts = _adopted_cursor(
+        sections_raw, header_tail, preamble + kf_loose + lead_ins)
+    fresh_live, legacy_log = _write_adoption(
+        folder, anch, parsed, sections_raw, header_tail, cursor_text, walk)
 
     # --- Summary ---
     gated_cnt = len(gated_names)
-    never_cnt = rb_count.get('never', 0)
     seeded_cnt = len(storage.read_tsv(ledger_path, ledger.LEDGER_FIELDS))
     print(f'hq adopt: seeded {seeded_cnt} entries in {folder.name}')
     for lb in seeded_labels:
@@ -702,7 +893,6 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     # agent's one notice.
     if unfiled_parts:
         print(f'  unfiled: {len(unfiled_parts)} bullets to rehome')
-    _ = never_cnt
     # The adopted file reproduces its own title line, which is outside
     # the cursor, so the union carries it.
     union_cursor = f'# Handoff: {folder.name}\n{cursor_text}'
