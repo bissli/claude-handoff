@@ -321,10 +321,11 @@ the skip.
      run of adjacent lines of one kind, and gives the section, the
      first and last words, and the reason. Never name a line the Now
      step, an open Plan item, or an open question depends on, nor an
-     environment fact the work uses.
+     environment fact the Now step or an open Plan item uses.
   5. Last, name a live decision that only records a step - a commit,
      a verdict, one site's reading, or a spike's answer - such
-     as `Crash repaired (3f2a9c1)` or `4be01c2 verify PASS`, and a
+     as `Crash repaired (3f2a9c1)` or `4be01c2 verify PASS`, one
+     about a thread `hq list --done` lists, and a
      live artifact row for done work the cursor does not name: a past
      cycle's probe or output directory, or a spike or verify file
      whose verdict a Standing item or another file holds. Confirm
