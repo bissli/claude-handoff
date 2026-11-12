@@ -200,17 +200,17 @@ def test_argument_refusals_exit_2_and_write_nothing(tmp_path, monkeypatch):
         assert list(tmp_path.iterdir()) == []
 
 
-def test_the_step_reaches_both_tokens(tmp_path, monkeypatch):
-    """Verify R@5 puts the step on the remaining and the tally token.
+def test_the_step_reaches_the_remaining_token_alone(tmp_path, monkeypatch):
+    """Verify R@5 puts the step on the remaining token and none on the tally.
 
-    Mutation: the step on one token.
+    Mutation: the step left off the remaining token, or put on the tally.
     Oracle: one open unit and one closed one under R@5.
     """
     monkeypatch.setattr('sys.stdin', io.StringIO('open a\nclosed b\nend\n'))
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         rc = tally.main([str(tmp_path / 's.tally.tsv'), 'R@5', 'T'])
-    assert (rc, out.getvalue().strip()) == (0, 'R=1->0@5 T=+0@5')
+    assert (rc, out.getvalue().strip()) == (0, 'R=1->0@5 T=+0')
 
 
 def _template(tmp_path, name, dest):

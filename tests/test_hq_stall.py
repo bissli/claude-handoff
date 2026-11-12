@@ -6,7 +6,6 @@ import contextlib
 import decimal
 import io
 import pathlib
-import re
 
 from bin import hq
 
@@ -98,11 +97,12 @@ _STREAK_THREE = _counting([5, 5, 5, 5])
 
 
 def test_each_of_the_four_forms_parses():
-    """Verify counting and tally parse with and without a step, and gate and
-    spend fail.
+    """Verify counting parses with and without a step, a tally's stored step
+    is ignored, and gate and spend fail.
 
-    Mutation: the tally form read as counting, the step dropped from one
-    form, or a removed gate or spend form left in.
+    Mutation: the tally form read as counting, the step dropped from the
+    counting form or kept on a tally, or a removed gate or spend form
+    left in.
     Oracle: hand-written token map for a line holding all four forms.
     """
     tokens, free_text, error = hq.parse_summary(
@@ -113,7 +113,7 @@ def test_each_of_the_four_forms_parses():
         'a': ('counting', (D(31), D(0), None)),
         's': ('counting', (D(72), D(80), D(1))),
         't': ('tally', (D(45), None)),
-        'u': ('tally', (D(45), D(5))),
+        'u': ('tally', (D(45), None)),
         }
     for gone in ('g=MET', 'h=OPEN', 's=40/300'):
         assert hq.parse_summary(f'summary: a=1->0 {gone} | x')[0] is None
@@ -262,14 +262,14 @@ def test_stepped_gains_add_up_to_a_credit():
     assert _stalls(logs) == [0, 1, 0]
 
 
-def test_stepped_tally_needs_a_full_step():
-    """Verify a stepped tally credits only a rise of a full step.
+def test_a_stored_tally_step_is_ignored():
+    """Verify a tally stored with a step credits any rise.
 
-    Mutation: the step left off the tally rule.
-    Oracle: done=+45@5, then 49 silent, 50 improved, beside a stuck a.
+    Mutation: the stored step kept on the tally rule, so 46 reads silent.
+    Oracle: done=+45@5, then 46 improved, beside a stuck a.
     """
-    logs = [f'summary: a=5->0 done=+{value}@5' for value in (45, 49, 50)]
-    assert _stalls(logs) == [0, 1, 0]
+    logs = [f'summary: a=5->0 done=+{value}@5' for value in (45, 46)]
+    assert _stalls(logs) == [0, 0]
 
 
 def test_a_changed_step_restarts_the_name():
@@ -374,17 +374,17 @@ def test_a_failed_row_is_no_progress():
 
 
 def test_rows_without_a_bar_are_history():
-    """Verify a row with no bar is skipped and the first composed row opens
-    the window.
+    """Verify a row with no bar is skipped and the first composed row is
+    the window's first row.
 
     Mutation: an old typed row parsed as composed.
     Oracle: three stuck old typed rows, then a composed row stores 0 and
-    opens the window at its cycle.
+    is the first measured cycle.
     """
     rows = [{'cycle': str(i), 'log': 'summary: a=5->0'} for i in (1, 2, 3)]
     rows.append({'cycle': '4', 'log': 'summary: a=5->0 | x'})
     result = hq.stall_count(rows)
-    assert (result['stall'], result['window']) == (0, 4)
+    assert (result['stall'], result['measured']) == (0, 4)
 
 
 def test_a_stray_marker_resets_nothing():
@@ -523,11 +523,12 @@ def test_open_recomputes_the_stall_line(tmp_path, monkeypatch):
 
 
 def test_old_manifests_take_the_new_columns_by_position(tmp_path, monkeypatch):
-    """Verify rewrite_sha stays field 14 and stall and window land at 15, 16.
+    """Verify rewrite_sha stays field 14 and stall lands at 15.
 
-    Mutation: stall placed before rewrite_sha.
+    Mutation: stall placed before rewrite_sha, or a row with the old
+    window column read past its stall.
     Oracle: an adopt row read by live_sha, and finish over a manifest cut
-    to 13 and to 14 fields, whose window opens at the first probe cycle.
+    to 13 and to 14 fields, then one with a sixteenth field.
     """
     folder = _root(tmp_path, monkeypatch)
     folder.mkdir(parents=True)
@@ -537,24 +538,27 @@ def test_old_manifests_take_the_new_columns_by_position(tmp_path, monkeypatch):
     assert _run(['adopt', _SLUG])[0] == 0
     manifest_path = folder / 'cycles' / 'manifest.tsv'
     adopt_fields = manifest_path.read_text().splitlines()[1].split('\t')
-    assert len(adopt_fields) == 16
-    assert adopt_fields[14:] == ['-', '-']
+    assert len(adopt_fields) == 15
+    assert adopt_fields[14:] == ['-']
     assert hq.live_sha(_manifest(folder)[0]) == adopt_fields[13]
     assert hq._sha12((folder / 'HANDOFF.md').read_bytes()) == adopt_fields[13]
     _probe(folder, "echo 'a=5->0'")
-    first_composed = str(int(adopt_fields[0]) + 1)
-    for width, stall in ((13, '0'), (14, '1')):
+    for width, stall in ((13, '0'), (14, '1'), (16, '2')):
         rows = manifest_path.read_text().splitlines()
-        manifest_path.write_text('\n'.join(
-            [rows[0]] + ['\t'.join(row.split('\t')[:width]) for row in rows[1:]])
-            + '\n')
+        old_rows = []
+        for row in rows[1:]:
+            row_fields = row.split('\t')[:width]
+            if width == 16 and len(row_fields) == 15:
+                row_fields.append('9')
+            old_rows.append('\t'.join(row_fields))
+        manifest_path.write_text('\n'.join([rows[0]] + old_rows) + '\n')
         _cycles(['work'])
         fields = manifest_path.read_text().splitlines()[-1].split('\t')
-        assert len(fields) == 16
-        assert fields[14:] == [stall, first_composed]
+        assert len(fields) == 15
+        assert fields[14:] == [stall]
 
 
-# --- unmeasured rows and Plan advisories ----------------------------
+# --- unmeasured rows -------------------------------------------------
 
 
 def test_unmeasured_parses_with_no_tokens():
@@ -585,53 +589,6 @@ def test_unmeasured_rows_leave_the_streak():
         ) == [None, None, 0, 1]
 
 
-def _plan_cycle(folder, plan, line):
-    _probe(folder, f"echo '{line}'")
-    assert _run(['begin', _SLUG])[0] == 0
-    handoff = folder / 'HANDOFF.md'
-    text = handoff.read_text()
-    text = re.sub(r'(?ms)^## Plan\n.*?(?=^## )', f'## Plan\n{plan}\n\n', text)
-    handoff.write_text(text)
-    rc, out, _ = _run(['finish', _SLUG, '--log', 'work'])
-    assert rc == 0, out
-    return [line for line in out.splitlines() if line.startswith('advisory: Plan')]
-
-
-def test_plan_names_are_checked_in_finish_and_open(tmp_path, monkeypatch):
-    """Verify a Coordinate written as a tally and an absent wrapped Tally warn.
-
-    Mutation: the kind test dropped, so clean=+115 passes as the
-    Coordinate; the continuation line not joined; the bullet scope
-    dropped, so prose names count; open reads the newest row in place of
-    the newest measured one; or a name written twice warns twice.
-    Oracle: a prose line naming a Coordinate, a Coordinate named twice,
-    and a row carrying every name in form.
-    """
-    folder = _root(tmp_path, monkeypatch)
-    folder.mkdir(parents=True)
-    _measured(folder, ['a=5->0'])
-    plan = (
-        '- [ ] Clean the corpus. Coordinate: clean. Tally:\n'
-        '  clean_done. Done when clean reads 0.\n'
-        '- [ ] Twice. Coordinate: dup. Also Coordinate: dup.\n'
-        'Prose names Coordinate: other. here.')
-    expected = [
-        ('advisory: Plan Coordinate clean reads as tally in the c2 summary'
-         ' - the measure writes name=<value>-><goal>'),
-        ('advisory: Plan Coordinate dup is absent from the c2 summary'
-         ' - the measure writes name=<value>-><goal>'),
-        ('advisory: Plan Tally clean_done is absent from the c2 summary'
-         ' - the measure writes name=+<closed>'),
-        ]
-    assert _plan_cycle(folder, plan, 'a=4->0 clean=+115') == expected
-    _measured(folder, ['unmeasured'])
-    _, out, _ = _run(['open', _SLUG])
-    assert [ln for ln in out.splitlines() if ln.startswith('advisory: Plan')] == (
-        expected)
-    assert _plan_cycle(
-        folder, plan, 'clean=89->0 clean_done=+115 dup=0->0') == []
-
-
 def test_a_row_with_no_numeric_cycle_counts_toward_nothing():
     """Verify a row whose cycle is '-' or empty is skipped whole.
 
@@ -645,16 +602,4 @@ def test_a_row_with_no_numeric_cycle_counts_toward_nothing():
     after = hq.stall_count([{'cycle': '1', 'log': stuck}] + skipped)
     assert (after['stall'], after['measured']) == (0, 1)
     before = hq.stall_count(skipped + [{'cycle': '7', 'log': stuck}])
-    assert (before['window'], before['measured'], before['stall']) == (7, 7, 0)
-
-
-def test_plan_names_need_a_plan_section():
-    """Verify a cursor with no Plan section yields no advisory.
-
-    Mutation: the Plan match used with no None guard, so a cursor with
-    no section raises.
-    Oracle: a Coordinate named in the Task section of a cursor with no
-    Plan.
-    """
-    cursor = '# Handoff: x\n\n## Task\n\n- Coordinate: a.\n\n## Now\n\nGo.\n'
-    assert hq.plan_name_advisories(cursor, {}, 3) == []
+    assert (before['measured'], before['stall']) == (7, 0)

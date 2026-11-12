@@ -23,8 +23,8 @@ unit prints one line, `open:<n> <id>` for an open unit holding n sites,
 `open <id>` for one site, or `closed <id>`, then `end` once the tool has
 exited cleanly. A unit the state file holds and the listing lacks, such
 as a deleted file, prints as closed. `tally.py` keeps the known set and
-prints the remaining count and the tally of closed units, with the step
-on both.
+prints the remaining count, with the step, and the tally of closed
+units.
 
 ```sh
 #!/bin/sh

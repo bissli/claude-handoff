@@ -59,7 +59,7 @@ LEDGER_FIELDS = [
 MANIFEST_FIELDS = [
     'cycle', 'written', 'session', 'repos', 'cursor_lines', 'payload_tokens',
     'handoff_sha', 'ledger_bytes', 'ledger_sha', 'standing_bytes',
-    'standing_sha', 'log', 'note', 'rewrite_sha', 'stall', 'window',
+    'standing_sha', 'log', 'note', 'rewrite_sha', 'stall',
     ]
 
 _LEDGER_HEADER = '\t'.join(LEDGER_FIELDS)
@@ -1014,8 +1014,9 @@ def parse_summary(log: str) -> tuple[
 
         - tokens: ``{name: (kind, value)}``, None when the row does not
           parse or the probe failed, and empty for ``unmeasured``. A
-          counting value is ``(current, goal, step)``, a tally ``(value,
-          step)``, each a Decimal and step None where the token has none.
+          counting value is ``(current, goal, step)``, each a Decimal
+          and step None where the token has none. A tally is
+          ``(value, None)``: a stored ``@<step>`` on it is ignored.
           A repeated name keeps its last token before the row needs a
           counting token, so ``a=5->0 a=+3`` does not parse.
         - free_text: the text after the first bar, ``''`` with no bar.
@@ -1043,7 +1044,9 @@ def parse_summary(log: str) -> tuple[
         else:
             return None, free_text, f'token {word} matches no summary form'
         name, *numbers = token_m.groups()
-        step = None if numbers[-1] is None else decimal.Decimal(numbers[-1])
+        step = None
+        if kind == 'counting' and numbers[-1] is not None:
+            step = decimal.Decimal(numbers[-1])
         if step is not None and step <= 0:
             return None, free_text, f'token {word} has a step of 0'
         value = tuple(decimal.Decimal(number) for number in numbers[:-1]) + (step,)
@@ -1073,10 +1076,8 @@ def stall_count(rows: list[dict]) -> dict:
           is no ruling, and for an unmeasured row before the first
           measured one.
         - ``reported``: ``stall``, else the streak before the row.
-        - ``window``: the window's first cycle.
         - ``cause``: the row's probe-failed cause, else None.
         - ``measured``: the newest measured cycle, None before one.
-        - ``measured_tokens``: that row's tokens, empty before one.
 
     Notes
     -----
@@ -1090,12 +1091,13 @@ def stall_count(rows: list[dict]) -> dict:
           unstepped: improved when distance < best
           stepped:   improved when distance <= best - step,
                      or distance == 0 and best > 0
-          tally:     improved when value > max, or value >= max + step
+          tally:     improved when value > max
 
       side is the sign of ``current - goal`` at the name's first entry
       off its goal, unset (0) before it. best and max move only on an
-      improved vote, so gains below the step add up. A changed goal,
-      step or kind restarts the name and votes stuck.
+      improved vote, so gains below the step add up. A changed kind,
+      or a counting token's changed goal or step, restarts the name
+      and votes stuck.
     - The window's first parsed row is neutral. A later row of new names
       is non-progress, so renamed coordinates still count. A failed row
       is non-progress, an unmeasured row leaves the streak.
@@ -1103,8 +1105,7 @@ def stall_count(rows: list[dict]) -> dict:
     state: dict[str, dict] = {}
     streak = 0
     result: dict = {
-        'stall': None, 'reported': 0, 'window': None, 'cause': None,
-        'measured': None, 'measured_tokens': {},
+        'stall': None, 'reported': 0, 'cause': None, 'measured': None,
         }
     first_parsed = True
     for row in rows:
@@ -1119,8 +1120,6 @@ def stall_count(rows: list[dict]) -> dict:
         carried = streak
         ruling = ' '.join(free_text.split()).lower().startswith(
             'stall review:')
-        if result['window'] is None or ruling:
-            result['window'] = cycle
         if ruling:
             state = {}
             first_parsed = True
@@ -1160,11 +1159,10 @@ def stall_count(rows: list[dict]) -> dict:
                     votes.append('stuck')
             else:
                 tally = value[0]
-                if prior is None or prior['kind'] != kind or prior['step'] != step:
-                    state[name] = {'kind': kind, 'step': step, 'max': tally}
+                if prior is None or prior['kind'] != kind:
+                    state[name] = {'kind': kind, 'max': tally}
                     votes.append('silent' if prior is None else 'stuck')
-                elif ((step is None and tally > prior['max'])
-                        or (step is not None and tally >= prior['max'] + step)):
+                elif tally > prior['max']:
                     prior['max'] = tally
                     votes.append('improved')
                 else:
@@ -1190,7 +1188,7 @@ def stall_count(rows: list[dict]) -> dict:
         elif row_class in {'non-progress', 'failed'} and not ruling:
             streak += 1
         if tokens:
-            result.update(measured=cycle, measured_tokens=tokens)
+            result['measured'] = cycle
         if ruling or row_class not in {'unparsed', 'unmeasured'}:
             stall = streak
         elif row_class == 'unmeasured' and result['measured'] is not None:
@@ -1201,52 +1199,6 @@ def stall_count(rows: list[dict]) -> dict:
             stall=stall, reported=carried if stall is None else stall,
             cause=error[len('probe-failed:'):].strip() if failed else None)
     return result
-
-
-def plan_name_advisories(cursor: str, tokens: dict, cycle: int | str) -> list[str]:
-    """Advisories for Plan Coordinate and Tally names a summary misses.
-
-    Parameters
-    ----------
-    cursor : str
-        HANDOFF.md cursor text. Only ``- `` bullets under ``## Plan``
-        count, each with its indented continuation lines, and a name
-        counts only in the Plan form ``Coordinate: <name>.``.
-    tokens : dict
-        A measured row's tokens, as ``parse_summary`` returns them.
-    cycle : int or str
-        The cycle the summary belongs to, named in each line.
-
-    Returns
-    -------
-    list[str]
-        One ``advisory: Plan ...`` line per name whose token is absent
-        or of the wrong kind, Coordinates first.
-    """
-    plan_m = re.search(
-        r'^## Plan[ \t]*$(.*?)(?=^## |\Z)', cursor, re.MULTILINE | re.DOTALL)
-    bullets: list[str] = []
-    for line in (plan_m.group(1) if plan_m else '').splitlines():
-        if re.match(r'\s*- ', line):
-            bullets.append(line.strip())
-        elif bullets and line[:1] in {' ', '\t'} and line.strip():
-            bullets[-1] += ' ' + line.strip()
-    plan_text = '\n'.join(bullets)
-    plan_forms = (
-        ('Coordinate', 'counting', 'name=<value>-><goal>'),
-        ('Tally', 'tally', 'name=+<closed>'),
-        )
-    lines = []
-    for label, wanted, fix in plan_forms:
-        names = re.findall(rf'\b{label}: ({_SUMMARY_NAME})\.', plan_text)
-        for name in dict.fromkeys(names):
-            kind = tokens.get(name, ('',))[0]
-            if kind != wanted:
-                found = f'reads as {kind} in' if kind else 'is absent from'
-                lines.append(
-                    f'advisory: Plan {label} {name} {found} the c{cycle} summary'
-                    f' - the measure writes {fix}')
-    return lines
 
 
 def run_probe(probe: pathlib.Path, cwd: pathlib.Path) -> tuple[str, bool, str]:
@@ -6482,11 +6434,6 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
         stored_log = f'stall review: {ruling_text} | {log_text or "-"}'
     stall_result = stall_count(
         manifest + [{'cycle': str(anch['cycle']), 'log': stored_log}])
-    probe_tokens = parse_summary(stored_log)[0] if has_probe else None
-    if probe_tokens:
-        for line in plan_name_advisories(
-                parsed['cursor'], probe_tokens, anch['cycle']):
-            print(line)
     last_worked = anch['now'][:10]
     if _worked_thread(str(session), folder) != str(folder.resolve()):
         prior_m = (
@@ -6558,7 +6505,6 @@ def _verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> 
         'stall': (
             str(stall_result['stall'])
             if has_probe and stall_result['stall'] is not None else '-'),
-        'window': str(stall_result['window']) if has_probe else '-',
         }
     _append_tsv(manifest_path, MANIFEST_FIELDS, manifest_row, _MANIFEST_HEADER)
     (folder / '.hq.lock').unlink(missing_ok=True)
@@ -6978,11 +6924,6 @@ def _verb_open(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
         print('hq loop: no one is watching this session')
         print(LOOP_RULE)
     stall_result = stall_count(manifest)
-    measured = stall_result['measured']
-    if measured is not None:
-        for line in plan_name_advisories(
-                parsed['cursor'], stall_result['measured_tokens'], measured):
-            print(line)
     probe = folder / 'probes' / 'hq-measure'
     has_probe = probe.is_file() and os.access(probe, os.X_OK)
     if has_probe and stall_result['reported'] >= 2:

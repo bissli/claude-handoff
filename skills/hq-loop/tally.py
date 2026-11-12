@@ -134,12 +134,12 @@ def tokens(
     tally : str
         Name of the tally token.
     step : str
-        ``@<step>`` put on both tokens, or ``''`` for none.
+        ``@<step>`` put on the remaining token, or ``''`` for none.
 
     Returns
     -------
     str
-        ``<remaining>=<R>->0<step> <tally>=+<T><step>``, where::
+        ``<remaining>=<R>->0<step> <tally>=+<T>``, where::
 
             R = sites of every unit whose last state is open
             T = |K \ O| - |O \ K|
@@ -153,7 +153,7 @@ def tokens(
         unit['admitted'] and unit['last'] == 'closed' for unit in unit_by_id.values())
     regression_cnt = sum(not unit['admitted'] for unit in open_units)
     tally_cnt = closed_known_cnt - regression_cnt
-    return f'{remaining}={remaining_cnt}->0{step} {tally}=+{tally_cnt}{step}'
+    return f'{remaining}={remaining_cnt}->0{step} {tally}=+{tally_cnt}'
 
 
 def main(argv: list[str]) -> int:

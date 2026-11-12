@@ -338,11 +338,9 @@ def _wait_for(predicate: Any, limit: float = 20.0) -> bool:
     return predicate()
 
 
-def _manifest_row(cycle, log='-', stall='0', window=None):
-    """One manifest line: cycle, log at field 12, stall and window at 15, 16."""
+def _manifest_row(cycle, log='-', stall='0'):
+    """One manifest line: cycle, log at field 12, stall at 15."""
     fields = [str(cycle), '2026-01-01'] + ['-'] * 9 + [log, '-', '-', stall]
-    if window is not None:
-        fields.append(str(window))
     return '\t'.join(fields)
 
 

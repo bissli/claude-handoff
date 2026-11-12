@@ -227,7 +227,7 @@ def test_no_probe_stores_the_log_and_never_refuses(tmp_path, monkeypatch):
     _loop(tmp_path, monkeypatch)
     _cycle('summary: a=1->0 junk')
     row = _rows(folder)[-1]
-    assert (row['log'], row['stall'], row['window']) == ('a=1->0 junk', '-', '-')
+    assert (row['log'], row['stall']) == ('a=1->0 junk', '-')
 
 
 def test_typed_prefixes_strip_in_any_order(tmp_path, monkeypatch):
