@@ -333,28 +333,3 @@ No line:
 - A turn that never ends: one tool call never returns, and no bound
   reads it. The user interrupts it, and the command takes its own
   timeout.
-
-### Loop block in Directives
-
-A thread may carry a Loop block: a `- Loop (user, <date>):` bullet
-and the `Authority`, `Turn`, `Measure`, `Closed Plan`, `Measured
-close`, `Stall`, `Terminal form`, `Bounded waits` and `Wind-down`
-bullets beside it. The loop reads none of it, and it names a typed
-summary, a stall question and a wind-down the loop does not have.
-
-- Show the user the block and remove it at the user's word, through
-  `--replace-directives "<why>"`, which records the old section as a
-  decision.
-- Keep each grant, each never rule and each ruling the block holds
-  as a plain Directive in the user's words.
-- A measure script the block names becomes the probe: `hq-measure`
-  runs it and prints its counting and tally tokens. A token of any
-  other form fails the row. Write a pass or fail as a failing count.
-- A probe that runs a copied `probes/tally.py` runs `"$HQ_TALLY"` in
-  its place.
-- `hq finish` skips a stored row that holds no ` | `. A typed row
-  that starts with `summary:` and holds ` | ` reads as a probe row:
-  its tokens seed each name's state, and a stall such rows carry
-  reaches the hold sooner. The ruling resets it. So does, attended
-  at a carried stall of 3 or more, a `--log` that starts with
-  `stall review:`.

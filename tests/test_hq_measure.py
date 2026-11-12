@@ -246,6 +246,20 @@ def test_typed_prefixes_strip_in_any_order(tmp_path, monkeypatch):
     assert _rows(folder)[-1]['log'] == 'summary: a=1->0 | x'
 
 
+def test_a_typed_summary_never_seeds_the_stall(tmp_path, monkeypatch):
+    """Verify a typed summary: row before the probe never counts as measured.
+
+    Mutation: the summary: arm dropped from _TYPED_PREFIX.
+    Oracle: three typed rows with no gain, then a first probe row at stall 0.
+    """
+    folder = _root(tmp_path, monkeypatch)
+    for _ in range(3):
+        _cycle('summary: a=5->0 | typed')
+    _probe(folder, "echo 'a=5->0'")
+    _cycle()
+    assert [row['stall'] for row in _rows(folder)] == ['-', '-', '-', '0']
+
+
 def test_attended_ruling_needs_a_carried_three(tmp_path, monkeypatch):
     """Verify a typed stall review: is a ruling at a carried 3, and text at 2.
 
