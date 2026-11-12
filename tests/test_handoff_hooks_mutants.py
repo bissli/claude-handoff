@@ -1316,17 +1316,16 @@ def test_gate_session_fallback_is_lowercase(monkeypatch, tmp_path):
 def test_gate_state_dir_default_fires_without_env(monkeypatch, tmp_path):
     """Verify gate() uses the STATE_DIR default when HQ_STATE_DIR is unset.
 
-    Mutation: x_gate__mutmut_103 - removes the STATE_DIR default from
-    os.environ.get(), so the call returns None. pathlib.Path(None) raises
-    TypeError, crashing gate() on any session after root is found.
+    Mutation: the STATE_DIR default dropped from threads.state_dir(), so
+    the call returns None. pathlib.Path(None) raises TypeError, crashing
+    gate() on any session after root is found.
     Oracle: gate() returns 0 (no exception) with HQ_STATE_DIR unset and a
     real handoff root in cwd.
     """
     root, _ = _handoff_root(tmp_path)
     monkeypatch.delenv('HQ_STATE_DIR', raising=False)
     # Redirect the default state dir so it does not litter the real cache.
-    monkeypatch.setattr(handoff_gate, 'STATE_DIR',
-                        str(tmp_path / 'default_state'))
+    monkeypatch.setattr(threads, 'STATE_DIR', str(tmp_path / 'default_state'))
     tr = _transcript(tmp_path / 't.jsonl', [_bash(f'hq.py open {_SLUG}')])
     payload = _payload(root, tr, 'sd0', 'Edit', {'file_path': 'src/app.py'})
     # TypeError under the mutant (pathlib.Path(None)); 0 under the original.
@@ -1517,7 +1516,7 @@ def test_report_session_fallback_is_lowercase(monkeypatch, tmp_path):
 def test_report_state_dir_default_fires_without_env(monkeypatch, tmp_path):
     """Verify report() uses the STATE_DIR default when HQ_STATE_DIR is unset.
 
-    Mutation: x_report__mutmut_99 - removes the STATE_DIR default, so
+    Mutation: the STATE_DIR default dropped from threads.state_dir(), so
     os.environ.get('HQ_STATE_DIR') returns None. pathlib.Path(None) raises
     TypeError when the drifted block runs.
     Oracle: report() returns 0 (no exception) with HQ_STATE_DIR unset and a
@@ -1525,8 +1524,6 @@ def test_report_state_dir_default_fires_without_env(monkeypatch, tmp_path):
     """
     root, folder = _handoff_root(tmp_path)
     monkeypatch.delenv('HQ_STATE_DIR', raising=False)
-    monkeypatch.setattr(handoff_stop, 'STATE_DIR',
-                        str(tmp_path / 'default_state'))
     monkeypatch.setattr(threads, 'STATE_DIR', str(tmp_path / 'default_state'))
     threads.record_thread('sd99', _SLUG)
     (folder / 'HANDOFF.md').write_text('# H\n', encoding='utf-8')

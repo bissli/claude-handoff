@@ -1032,11 +1032,11 @@ def test_verb_read_abs_base_resolves_correctly(tmp_path, monkeypatch, capsys):
 
 def test_verb_read_state_dir_fallback_without_hq_state_dir(
         tmp_path, monkeypatch, capsys):
-    """_verb_read falls back to _DEFAULT_STATE when HQ_STATE_DIR is absent.
+    """_verb_read falls back to STATE_DIR when HQ_STATE_DIR is absent.
 
-    Mutation: x__verb_read__mutmut_77 removes the fallback default from
-    os.environ.get, so get('HQ_STATE_DIR') returns None when unset;
-    pathlib.Path(None) raises TypeError.
+    Mutation: the STATE_DIR default dropped from threads.state_dir(), so
+    get('HQ_STATE_DIR') returns None when unset; pathlib.Path(None) raises
+    TypeError.
     Oracle: with HQ_STATE_DIR unset, 'hq read' still returns 0 (or 1 on
     OSError from an unwritable default, but no TypeError).
     """
@@ -1048,14 +1048,10 @@ def test_verb_read_state_dir_fallback_without_hq_state_dir(
     # Set state dir to a known writable temp location via default override.
     state_dir = tmp_path / 'state'
     state_dir.mkdir()
-    orig_default = threads.DEFAULT_STATE
-    threads.DEFAULT_STATE = state_dir
+    monkeypatch.setattr(threads, 'STATE_DIR', str(state_dir))
     capsys.readouterr()
 
-    try:
-        ret = cli.main(['read', _SLUG, 'SPEC.md'])
-    finally:
-        threads.DEFAULT_STATE = orig_default
+    ret = cli.main(['read', _SLUG, 'SPEC.md'])
 
     assert ret == 0
 

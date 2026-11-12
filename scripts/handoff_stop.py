@@ -24,7 +24,6 @@ Notes
 """
 
 import json
-import os
 import pathlib
 import sys
 from typing import Any
@@ -40,8 +39,6 @@ except ImportError:
     plugin_root = pathlib.Path(__file__).resolve().parent.parent
     sys.path[:0] = [str(plugin_root / 'src'), str(plugin_root / 'bin')]
     from handoff import storage, threads
-
-STATE_DIR = os.path.expanduser('~/.claude/cache/claude-handoff')
 
 
 def report(payload: dict[str, Any]) -> int:
@@ -99,7 +96,7 @@ def report(payload: dict[str, Any]) -> int:
     if current in {'-', storage.live_sha(rows[-1])}:
         return 0
 
-    state_dir = pathlib.Path(os.environ.get('HQ_STATE_DIR', STATE_DIR))
+    state_dir = threads.state_dir()
     state_path = state_dir / f'{session}.handoff.json'
     try:
         state = json.loads(state_path.read_text(encoding='utf-8'))

@@ -10,7 +10,10 @@ STATE_DIR = os.path.expanduser('~/.claude/cache/claude-handoff')
 _WORKED_NAME = '.hq.worked'
 
 
-DEFAULT_STATE = pathlib.Path.home() / '.claude' / 'cache' / 'claude-handoff'
+def state_dir() -> pathlib.Path:
+    """HQ_STATE_DIR when set, else STATE_DIR. The directory need not exist.
+    """
+    return pathlib.Path(os.environ.get('HQ_STATE_DIR', STATE_DIR))
 
 
 def own_loop_dir(slug: str) -> pathlib.Path | None:
@@ -51,8 +54,7 @@ def thread_record(session: str) -> pathlib.Path:
         ``<slug>.thread`` under HQ_STATE_DIR. The file need not exist.
     """
     safe = session.replace('/', '_')
-    state_dir = pathlib.Path(os.environ.get('HQ_STATE_DIR', STATE_DIR))
-    return state_dir / f'{safe}.thread'
+    return state_dir() / f'{safe}.thread'
 
 
 def record_worked(session: str, folder: pathlib.Path) -> None:

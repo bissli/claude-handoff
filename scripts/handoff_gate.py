@@ -67,7 +67,7 @@ from typing import Any
 
 try:
     # pytest and mutmut put src/ on sys.path (pytest.ini).
-    from handoff import ledger, markdown, paths, storage
+    from handoff import ledger, markdown, paths, storage, threads
 except ImportError:
     # Notes:
     # - Script mode puts scripts/ on sys.path rather than bin/, so reach
@@ -75,9 +75,8 @@ except ImportError:
     # - ../src comes first, since mutmut writes its mutated copy there.
     plugin_root = pathlib.Path(__file__).resolve().parent.parent
     sys.path[:0] = [str(plugin_root / 'src'), str(plugin_root / 'bin')]
-    from handoff import ledger, markdown, paths, storage
+    from handoff import ledger, markdown, paths, storage, threads
 
-STATE_DIR = os.path.expanduser('~/.claude/cache/claude-handoff')
 
 WRITE_TOOL_TARGETS = {
     'Edit': 'file_path',
@@ -587,7 +586,7 @@ def gate(payload: dict[str, Any]) -> int:
         return _emit(nudge)
 
     session = str(payload.get('session_id') or 'unknown').replace('/', '_')
-    state_dir = pathlib.Path(os.environ.get('HQ_STATE_DIR', STATE_DIR))
+    state_dir = threads.state_dir()
     state_path = state_dir / f'{session}.handoff.json'
     try:
         state = json.loads(state_path.read_text(encoding='utf-8'))

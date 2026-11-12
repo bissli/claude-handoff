@@ -4,7 +4,6 @@
 import argparse
 import datetime
 import difflib
-import os
 import pathlib
 import re
 import shutil
@@ -99,8 +98,7 @@ def verb_read(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
             f'hq read: no receipt for {stored_path} - the gate still'
             f' reports it; run: hq read {folder.name} {stored_path}{recover}')
         return 0
-    state_path = pathlib.Path(
-        os.environ.get('HQ_STATE_DIR', str(threads.DEFAULT_STATE)))
+    state_path = threads.state_dir()
     session_name = re.sub(r'[/\\]', '_', str(anch['session']))
     failures = []
     for receipt_path in (
