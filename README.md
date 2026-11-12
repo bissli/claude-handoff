@@ -151,7 +151,7 @@ Three things outlive it: the `statusLine` block in `settings.json`, the state un
 ## Development
 
 ```
-python3 -m pytest -q
+poetry run pytest -q -n auto
 poetry run mutmut run
 python3 docs/charts.py
 ```

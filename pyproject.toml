@@ -8,6 +8,7 @@ python = "^3.11"
 bump2version = "^1.0.1"
 pytest = "^8.0"
 mutmut = "^3.7.0"
+pytest-xdist = "^3.8.0"
 
 [tool.mutmut]
 source_paths = [
