@@ -244,7 +244,7 @@ def test_anchors_result_has_lowercase_root_key(tmp_path, monkeypatch):
 # _resolve_root() - 9 killable mutants (mutmut_7 killed by anchors test above)
 # ---------------------------------------------------------------------------
 
-def test_resolve_root_uses_git_toplevel(tmp_path):
+def test_resolve_root_uses_git_toplevel(tmp_path, monkeypatch):
     """_resolve_root() returns the git repo root when no env/flag override.
 
     Mutation: empty command, wrong subcommand, or wrong flags prevent
@@ -252,6 +252,7 @@ def test_resolve_root_uses_git_toplevel(tmp_path):
     Also kills mutants removing capture_output or text that break stdout access.
     Oracle: returned path matches the initialized git repo root.
     """
+    monkeypatch.delenv('HQ_ROOT', raising=False)
     repo = tmp_path / 'repo'
     _git_repo(repo)
     subdir = repo / 'sub'

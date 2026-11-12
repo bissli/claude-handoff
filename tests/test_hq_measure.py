@@ -168,7 +168,10 @@ def test_cap_kills_the_probe_group(tmp_path, monkeypatch):
     assert hq.run_probe(probe, tmp_path) == ('probe-failed: ran past 1 s', False, '')
     stat = pathlib.Path(f'/proc/{pid_file.read_text().strip()}/stat')
     for _ in range(50):
-        if not stat.exists() or stat.read_text().split(')')[-1].split()[0] == 'Z':
+        try:
+            if stat.read_text().split(')')[-1].split()[0] == 'Z':
+                break
+        except FileNotFoundError:
             break
         time.sleep(0.1)
     else:
