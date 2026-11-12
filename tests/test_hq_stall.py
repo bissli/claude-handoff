@@ -248,7 +248,7 @@ def test_a_value_crossing_the_goal_is_progress():
         {'cycle': '1', 'log': 'summary: a=94.9->95 | -'},
         {'cycle': '2', 'log': 'summary: a=95.2->95 | -'},
         ]
-    assert hq.stall_count(rows)['row_class'] == 'progress'
+    assert hq.stall_count(rows)['stall'] == 0
 
 
 def test_stepped_gains_add_up_to_a_credit():
@@ -645,8 +645,7 @@ def test_a_row_with_no_numeric_cycle_counts_toward_nothing():
     after = hq.stall_count([{'cycle': '1', 'log': stuck}] + skipped)
     assert (after['stall'], after['measured']) == (0, 1)
     before = hq.stall_count(skipped + [{'cycle': '7', 'log': stuck}])
-    assert (before['window'], before['measured']) == (7, 7)
-    assert before['row_class'] == 'neutral'
+    assert (before['window'], before['measured'], before['stall']) == (7, 7, 0)
 
 
 def test_plan_names_need_a_plan_section():

@@ -99,14 +99,28 @@ def test_probe_row_stores_tokens_then_the_log(tmp_path, monkeypatch):
 
     Mutation: the log before the bar, no '-' for an empty log, or the
     first stdout line read.
-    Oracle: stdout x, summary: a=3->0 and a blank line.
+    Oracle: stdout x, a=3->0 and a blank line.
     """
     folder = _root(tmp_path, monkeypatch)
-    _probe(folder, "printf 'x\\nsummary: a=3->0\\n\\n'")
+    _probe(folder, "printf 'x\\na=3->0\\n\\n'")
     _cycle('fixed x')
     _cycle('')
     assert [row['log'] for row in _rows(folder)] == [
         'summary: a=3->0 | fixed x', 'summary: a=3->0 | -']
+
+
+def test_a_summary_prefix_on_the_probe_line_fails_the_row(tmp_path, monkeypatch):
+    """Verify a probe line that opens on summary: stores a failed row.
+
+    Mutation: run_probe strips a leading summary: from the probe line.
+    Oracle: the error parse_summary builds for a word of no form.
+    """
+    folder = _root(tmp_path, monkeypatch)
+    _probe(folder, "echo 'summary: a=3->0'")
+    _cycle()
+    assert _rows(folder)[-1]['log'] == (
+        'summary: probe-failed: line does not parse:'
+        ' token summary: matches no summary form | work')
 
 
 def test_failed_exit_stores_the_cut_cause(tmp_path, monkeypatch):
@@ -190,18 +204,17 @@ def test_a_bar_in_the_token_line_fails_the_row(tmp_path, monkeypatch):
 
 
 def test_empty_and_unmeasured_output_store_unmeasured(tmp_path, monkeypatch):
-    """Verify empty stdout, unmeasured, and summary: unmeasured store the
-    unmeasured row.
+    """Verify empty stdout and unmeasured store the unmeasured row.
 
     Mutation: unmeasured read as a token line.
-    Oracle: the three outputs, each a cycle.
+    Oracle: the two outputs, each a cycle.
     """
     folder = _root(tmp_path, monkeypatch)
-    for body in ('true', 'echo unmeasured', "echo 'summary: unmeasured'"):
+    for body in ('true', 'echo unmeasured'):
         _probe(folder, body)
         _cycle()
     assert [row['log'] for row in _rows(folder)] == [
-        'summary: unmeasured | work'] * 3
+        'summary: unmeasured | work'] * 2
 
 
 def test_no_probe_stores_the_log_and_never_refuses(tmp_path, monkeypatch):

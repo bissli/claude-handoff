@@ -1067,17 +1067,13 @@ def stall_count(rows: list[dict]) -> dict:
     Returns
     -------
     dict
-        For the newest composed row, or None, 0 and False with none:
+        For the newest composed row, or None and 0 with none:
 
         - ``stall``: the streak. None for a row that does not parse and
           is no ruling, and for an unmeasured row before the first
           measured one.
-        - ``carried``: the streak before the row.
-        - ``reported``: ``stall``, else ``carried``.
+        - ``reported``: ``stall``, else the streak before the row.
         - ``window``: the window's first cycle.
-        - ``row_class``: progress, neutral, non-progress, failed,
-          unmeasured or unparsed.
-        - ``ruling``: True for a ruling row.
         - ``cause``: the row's probe-failed cause, else None.
         - ``measured``: the newest measured cycle, None before one.
         - ``measured_tokens``: that row's tokens, empty before one.
@@ -1107,22 +1103,21 @@ def stall_count(rows: list[dict]) -> dict:
     state: dict[str, dict] = {}
     streak = 0
     result: dict = {
-        'stall': None, 'carried': 0, 'reported': 0, 'window': None,
-        'row_class': 'unparsed', 'ruling': False, 'cause': None,
+        'stall': None, 'reported': 0, 'window': None, 'cause': None,
         'measured': None, 'measured_tokens': {},
         }
     first_parsed = True
     for row in rows:
         cycle_text = str(row.get('cycle', '')).strip()
         log = row.get('log', '') or ''
-        if (not re.fullmatch(r'[0-9]+', cycle_text)
-                or not re.match(r'\s*summary:', log, re.IGNORECASE)
-                or ' | ' not in log):
+        if not re.fullmatch(r'[0-9]+', cycle_text) or ' | ' not in log:
+            continue
+        tokens, free_text, error = parse_summary(log)
+        if free_text is None:
             continue
         cycle = int(cycle_text)
         carried = streak
-        tokens, free_text, error = parse_summary(log)
-        ruling = ' '.join((free_text or '').split()).lower().startswith(
+        ruling = ' '.join(free_text.split()).lower().startswith(
             'stall review:')
         if result['window'] is None or ruling:
             result['window'] = cycle
@@ -1143,7 +1138,7 @@ def stall_count(rows: list[dict]) -> dict:
                         'kind': kind, 'goal': goal, 'step': step, 'side': off_side,
                         'best': abs(current - goal),
                         }
-                    votes.append('new' if prior is None else 'stuck')
+                    votes.append('stuck')
                     continue
                 prior['side'] = prior['side'] or off_side
                 if prior['side']:
@@ -1203,9 +1198,7 @@ def stall_count(rows: list[dict]) -> dict:
         else:
             stall = None
         result.update(
-            stall=stall, carried=carried,
-            reported=carried if stall is None else stall,
-            row_class=row_class, ruling=ruling,
+            stall=stall, reported=carried if stall is None else stall,
             cause=error[len('probe-failed:'):].strip() if failed else None)
     return result
 
@@ -1315,8 +1308,7 @@ def run_probe(probe: pathlib.Path, cwd: pathlib.Path) -> tuple[str, bool, str]:
     out_lines = [
         ' '.join(line.split()) for line in out_raw.decode(errors='replace').splitlines()
         if line.strip()]
-    last_line = out_lines[-1] if out_lines else ''
-    line = re.sub(r'^summary:\s*', '', last_line, flags=re.IGNORECASE)
+    line = out_lines[-1] if out_lines else ''
     met = proc.returncode == 3
     if not line or line.lower() == 'unmeasured':
         row = 'unmeasured'
