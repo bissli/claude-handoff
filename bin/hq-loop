@@ -31,8 +31,9 @@ die() {
 
 # One short line per event is a single O_APPEND write, so the driver
 # never reads half a line. A field never prints empty, because read
-# would collapse it. A monitor lists as type shell, so neither counts
-# as a task that keeps the session busy.
+# would collapse it. A monitor lists as type shell, and an idle
+# teammate stays listed as running, so none of the three counts as a
+# task that keeps the session busy.
 # The one jq call prints four lines: the event line, the event name,
 # the last nonblank line of the reply, and the prompt read as a ruling.
 hook() {
@@ -48,7 +49,8 @@ hook() {
                  | map(select(. != null and . != "")) | first // "-") end),
           (.session_id // "-"),
           ([.background_tasks | arrays | .[]
-            | select(.type != "monitor" and .type != "shell")] | length),
+            | select(.type | IN("monitor", "shell", "teammate") | not)]
+           | length),
           (if ((.last_assistant_message | strings) // "") | test("[?]\\s*$")
            then 1 else 0 end)
          ] | map(tostring) | join(" ")),

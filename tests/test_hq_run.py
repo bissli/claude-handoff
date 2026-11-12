@@ -1649,6 +1649,22 @@ def test_tasks_leave_out_monitors_and_shells(tmp_path):
     assert _events(tmp_path) == ['Stop - S1 1 0']
 
 
+def test_tasks_leave_out_teammates(tmp_path):
+    """Verify the tasks field does not count a teammate task.
+
+    Mutation: the teammate filter dropped, so an idle teammate, which
+    stays listed as running, holds every write and nudge for good.
+    Oracle: a teammate and a workflow task count 1.
+    """
+    _hook(tmp_path, {
+        'hook_event_name': 'Stop', 'session_id': 'S1',
+        'last_assistant_message': 'Waiting.',
+        'background_tasks': [
+            {'id': 't1', 'type': 'teammate', 'status': 'running'},
+            {'id': 't2', 'type': 'workflow', 'status': 'running'}]})
+    assert _events(tmp_path) == ['Stop - S1 1 0']
+
+
 def test_endsq_reads_the_last_character(tmp_path):
     """Verify endsq is 1 only when ? is the last character but whitespace.
 

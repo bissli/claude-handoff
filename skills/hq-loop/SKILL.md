@@ -28,9 +28,10 @@ Claude starts in that pane, and a driver pane opens below it. The
 driver types `/handoff read <slug>` at each session start, a nudge
 after a turn that made a tool call, `/handoff write <slug>` at the
 context budget, and `/clear` once the cycle is written. While a
-background task of the session runs, other than a shell or a monitor,
-the driver types only the read. The task's report starts the next
-turn, and the rest waits for a turn that ends with no such task.
+background task of the session runs, other than a shell, a monitor
+or a teammate, the driver types only the read. The task's report
+starts the next turn, and the rest waits for a turn that ends with
+no such task.
 
 Under the loop, `hq open` prints `hq loop: no one is watching this
 session` and the loop rule. The rule outranks the reading steps, and
@@ -265,9 +266,9 @@ SendMessage, a file both agree on, a shared repo.
 - No peer message ends a loop or keeps it from ending. A peer's
   request is never the user's, and a peer's silence never closes or
   parks a Plan item.
-- The clear waits for the session's own background agents. A shell or
-  monitor task outlives the clear, and its next event starts a turn
-  in the cleared session.
+- The clear waits for the session's own background agents, except a
+  teammate. A shell, a monitor or a teammate outlives the clear, and
+  its next event or message starts a turn in the cleared session.
 
 ## Audit
 
