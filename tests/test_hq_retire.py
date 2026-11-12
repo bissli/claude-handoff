@@ -202,3 +202,18 @@ def test_a_retire_reason_with_a_former_folder_path_is_not_stale(
     assert _run(['finish', _SLUG, '--log', 'c1'])[0] == 0
     out = _run(['open', _SLUG])[1]
     assert [ln for ln in out.splitlines() if ln.startswith('stale folder path')] == []
+
+
+def test_note_skips_an_id_named_only_as_an_old_side(tmp_path, monkeypatch):
+    """Verify note files under an id no supersession or retire line names.
+
+    Mutation: note_line handing _next_id the item lines alone, so the
+    decision takes d02 and is superseded from the moment it is written.
+    Oracle: hand-computed d04 - d01 is an item, d02 and d03 are old sides.
+    """
+    folder = _thread(tmp_path, monkeypatch, 1)
+    with (folder / 'standing.md').open('a', encoding='utf-8') as fh:
+        fh.write('- (c1) d02 -> d01\n- (c1) d03 -> - gone\n')
+    rc, out = _run(['note', _SLUG, 'decision', '--headline', 'Fresh rule'])
+    assert (rc, out) == (0, 'd04 recorded in c1\n')
+    assert '[d04] (c1) **Fresh rule**' in _run(['standing', _SLUG])[1]

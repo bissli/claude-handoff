@@ -259,7 +259,8 @@ def note_line(
     Parameters
     ----------
     standing_text : str
-        Current text of standing.md, which fixes the ids in use.
+        Current text of standing.md. An id on an item line, or on the old
+        side of a supersession or retire line, is taken.
     kind_str : str
         Item kind: a key of ``KIND_PREFIX``.
     headline : str
@@ -279,8 +280,10 @@ def note_line(
     prefix = KIND_PREFIX.get(kind_str)
     if not prefix:
         return None
-    items, _ = parse_standing(standing_text)
-    item_id = _next_id(items, prefix)
+    items, superseded_ids = parse_standing(standing_text)
+    item_id = _next_id(
+        items + [{'id': old_id, 'prefix': old_id[0]} for old_id in superseded_ids],
+        prefix)
     headline_clean = ' '.join(headline.split()).replace('**', '')
     body_clean = body.replace('\n', ' ')
     bold = f'**{headline_clean}**'
