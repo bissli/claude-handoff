@@ -101,7 +101,10 @@ reachable.
    - Grants: each step that would weaken security or stability and
      that the loop may take unasked, such as a push, a deploy or a
      delete. Without a grant, the session ends its turn on that
-     question and the loop parks until the user answers.
+     question and the loop parks until the user answers. No grant
+     covers a change to who or what can reach or act on a system (a
+     password, key, token, permission, tool approval or network
+     rule): the session asks about it every time.
    - The cycles the user will spend before looking again, for
      `--max-cycles`.
 3. With a measure, build the probe by Measure probe.
@@ -279,7 +282,8 @@ user for the driver pane's last lines or the `hq loop:` line.
 
 - `<slug> asks: <last line>`, with a bell: the turn ended on `?`. The
   user answers in the claude pane. A grant in Directives keeps that
-  question from coming again.
+  question from coming again, except for a step no grant covers
+  (Setup step 2).
 - `<slug> waits: <last line>`: nothing is workable, or every Plan
   item is done. The user's prompt starts the next turn, as does the
   end of a monitor the session started.
