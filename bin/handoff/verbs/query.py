@@ -14,7 +14,7 @@ from handoff import ledger, markdown, paths, render, standing, storage, threads
 
 
 def verb_read(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int:
-    """Run read: print resolved spans and record a receipt.
+    """Print the spans a row asks for, then record a read receipt.
 
     Parameters
     ----------
@@ -28,33 +28,11 @@ def verb_read(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
     Returns
     -------
     int
-        0 on success; 1 when the path is not in the ledger, not on disk,
-        or neither the state directory nor the handoff folder takes the
-        receipt; 2 when ``--whole`` and ``--section`` are passed
-        together.
-
-    Notes
-    -----
-    - The spans print before the receipt is written, so a receipt with
-      nowhere to go costs the caller the exit code, never the content
-      it asked for.
-    - The receipt goes to ``hq-reads-<session>.txt`` in the state
-      directory, else to ``.hq.reads-<session>`` in the handoff folder,
-      and the gate reads both. A sandboxed shell can leave the state
-      directory read-only while the repo stays writable.
-    - The gate matches a receipt on the path and never on the span,
-      and the receipt is written only where the read covered the row's
-      required content: ``--whole`` covers any row, a ``--section``
-      covers one whose required spans sit inside the span it printed,
-      and a row whose ``where`` holds any unresolved anchor is covered
-      by ``--whole`` alone. An uncovered read prints the remedy and
-      exits 0.
-    - The path keys as ``stamp`` stores it, else relative to the root or
-      the pinned work dir (``ledger_key``), and the file opens where the
-      stored path resolves; the receipt carries the stored path, which
-      is what the gate matches.
-    - A ``/`` in the session id becomes ``_``: the id names one receipt
-      file, not a path under the state directory.
+        0 on success. 0 also when the read leaves a required span
+        unprinted: no receipt is written and the remedy prints. 1 when
+        the path is not in the ledger, not on disk, or no receipt file
+        can be written, the spans having printed. 2 when ``--whole`` and
+        ``--section`` are both passed, or ``--section`` is empty.
     """
     path = getattr(argv, 'path', '')
     whole = getattr(argv, 'whole', False)
@@ -72,9 +50,6 @@ def verb_read(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
     rows = storage.read_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS)
     stored_path = paths.ledger_key(folder, path, {r['path'] for r in rows})
     if stored_path is None:
-        # A store has no row to find - the artifact walk skips both -
-        # so the bare refusal sent the reader to open the file the
-        # gate reports them for opening. Name the verb instead.
         store = next((part for part in pathlib.PurePath(path).parts
                       if part in storage.STORE_VERBS), None)
         if store:
@@ -108,12 +83,8 @@ def verb_read(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
     else:
         printed = [(1, len(file_lines))]
         print('\n'.join(file_lines))
-    # Notes:
-    # - A receipt stands for the row's required content, so a read
-    #   leaving any of it unprinted earns none and the gate keeps
-    #   reporting the path.
-    # - One unresolved anchor withholds the receipt even where its
-    #   siblings printed: the row asks for every span it names.
+    # One unresolved anchor withholds the receipt even where its
+    # siblings printed, since the row asks for every span it names.
     if whole or row['where'] == '-':
         covered, absent = where == '-', []
     else:
@@ -149,7 +120,7 @@ def verb_read(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
 
 
 def verb_when(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int:
-    """Run when: print ledger history for one path.
+    """Print every ledger row for one path, oldest first.
 
     Parameters
     ----------
@@ -158,20 +129,15 @@ def verb_when(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
     anch : dict
         Anchors dict from ``anchors()``; unused but required by dispatch.
     argv : argparse.Namespace
-        Parsed when arguments: path.
+        Parsed when arguments: ``path``, in any spelling ``ledger_key``
+        resolves - ``~``, its expansion, a dotted folder path, or a token
+        relative to the project root or the pinned work dir.
 
     Returns
     -------
     int
-        0 with every row for the path, oldest first, no cap, the seven
-        columns; 1 when no spelling of the path has a row.
-
-    Notes
-    -----
-    - The path keys as ``stamp`` stores it, so every spelling of one
-      file - ``~``, its expansion, a dotted folder path - shows one
-      history; a relative token the folder does not hold is tried
-      against the project root, then the pinned work dir.
+        0 with one line per row, no cap, in the seven columns. 1 when no
+        spelling of the path has a row.
     """
     path = getattr(argv, 'path', '')
     rows = storage.read_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS)
@@ -190,7 +156,7 @@ def verb_when(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
 
 
 def verb_diff(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int:
-    """Run diff: the cursor change between two cycles, by section.
+    """Print the cursor change between two cycles, by section.
 
     Parameters
     ----------
@@ -206,20 +172,14 @@ def verb_diff(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
     Returns
     -------
     int
-        0 with one line per cursor section in file order - ``## Now  +3
-        -1``, ``## State  unchanged``, ``## Unfiled  added`` or
-        ``removed`` - or nothing when the two cursors are identical
-        once whitespace is normalized; with a section or ``--full``, the
-        section's ``-`` and ``+`` lines as difflib orders them, no cap.
+        0 with one line per cursor section in file order, such as
+        ``## Now  +3 -1``, ``## State  unchanged``, or ``## Unfiled
+        added`` / ``removed``. A line that moved between sections counts
+        in both. Nothing prints when the two cursors are identical once
+        whitespace is normalized. With a section or ``--full``, the
+        section's ``-`` and ``+`` lines follow in difflib order, no cap.
         1 when a cycle archive is absent or the section matches no
-        heading; 2 when a cycle is not a number.
-
-    Notes
-    -----
-    - A line that moved between sections counts in both, so the summary
-      never reads identical when only the shape changed; identity is
-      the whole cursor's, so the help text's "no output means identical"
-      holds.
+        heading. 2 when a cycle is not a number.
     """
     cycles: list[int] = []
     for token in (str(getattr(argv, 'c1', '')), str(getattr(argv, 'c2', ''))):
@@ -291,7 +251,7 @@ def verb_diff(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
 
 
 def verb_arc(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int:
-    """Run arc: the whole thread in one read, a line a cycle.
+    """Print the thread, a line a cycle; writes no receipt, arms no gate.
 
     Parameters
     ----------
@@ -305,13 +265,7 @@ def verb_arc(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int:
     Returns
     -------
     int
-        0 with ``render_arc``'s text; 1 when no cycle has finished, so
-        the manifest holds no row.
-
-    Notes
-    -----
-    - Read-only: it writes no receipt and no thread record, and arms
-      no gate.
+        0 with the ``render_arc`` text. 1 when the manifest holds no row.
     """
     manifest = storage.read_tsv(
         folder / 'cycles' / 'manifest.tsv', storage.MANIFEST_FIELDS)
@@ -328,7 +282,7 @@ def verb_arc(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int:
 
 
 def verb_artifacts(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int:
-    """Run artifacts: print live rows and unstamped walk entries, no cap.
+    """Print live rows and unstamped files, or the rows of one status.
 
     Parameters
     ----------
@@ -337,26 +291,16 @@ def verb_artifacts(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -
     anch : dict
         Anchors dict from ``anchors()``; unused but required by dispatch.
     argv : argparse.Namespace
-        Parsed artifacts arguments: ``--status``.
+        Parsed artifacts arguments: ``--status`` selects the rows of that
+        status in place of the live default and leaves unstamped files
+        out.
 
     Returns
     -------
     int
-        0; one line per entry, or one per selected row where
-        ``--status`` is given. A bare run closes with one count line
-        per status it left out, naming the ``--status`` that prints
-        them.
-
-    Notes
-    -----
-    - Selection reads the path's current row, the ``latest_rows`` fold,
-      so a superseded earlier row never answers ``--status``.
-    - ``--status`` replaces the live-only default.
-    - A row whose file is gone reads ``missing`` against the disk, so a
-      path stamped by an absolute spelling that never arrived is
-      counted rather than printed, and the count line is the only trace
-      it leaves here.
-    - No row matching is exit 0, not a refusal: the query answered.
+        0, also when no row matches, with one line per entry. A bare run
+        closes with one count line per status it left out, naming the
+        ``--status`` that prints them.
     """
     rows = storage.read_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS)
     explicit_status = getattr(argv, 'status', None)
@@ -415,7 +359,7 @@ def verb_artifacts(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -
 
 
 def verb_standing(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int:
-    """Run standing: print unsuperseded items, all with --all, or named ids.
+    """Print unsuperseded standing items, or the items named by id.
 
     Parameters
     ----------
@@ -424,32 +368,21 @@ def verb_standing(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) ->
     anch : dict
         Anchors dict from ``anchors()``; unused but required by dispatch.
     argv : argparse.Namespace
-        Parsed standing arguments; ``ids`` names items to print in full,
-        ``--all`` includes superseded items in the listing, ``--grep``,
-        ``--kind`` and ``--in-cycle`` select within a listing.
+        Parsed standing arguments. ``ids`` names items to print in full
+        and outranks every filter, so ids with ``--kind`` print the named
+        items. ``--all`` includes superseded items in a listing.
+        ``--grep``, ``--kind`` and ``--in-cycle`` select within a listing.
 
     Returns
     -------
     int
-        0 with no id, one line per item; with ids, 0 once every id
-        printed and 1 when any id is not in standing.md; 2 on a ``--grep``
-        that is not a regular expression.
-
-    Notes
-    -----
-    - A named id outranks every filter: ``ids`` and ``--kind`` together
-      print the named items, never their intersection.
-    - The block renders a decision, a dead end, or a cited evidence
-      item by its headline, and a constraint by its headline and first
-      sentence; the id form the block names is where the rest of a body
-      is read.
-    - A superseded item names the id now current and the cycle that
-      made it current, never the first hop out of a chain whose own
-      successor was superseded later.
-    - The id form adds the whole chain, ``old -> mid -> current``,
-      once it runs past one hop.
-    - A retired item prints ``[retired in c<n>: <reason>]``; one
-      superseded onto a later-retired item prints both marks.
+        0 with no id: one line per item. With ids, 0 once every id
+        printed and 1 when any id is not in standing.md. 2 on a
+        ``--grep`` that is not a regular expression. A superseded or
+        retired item's line ends in one bracket: ``superseded by
+        <current id> in c<n>``, ``retired in c<n>: <reason>``, or both
+        joined by ``, ``. A named id whose chain runs past one hop appends
+        ``- old -> mid -> current`` inside the bracket.
     """
     standing_path = folder / 'standing.md'
     text = standing_path.read_text(encoding='utf-8') if standing_path.exists() else ''
@@ -461,8 +394,6 @@ def verb_standing(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) ->
     grep = getattr(argv, 'grep', None)
     kind = getattr(argv, 'kind', None)
     in_cycle = getattr(argv, 'in_cycle', None)
-    # A named id is explicit and outranks a filter, so filtering runs only
-    # over a listing; by_id above already holds every item for the refusal.
     if not wanted:
         if grep:
             try:
@@ -517,7 +448,7 @@ def verb_work_dir(folder: pathlib.Path, argv: argparse.Namespace) -> int:
     Parameters
     ----------
     folder : pathlib.Path
-        Handoff folder; the pin is ``folder/work-dir``.
+        Handoff folder.
     argv : argparse.Namespace
         Parsed ``work-dir`` arguments: ``dir`` is the token to pin or
         None, ``clear`` removes the pin.
@@ -526,16 +457,15 @@ def verb_work_dir(folder: pathlib.Path, argv: argparse.Namespace) -> int:
     -------
     int
         0 with the resolved line, once the pin is written, or once it is
-        cleared; 1 when the token is refused, the pin on disk fails its
+        cleared. 1 when the token is refused, the pin on disk fails its
         check, or a directory sits under the pin's name, with nothing
-        written; 2 when ``dir`` and ``--clear`` are both given.
+        written. 2 when ``dir`` and ``--clear`` are both given.
 
     Notes
     -----
-    - No scan: whether the thread's work already lives in a project
-      directory is a judgment over the layout at the first begin, and a
-      name list would pin a dump in the wrong place. The agent judges
-      and pins.
+    - The verb scans no directory: whether the thread's work already
+      lives in a project directory is the agent's judgment over the
+      layout, and a name list would pin a dump in the wrong place.
     """
     token = getattr(argv, 'dir', None)
     pin = folder / paths.WORK_PIN_NAME
@@ -544,8 +474,7 @@ def verb_work_dir(folder: pathlib.Path, argv: argparse.Namespace) -> int:
         print('hq work-dir: --clear takes no directory - pass one or the other')
         return 2
     # A directory under the pin's name can be neither pinned over nor
-    # cleared; the resolve line names the move, and the bare print
-    # below carries it with the ruling.
+    # cleared; the resolve lines name the move.
     if pin.is_dir() and (clear or token is not None):
         for line in paths.resolve_work_dir(folder)[1]:
             print(line)
@@ -580,7 +509,7 @@ def verb_list(root: pathlib.Path, argv: argparse.Namespace) -> int:
     Parameters
     ----------
     root : pathlib.Path
-        Project root; the handoff folders sit under ``root / HANDOFF_DIRNAME``.
+        Project root; the folders sit under ``root / HANDOFF_DIRNAME``.
     argv : argparse.Namespace
         Parsed ``list`` arguments; ``count`` caps the lines, None for all;
         ``--done`` lists the folders marked done instead of the open ones.
@@ -588,35 +517,23 @@ def verb_list(root: pathlib.Path, argv: argparse.Namespace) -> int:
     Returns
     -------
     int
-        0, also when no folder holds a ``HANDOFF.md`` and the one line is
-        ``hq list: no handoff under <dir>``; 2 on a count below 1.
+        0, also when no folder holds a ``HANDOFF.md``: the one line is
+        ``hq list: no handoff under <dir>``. A file the script cannot
+        read prints its slug, ``-`` in every field and ``unreadable:
+        <reason>`` as the Task. A run that leaves done folders out
+        closes with a ``<N> marked done`` line naming ``--done``. 2 on a
+        count below 1.
 
     Notes
     -----
-    - A folder holding the ``.hq.done`` marker is left out, and the run
-      closes with a ``<N> marked done`` line naming ``--done``, which
-      lists those folders and leaves the open ones out.
-    - The marker's existence is the whole test, as at ``begin``, so a
-      marker no key=value reader can parse still hides its folder.
-    - ``count`` caps what is shown, so ``hq list 5`` is the five most
-      recent of whichever set the flag selects.
     - Order: newest ``Last worked``, else ``Written``, else mtime date;
       then newer mtime; then slug A to Z. A header date counts only as
       ``YYYY-MM-DD``.
-    - The line is ``<slug>  <worked>  c<N>  <open> open  <task>``,
-      ``<worked>`` the date it sorts by; ``<open>`` counting the
-      ``- [ ]`` items: a done item moves out of the cursor, so a done
-      count would read zero. A non-conforming header gives ``-`` for
-      the cycle; a Plan with no checkbox item, or no Plan, gives ``-``
-      for the progress; a missing Task line gives ``-``.
-    - On a terminal, a Task wider than the columns left of the terminal
-      width is cut to fit and ends in ``...``, so no row wraps. Piped
-      output keeps the whole Task.
-    - Only ``- [ ]``, ``- [x]``, and ``- [X]`` bullets under ``## Plan``
-      are plan items; a checkbox under any other section is not.
-    - A file the script cannot read prints its slug with ``-`` in every
-      field and ``unreadable: <reason>`` as the Task; the survey goes on
-      and the exit stays 0.
+    - The line is ``<slug>  <worked>  c<N>  <open> open  <task>``, with
+      ``<worked>`` the date it sorts by. ``<open>`` counts ``- [ ]``
+      items, since a done item moves out of the cursor and a done count
+      would read zero. ``-`` stands for a nonconforming header's cycle,
+      a Plan with no checkbox item, or a missing Task line.
     """
     count = getattr(argv, 'count', None)
     if count is not None and count < 1:

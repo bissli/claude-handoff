@@ -14,9 +14,8 @@ ATX_HEADING_PAT = re.compile(r'#{1,6}(?:[ \t]|$)')
 
 
 # Notes:
-# - A grading label under Key files may be written as its own heading;
-#   there it is structure and stays in the section rather than opening
-#   one, for the adopt parser and for conservation alike.
+# - Under Key files a grading label written as a heading is structure
+#   and opens no section, for the adopt parser and conservation alike.
 # - A label may carry a clause, `Read now, under x/ unless noted:`, and
 #   is structure when the whole line ends with a colon.
 KF_LABEL_PAT = re.compile(
@@ -33,52 +32,31 @@ def resolve_where(
     Parameters
     ----------
     text : str
-        The full content of the target file (split into lines internally).
+        Full content of the target file.
     anchors : list[str]
-        Anchor strings to locate - each is a heading text from the file's
-        ``where`` field, with backticks, leading ``#`` markers, numbering,
-        and surrounding whitespace stripped before comparison.
+        Heading texts from a row's ``where`` field. Backticks, ``#``
+        markers, numbering and surrounding whitespace drop before the
+        comparison, which ignores case.
 
     Returns
     -------
     tuple[list[tuple[int, int]], list[str]]
-        Resolved 1-based inclusive spans (one per matched anchor) and the
-        list of anchor strings that could not be matched.
+        One span per matched anchor, and the anchors that matched nothing.
 
     Notes
     -----
-    - Matching is case-insensitive.
-    - A span runs from the matched heading to the line before the next
-      heading of the same or higher level (same or fewer ``#`` characters),
-      or to the last line of the file when no such heading follows.
-    - An anchor ``s<d>`` or ``s<d><letter>`` resolves to the first heading
-      whose leading section token matches: ``<d>.``, ``<d>:``, ``<d> -``,
-      ``<d><letter>.``, ``<d><letter>:``, ``<d><letter> -``, or
-      ``s<d>[<letter>][.:]``, the same token set ``_norm_heading`` strips.
-      Equality on the whole token is required, so ``s11`` does not resolve
-      to ``# 11b. Proof``. A bare ``S3`` word without a dot or colon is not
-      a token. A literal heading match is tried first.
+    - ``s<d>`` or ``s<d><letter>`` resolves to the first heading whose
+      leading token matches, from the token set ``_norm_heading`` strips.
+      The whole token must match, so ``s11`` never lands on
+      ``# 11b. Proof``. A bare ``S3`` with no dot or colon is no token.
     - A dotted number is one token: ``s24.4`` names ``### 24.4 The
-      decision`` and ``s24`` does not. The title alone lands on the first
-      heading of that text, so the dotted form is how a sub-heading whose
-      title repeats is named.
-    - A letter-led id, one or two letters then ``<d>[<letter>]`` followed
-      by ``.``, ``:``, or `` - ``, is a token too: ``F65``, ``f65``, and
-      ``sF65`` all resolve ``## F65. Title``. The letters count, so ``F7``
-      never lands on ``## 7. Seven``, and a longer word such as ``Log4j:``
-      is title text.
-    - The literal match is equality on the normalized text, never
-      containment, so ``Retry`` does not land on ``## Retry budget``.
-    - A ``#`` line inside a ``` or ~~~ fence is code, so it neither
-      ends a span nor resolves an anchor.
-    - No returned span holds another's start, so a caller printing
-      or sizing them reads each nested line once.
-    - Between them the spans still cover every line the matched
-      headings' own sections reach: an enclosing span ends where the
-      nested one begins, and the innermost carries the tail.
-    - Two anchors naming one heading return that span twice. The
-      guarantee is on nesting, never on duplication.
-    - An unresolved anchor prints ``?`` in its span slot during rendering.
+      decision`` and ``s24`` does not. The dotted form names a
+      sub-heading whose title repeats.
+    - A letter-led id is a token too: ``F65``, ``f65`` and ``sF65`` all
+      resolve ``## F65. Title``. The letters count, so ``F7`` never
+      lands on ``## 7. Seven``, and a word such as ``Log4j:`` is title
+      text.
+    - Two anchors naming one heading return that span twice.
     """
     file_lines = text.splitlines()
     heading_info: list[tuple[int, int, str, set[str]]] = []
@@ -86,13 +64,13 @@ def resolve_where(
     for i, line in enumerate(file_lines):
         # Notes:
         # - A closing fence carries nothing after the marker, so a
-        #   ```python line inside a block opens nothing and closes
-        #   nothing; reading it as a close inverts the parity for the
-        #   rest of the file.
-        # - It also repeats the opening character at its own length
-        #   or longer, so a ``` line inside a ~~~ block is content.
-        # - The indent is spaces, never a tab: four columns of either
-        #   make the line code rather than a fence.
+        #   ```python line inside a block closes nothing. Reading it
+        #   as a close inverts the fence state for the rest of the file.
+        # - A closing fence repeats the opening character at its own
+        #   length or longer, so a ``` line inside a ~~~ block is
+        #   content.
+        # - The indent is spaces, and four columns of either spaces or a
+        #   tab make the line code.
         fence_m = re.match(r' {0,3}(`{3,}|~{3,})(.*)$', line)
         if fence_m:
             marker, tail = fence_m.group(1), fence_m.group(2).strip()
@@ -105,7 +83,7 @@ def resolve_where(
             continue
         if ATX_HEADING_PAT.match(line):
             level = len(line) - len(line.lstrip('#'))
-            # The dotted branch leads so `24.4` is one token and never
+            # The dotted branch leads so `24.4` is one token, never
             # the integer `24` with `.4` left over.
             token_m = re.match(
                 r'^#+\s*(?:(?P<dotted>\d+(?:\.\d+)+)[.:]?'
@@ -131,8 +109,8 @@ def resolve_where(
     unresolved: list[str] = []
     total = len(file_lines)
     for part in anchors:
-        # The s<d> and id forms must be read before normalizing:
-        # _norm_heading strips the very token that names the section.
+        # _norm_heading strips the token that names the section, so
+        # the s<d> and id forms are read before normalizing.
         anchor_keys: list[str] = []
         section_m = re.fullmatch(
             r's(\d+(?:\.\d+)*[a-z]?)', part.strip(), re.IGNORECASE)
@@ -163,12 +141,9 @@ def resolve_where(
                 break
         spans.append((start_line, end_line))
     # Notes:
-    # - A selected child heading nests inside its parent's span, so
-    #   the shared lines would print and count twice. The enclosing
-    #   span gives them up and ends where the child begins.
     # - A parent's tail past its last selected child has no child to
     #   hold it, so the innermost span reaches the widest enclosing
-    #   end: what the untrimmed spans covered is still covered.
+    #   end and the trimmed spans still cover every line.
     # - Only a strictly later start trims, so two anchors landing on
     #   one heading leave each other alone.
     starts = [beg for beg, _ in spans]
@@ -181,12 +156,11 @@ def resolve_where(
 
 
 def block_sha(heading_and_body: str) -> str:
-    """Return the first 12 hex of sha256 over the normalized block text.
+    """First 12 hex digits of the sha256 of the block text, normalized.
     """
     normalized = re.sub(r' +', ' ', heading_and_body)
-    # The writer hashes heading + newline + body; the reader hashes the
-    # stripped block text. With an empty body only a trailing newline
-    # separates them, so it must not count.
+    # An empty body leaves a trailing newline that the reader's stripped
+    # block text lacks, so it must not count.
     normalized = '\n'.join(line.rstrip() for line in normalized.split('\n')).rstrip()
     return hashlib.sha256(normalized.encode()).hexdigest()[:12]
 
@@ -202,10 +176,9 @@ def directives_text(cursor: str) -> str:
     Returns
     -------
     str
-        Every line under ``## Directives`` up to the next ``## `` heading,
-        joined with each whitespace run collapsed to one space, so a
-        bullet re-wrapped at the column compares equal. Empty when the
-        section is absent or holds nothing.
+        The lines up to the next ``## `` heading, each whitespace run
+        collapsed to one space, so a re-wrapped bullet compares equal.
+        Empty when the section is absent or holds nothing.
     """
     section_m = re.search(r'^## Directives\s*$', cursor, re.MULTILINE)
     if not section_m:
@@ -216,7 +189,7 @@ def directives_text(cursor: str) -> str:
 
 
 def split_handoff(text: str) -> dict:
-    """Parse HANDOFF.md text into its structural components.
+    """Parse HANDOFF.md text into its parts.
 
     Parameters
     ----------
@@ -227,8 +200,8 @@ def split_handoff(text: str) -> dict:
     -------
     dict
         Keys: ``header`` (str), ``slug`` (str), ``cycle`` (int or None),
-        ``cursor`` (str from first ``## `` to first block or ``## Log``),
-        ``blocks`` (dict of block name to body text), ``log`` (str).
+        ``cursor`` (str), ``blocks`` (block name to stripped body text),
+        ``log`` (str). A part the text lacks is ``''``, ``None`` or empty.
     """
     result: dict = {'header': '', 'slug': '', 'cycle': None,
                     'cursor': '', 'blocks': {}, 'log': ''}
@@ -283,20 +256,16 @@ def _norm_heading(text: str) -> str:
     Notes
     -----
     - The leading section token is ``<d>``, ``<d>.``, ``<d>:``, ``<d> -``,
-      a dotted number ``<d>.<d>``, ``<d><letter>.``, ``<d><letter>:``,
-      ``<d><letter> -``, or a letter-led id ``<letters><d>[<letter>]``
-      with the same delimiters, so ``## 11b. Proof``, ``## s11b: Proof``,
-      ``## 2a - Basis``, ``## 3.1 Warmup``, and ``## F65. Title`` all
-      resolve. A bare ``S3`` (no dot or colon) is a word, and stays.
+      a dotted number ``<d>.<d>``, ``<d><letter>`` or a letter-led id
+      ``<letters><d>[<letter>]``, each with the same delimiters. So
+      ``## 11b. Proof``, ``## s11b: Proof``, ``## 2a - Basis``,
+      ``## 3.1 Warmup`` and ``## F65. Title`` all lose their token. A
+      bare ``S3`` with no dot or colon is a word and stays.
     - An id takes one or two letters and its dot is not followed by a
-      digit, so ``Log4j:``, ``OAuth2:``, and ``v2.0`` are words a title
-      may start with, never section tokens.
-    - The dash delimiter needs whitespace on both sides, so ``2a-b`` in
-      ``## 2a-b range`` is not a token and its ``2`` is stripped by the
-      plain-digit fallback.
-    - A letter suffix is recognized only when a ``.``, ``:``, or `` - ``
-      follows it; ``3D`` in ``## 3D printing`` has no such delimiter and
-      its ``3`` is stripped by the plain-digit fallback.
+      digit, so ``Log4j:``, ``OAuth2:`` and ``v2.0`` are title words.
+    - The dash delimiter needs whitespace on both sides, and a letter
+      suffix needs a ``.``, ``:`` or `` - `` after it. So ``2a-b`` and
+      ``3D`` lose only their plain digit.
     """
     text = re.sub(r'^[#\s]+', '', text)
     text = re.sub(
@@ -318,13 +287,13 @@ def split_where(where: str) -> list[str]:
     Returns
     -------
     list[str]
-        The anchors, stripped, with empty parts dropped; ``-`` gives none.
+        The anchors, stripped, with empty parts dropped. ``-`` gives none.
 
     Notes
     -----
-    - A ``;`` inside a heading's text is written ``\\;`` in the field, so
-      the split is on an unescaped ``;`` and each anchor gets its ``;``
-      back before it is matched.
+    - A ``;`` inside a heading's text is written ``\\;`` in the field.
+      The split is on an unescaped ``;``, and each anchor gets its ``;``
+      back.
     """
     if where in {'-', ''}:
         return []

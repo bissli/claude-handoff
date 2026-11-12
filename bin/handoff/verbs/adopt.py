@@ -1,4 +1,4 @@
-"""The adopt verb: seeds the ledger and standing.md from an existing HANDOFF.md.
+"""Adopt verb: seeds ledger and standing from a foreign HANDOFF.md.
 """
 
 import argparse
@@ -7,9 +7,8 @@ import re
 
 from handoff import carry, ledger, markdown, paths, render, standing, storage
 
-# A sentence ends at `.`, `!`, or `?` and any closers that follow it,
-# which is what tells an item wrapped at the column from a section of
-# plain one-line items: the wrap breaks mid-sentence.
+# A sentence end tells an item wrapped at the column, which breaks
+# mid-sentence, from a section of plain one-line items.
 _SENTENCE_END = re.compile(r'[.!?]["\')\]]*$')
 
 
@@ -17,32 +16,24 @@ def witnessed_pairs(
     records: list[tuple[str, str, str]],
     written_labels: dict[str, str],
 ) -> list[str]:
-    """Filter pointer records to those whose label was written to the ledger.
+    """Bullet text of each pointer whose label reached the ledger.
 
     Parameters
     ----------
     records : list[tuple[str, str, str]]
         Each tuple is ``(stored_path, raw_bullet_text, label_part)``.
-        ``raw_bullet_text`` is the bullet's own text after its ``- ``
-        marker with any indented continuation lines joined by single
-        spaces. ``label_part`` is the label text this pointer contributes.
+        ``raw_bullet_text`` is the bullet after its ``- `` marker, with
+        continuation lines joined by single spaces. A ``label_part`` of
+        ``'-'`` marks a pointer with no free text and always passes.
     written_labels : dict[str, str]
-        Map from stored path to the label written in the ledger row.
+        Label written in the ledger row, by stored path. An absent path
+        counts as an empty label.
 
     Returns
     -------
     list[str]
-        ``raw_bullet_text`` for each record whose ``label_part`` appears
-        in the written label for its stored path.
-
-    Notes
-    -----
-    - A ``label_part`` of ``'-'`` always passes; it represents a pointer
-      whose label was already ``'-'`` (no free text).
-    - Comparison collapses whitespace on both sides, so minor spacing
-      differences do not cause a spurious miss.
-    - A stored path absent from ``written_labels`` is treated as having
-      an empty label, so only a ``'-'`` part passes for it.
+        ``raw_bullet_text`` of each record whose ``label_part`` appears
+        in its path's written label, whitespace collapsed.
     """
     def _ws(s: str) -> str:
         return ' '.join(s.split())
@@ -57,30 +48,24 @@ def witnessed_pairs(
 
 
 def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int:
-    """Run adopt: seed ledger and standing from an existing HANDOFF.md.
+    """Adopt a conforming HANDOFF.md that has no ledger.
 
     Parameters
     ----------
     folder : pathlib.Path
-        Handoff folder holding HANDOFF.md to adopt.
+        Handoff folder holding the HANDOFF.md.
     anch : dict
-        Anchors dict from ``anchors()``; provides cycle, session, timestamp.
+        Current ``now``, ``session``, ``branch``, ``sha`` and ``dirty``.
+        ``cycle`` is replaced by the header's cycle.
     argv : argparse.Namespace
         Parsed adopt arguments.
 
     Returns
     -------
     int
-        0 on success; 1 when HANDOFF.md is absent, non-conforming,
-        ledger.tsv already exists, or the thread is marked done.
-
-    Notes
-    -----
-    - Writes ledger.tsv, standing.md, cycles/manifest.tsv, cycles/c<n>.md,
-      and rewrites HANDOFF.md; a failed header check writes nothing.
-    - A marked folder is refused here as well as at ``begin``. Adoption
-      opens a ledger and a cycle on a folder that has none, which is
-      reopening the thread by another road.
+        0 on success. 1, with nothing written, when HANDOFF.md is absent,
+        a directory or non-conforming, ledger.tsv exists, or the thread
+        is marked done.
     """
     refusal = storage.done_refusal(folder, 'adopt')
     if refusal:
@@ -138,8 +123,8 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     manifest_path = cycles_dir / 'manifest.tsv'
     if not manifest_path.exists():
         manifest_path.write_text(storage.MANIFEST_HEADER + '\n', encoding='utf-8')
-    # Seed anch cycle from the header so standing items carry
-    # the right cycle.
+    # Standing items take their cycle from anch, so it holds the
+    # header's cycle.
     anch = dict(anch)
     anch['cycle'] = cycle
     ts = anch['now']
@@ -153,7 +138,7 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     cur_body: list[str] = []
 
     def _flush_section() -> None:
-        """Flush the current section body into sections_raw.
+        """Append the open section's body to sections_raw.
         """
         if cur_h2:
             sections_raw.setdefault(cur_h2, []).extend(cur_body)
@@ -171,10 +156,8 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
         elif cur_h2 and not line.startswith('<!-- hq:'):
             cur_body.append(line)
         elif not cur_h2:
-            # The header is a paragraph: a `Written:` line wrapped at the
-            # column runs on to the next blank line or heading. The
-            # script rewrites the header at finish, so the tail rides in
-            # the manifest note rather than the cursor.
+            # A `Written:` line wrapped at the column runs on to the
+            # next blank line or heading.
             if line.strip() == header_text.strip():
                 in_header = True
             elif not line.strip() or line.startswith('#'):
@@ -182,8 +165,7 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
             elif in_header:
                 header_tail.append(line.strip())
             # A paragraph wrapped at the column is one item, as under
-            # Key files: a plain line continues the open run, a bullet
-            # or a heading opens a new one, a blank line ends it.
+            # Key files.
             if line.strip() and not line.startswith('# ') and not in_header:
                 if preamble_open and not item_start.match(line):
                     preamble[-1] += ' ' + line.strip()
@@ -194,19 +176,14 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
                 preamble_open = False
     _flush_section()
 
-    # --- Step 3: parse Key files ---
+    # --- Step 2: parse Key files ---
     kf_map: dict[str, tuple[str, str | None, str]] = {}
     seeded_records: list[tuple[str, str, str]] = []
     kf_path_token = ''
     kf_free_text = ''
     kf_raw_text = ''
-    # Notes:
-    # - A list runs on `, path`, `and path`, or `, and path`; a
-    #   separator is never optional, so ` - the two stacks` is text,
-    #   and `and` needs its trailing space, so `android.yaml` is a path.
-    # - A bare token may carry a comma-separated range list; that form
-    #   is tried first, so the comma inside `mod.py:12-40,57` does not
-    #   end the token, and any other bare token still ends at a comma.
+    # A separator is never optional, so ` - the two stacks` is text, and
+    # `and` needs its trailing space, so `android.yaml` is a path.
     kf_more_path = re.compile(
         r'^\s*(?:,\s*(?:and\s+)?|and\s+)'
         r'([^\s,:]+:\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*|`[^`]+`|[^\s,]+)(.*)$',
@@ -214,58 +191,50 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     where_dropped: list[tuple[str, str]] = []
 
     def _flush_kf_pointer(path_tok: str, free: str, group: str, raw: str) -> None:
-        """Record the current Key files pointer into kf_map.
+        """Add one Key files pointer to kf_map.
 
         Parameters
         ----------
         path_tok : str
-            Raw path token, backticked or bare; a trailing comma is cut.
+            Path token, backticked or bare. A bare token may end in a
+            glued comma.
         free : str
-            Free text following the path on the bullet, continuation
-            lines joined.
+            Text after the path, continuation lines joined.
         group : str
-            Grade inherited from the nearest label line above the pointer.
+            Grade from the nearest label line above the pointer.
         raw : str
-            The bullet's text as written, marker cut and continuation
-            lines joined; the conservation witness compares it against
-            the original line.
+            The bullet as written, marker cut and continuation lines
+            joined. The conservation witness compares it to the original.
         """
         if not path_tok:
             return
-        # A bare first token swallows its glued comma, so the comma is
-        # handed back to the list walk below.
+        # The glued comma returns to the list walk below.
         if path_tok.endswith(','):
             free = ',' + free
-        # Several paths on one bullet share its text: `, path` or
-        # `and path` repeats while the next token names a file.
+        # Several paths on one bullet share its text.
         path_toks = [path_tok.rstrip(',')]
         more = kf_more_path.match(free)
         while more and _is_pointer(more.group(1).rstrip(',')):
             path_toks.append(more.group(1).rstrip(','))
             free = more.group(2)
             more = kf_more_path.match(free)
-        # The comma before a word that ends the list, and a ` - `
-        # between the path and its text, are separators, not text.
+        # A comma that ends the list and a ` - ` after the path are
+        # separators.
         free = re.sub(r'^-\s+', '', re.sub(r'^\s*,\s*', '', free.strip()))
-        # An inline label grades the row like a label line above it;
-        # it is structure and never reaches the label text.
+        # An inline label grades the row like a label line and stays
+        # out of the label text.
         inline_m = re.match(r'^\s*(read now|reference only)\s*:?\s*', free,
                             re.IGNORECASE)
         if inline_m:
             free = free[inline_m.end():]
         grade = (inline_m.group(1) if inline_m else group).lower()
         rb_over: str | None = None
-        # The tests are exact: an ungraded group carries its header's
-        # whole text as the grade, and 'read now' inside that text is
-        # prose, not the label.
+        # An ungraded group's grade is its header's whole text, so only
+        # an exact match grades, and 'read now' inside prose does not.
         if grade == 'read now':
             rb_over = 'always'
         elif grade == 'reference only':
-            # edit lands on a notes file; any other kind keeps its
-            # seeded tier.
             rb_over = 'edit'
-        # A section number may carry one letter, `section 11b`, or be
-        # dotted, `section 24.4`; the whole token is the anchor.
         sref_m = re.findall(
             r'\bs(\d+(?:\.\d+)*[a-z]?)\b|section\s+(\d+(?:\.\d+)*[a-z]?)',
             free, re.IGNORECASE)
@@ -277,17 +246,13 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
         first_dir: pathlib.Path | None = None
         for tok in path_toks:
             tok_free = free
-            # A `path:12-40` or `path:12-40,57` pointer names lines; the
-            # ledger has no range column, so the ranges lead the label
-            # and the path stays bare.
             range_m = re.match(
                 r'^`?([^`]+?):(\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*)`?$', tok)
             if range_m:
                 tok = range_m.group(1)
                 tok_free = f'lines {range_m.group(2)}; {tok_free}'.rstrip('; ')
             # A bare name after the first path lists a sibling of it, so
-            # it is tried beside that path before the folder and the
-            # search bases.
+            # it is tried beside that path first.
             clean_tok = tok.strip('`')
             sibling = first_dir / clean_tok if first_dir is not None else None
             if (sibling is not None and '/' not in clean_tok
@@ -298,10 +263,6 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
                 stored, path_obj, base = paths.pointer_path(folder, tok)
             if first_dir is None:
                 first_dir = path_obj.parent
-            # An anchor is seeded only where it resolves: a bare `s1` in
-            # prose most often names a step of another file, and a seed
-            # that cannot resolve prints `?` in the read block every
-            # cycle.
             tok_where = '-'
             if where_val != '-':
                 candidates = list(dict.fromkeys(where_val.split(';')))
@@ -315,9 +276,6 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
                         pointed_text = ''
                     dropped = []
                     for anchor in candidates:
-                        # A dotted number the file does not carry falls
-                        # back to its parent section, the span the
-                        # sub-point sits in.
                         parent_m = re.fullmatch(r's(\d+)\.[\d.]+', anchor)
                         choices = [anchor] + (
                             [f's{parent_m.group(1)}'] if parent_m else [])
@@ -334,8 +292,6 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
                         where_dropped.append((stored, anchor))
             label = tok_free.strip() or '-'
             if stored in kf_map:
-                # A second bullet naming the same path adds to its row
-                # instead of replacing it.
                 prev_label, prev_rb, prev_where = kf_map[stored]
                 parts = [p for p in (prev_label, label) if p != '-']
                 if len(parts) == 2:
@@ -361,27 +317,6 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
                 first_part = tok_free.strip() or '-'
         seeded_records.append((first_stored, raw, first_part))
 
-    # Notes:
-    # - The label test runs first: `- Read now:` is a label bullet, and
-    #   reading it as a pointer would name a file `Read` and cost the
-    #   bullets under it their grade.
-    # - A label line, bare, as a heading, or as a bullet, grades every
-    #   pointer below it until the next label, nesting included; a
-    #   label whose clause wraps onto further lines grades once the
-    #   lines are joined, at the point the loose item closes. Any other
-    #   line ending in a colon ends the group too and opens an ungraded
-    #   one.
-    # - `-`, `*`, and `+` open a pointer bullet when the first token is
-    #   a path: backticked, `~`/`/`/`.` prefixed, holding `/`, or ending
-    #   in an extension. A bullet whose first token is a plain
-    #   word is text: the pointer's free text when indented under one,
-    #   Unfiled otherwise.
-    # - An indented line continues the open pointer or, when none is
-    #   open, the loose bullet above it, as written, so a wrapped bullet
-    #   stays one item either way. An unindented plain line runs the
-    #   open loose item on too, so a paragraph is one item, and a blank
-    #   line ends it; a pointer is never continued unindented.
-    # - A ` - ` separator between the path and its text is structure.
     kf_group = ''
     kf_loose: list[str] = []
     kf_loose_current = ''
@@ -393,7 +328,7 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
         re.IGNORECASE)
 
     def _is_pointer(token: str) -> bool:
-        """Return True when a bullet's first token names a file.
+        """True when a bullet's first token names a file.
         """
         if kf_path_like.match(token):
             return True
@@ -401,28 +336,25 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
         return (folder / clean).exists() or (folder.parent.parent / clean).exists()
 
     def _close_loose() -> None:
-        """File the open loose item under Unfiled, grading when it is a label.
+        """Move the open loose item to kf_loose; a label sets the group.
         """
         nonlocal kf_group, kf_loose_current
         if not kf_loose_current:
             return
-        # A label wrapped at the column matches only once its lines are
-        # joined; it grades the bullets below like one written on a
-        # single line, and its clause is filed as such a clause is.
+        # A label wrapped at the column matches once its lines are
+        # joined.
         joined_m = markdown.KF_LABEL_PAT.match(kf_loose_current)
         if joined_m:
             kf_group = joined_m.group(1).lower()
         elif kf_loose_current.endswith(':'):
-            # A header the parser does not know, `Read before touching
-            # the gateway:`, still ends the group above it: the bullets
-            # under it take the header's own text as their group, which
-            # carries no grade, never the grade of a label the author
-            # closed.
             kf_group = kf_loose_current.lower()
         kf_loose.append(kf_loose_current)
         kf_loose_current = ''
 
     for line in sections_raw.get('Key files', []):
+        # The label test runs first: `- Read now:` is a label bullet,
+        # and read as a pointer it would name a file `Read` and cost the
+        # bullets under it their grade.
         gm = markdown.KF_LABEL_PAT.match(line)
         bm = re.match(r'^\s*[-*+]\s+(`[^`]+`|\S+)\s*(.*)', line)
         if gm:
@@ -432,8 +364,8 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
             kf_raw_text = ''
             _close_loose()
             kf_group = gm.group(1).lower()
-            # The label grades the bullets below; a clause riding on it
-            # is content the agent must place, so it is filed as well.
+            # A clause riding on a label is content to place, so it is
+            # filed too.
             if not kf_bare_label.match(line):
                 kf_loose.append(line.strip())
         elif bm and _is_pointer(bm.group(1).rstrip(',')):
@@ -443,10 +375,8 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
             kf_free_text = bm.group(2)
             kf_raw_text = re.sub(r'^\s*[-*+]\s+', '', line).strip()
         elif line.startswith(' ') and line.strip() and kf_path_token:
-            # A dash opening a wrapped line is kept: as punctuation it
-            # is the author's wording, and as a nested marker it costs
-            # one `- ` in the label, where stripping it would weld two
-            # clauses into a sentence never written.
+            # A dash opening a wrapped line stays: stripping it would
+            # weld two clauses into a sentence never written.
             kf_free_text += ' ' + line.strip()
             kf_raw_text += ' ' + line.strip()
         elif line.startswith(' ') and line.strip() and kf_loose_current:
@@ -456,8 +386,6 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
             kf_path_token = ''
             kf_free_text = ''
             kf_raw_text = ''
-            # A plain line runs the open loose item on, as a wrapped
-            # paragraph does; a bullet opens an item of its own.
             if kf_loose_current and not bm:
                 kf_loose_current += ' ' + line.strip()
             else:
@@ -468,7 +396,7 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     _flush_kf_pointer(kf_path_token, kf_free_text, kf_group, kf_raw_text)
     _close_loose()
 
-    # --- Step 2: walk and seed ledger ---
+    # --- Step 3: walk and seed ledger ---
     kf_matched: set[str] = set()
     seeded_labels: list[str] = []
     rb_count: dict[str, int] = {}
@@ -523,13 +451,6 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
         if row['status'] == 'live' and row['read_before'] in ledger.GATE_RB:
             gated_names.append(name)
 
-    # Notes:
-    # - A pointer outside the top-level walk - an abs path or a file in
-    #   a subdirectory - keeps its label in a row of its own.
-    # - A path that is not on disk is seeded missing/never whatever its
-    #   kind: R1 governs transitions of an existing row, and the `not on
-    #   disk` line below is the signal. A row on disk is live and a
-    #   gated kind reads always, so R1 has nothing to refuse here.
     for stored in kf_map:
         if stored in kf_matched:
             continue
@@ -546,17 +467,19 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
                             break
             except OSError:
                 pass
-        # The draft rule is top-level: a nested or outside .py is not
-        # this folder's draft; inferring one would gate it under R1.
+        # Only a top-level .py is this folder's draft; a nested or
+        # outside one would be gated under R1.
         at_top = base == 'folder' and '/' not in stored_again
         kind, _ = ledger.infer_kind(
             path_obj.name, is_dir, first_heading, top_level=at_top,
             kind_dir=ledger.kind_dir_of(stored_again, base))
         on_disk = path_obj.exists()
         rb = 'always' if kind in {'spec', 'draft'} else 'never'
-        # The grade applies exactly as the walk branch applies it.
         if kf_rb == 'always' or (kf_rb == 'edit' and kind == 'notes'):
             rb = kf_rb
+        # A path not on disk is seeded missing and never, whatever its
+        # kind: R1 governs transitions of an existing row, and the `not
+        # on disk` line below is the signal.
         row = {
             'cycle': cycle_str, 'ts': ts, 'path': stored_again, 'base': base,
             'kind': kind, 'status': 'live' if on_disk else 'missing',
@@ -592,14 +515,14 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
         bullet_lines: list[str] = []
         section_lines = sections_raw.get(section_name, [])
         # A bulleted section may open with a sentence that introduces
-        # the bullets rather than being one; standing.md has no delete,
-        # so filing it would cost a block line for good.
+        # the bullets. standing.md has no delete, so filing it would
+        # cost a block line for good.
         first_bullet = next(
             (i for i, ln in enumerate(section_lines) if item_marker.match(ln)),
             None)
 
         def _flush_bullet(lines: list[str]) -> None:
-            """Format and append one standing bullet to standing.md.
+            """File one bullet as a standing item.
             """
             if not lines:
                 return
@@ -614,16 +537,6 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
                 headline, body = standing.split_headline(content)
             standing.do_note(folder, anch, current_kind, headline, body)
 
-        # Notes:
-        # - An indented line always continues the item above it.
-        # - An unindented line carrying no marker continues it too,
-        #   unless the line above ended a sentence and this one opens
-        #   another. A hand wrapping one item at the column breaks
-        #   mid-sentence, where a section of plain one-line items does
-        #   not, and the two are otherwise identical text.
-        # - A blank line closes the open item, which is what keeps a
-        #   paragraph below a bullet from joining it.
-        # - A lead-in wrapped at the column joins as a paragraph does.
         lead_in_open = False
         for idx, line in enumerate(section_lines):
             if not line.strip():
@@ -660,9 +573,8 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
             'Directives', 'Task', 'Now', 'Plan', 'State', 'Environment',
             'Open questions']:
         body = '\n'.join(sections_raw.get(h, [])).strip()
-        # The header tail is a repo state the thread wrote by hand;
-        # finish rewrites the header, so the cursor is its live home and
-        # the manifest note its archive.
+        # finish rewrites the header, so the cursor is the tail's live
+        # home and the manifest note its archive.
         if h == 'Environment' and header_tail:
             tail_body = '\n'.join(
                 ln if re.match(r'^[-*+]\s', ln) else f'- {ln}' for ln in header_tail)
@@ -693,10 +605,8 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     fresh_manifest = storage.read_tsv(manifest_path, storage.MANIFEST_FIELDS)
     repos = f'{anch["branch"]}@{anch["sha"]}' if anch['branch'] != '-' else '-'
     # Notes:
-    # - The row indexes cycles/c<N>.md, so its date, repos, sizes, and
-    #   handoff_sha are read off that file, not the rewrite made today.
-    # - The archive is read back rather than reusing `text`: a c<N>.md
-    #   already on disk is kept, and the row must describe that file.
+    # - A c<N>.md already on disk is kept, so the row's date, repos,
+    #   sizes and handoff_sha are read from that file, not from `text`.
     # - The header carries no session, so that column stays `-` and the
     #   adopting session rides in the note with the adopt date and sha.
     archive_text = archive.read_text(encoding='utf-8-sig', errors='replace')
@@ -708,14 +618,11 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     adopt_provenance = f'adopted {ts[:10]} by {anch["session"]}'
     if repos != '-':
         adopt_provenance += f' at {repos}'
-    # The Log block renders this row's log field, so it carries a
-    # one-line roll-up; the legacy Log lines ride in the row's note
-    # field, and the archived file keeps them as written.
+    # The Log block renders the log field, so it holds a one-line
+    # roll-up.
     legacy_log = [ln.strip() for ln in sections_raw.get('Log', []) if ln.strip()]
-    # A Log item starts at an unindented line and runs on through the
-    # indented lines below it, so a bullet wrapped at the column joins
-    # back onto one line before the items are separated; ` / ` is not
-    # the separator because a sha list carries it at a line end.
+    # ` / ` is no item separator, since a sha list carries it at a line
+    # end.
     legacy_items: list[str] = []
     for ln in sections_raw.get('Log', []):
         if not ln.strip():
@@ -734,9 +641,8 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     if header_tail:
         note_items.append(f'header: {" ".join(header_tail)}')
     adopt_note = ' | '.join(note_items + legacy_items)
-    # The row adopt appends belongs in the Log it renders, the same way
-    # finish renders its own row; the file would otherwise carry an
-    # empty ## Log the cycle it was adopted.
+    # The Log includes the adopt row, as at finish, so the file has no
+    # empty ## Log.
     log_body_f = render.render_log(fresh_manifest + [{
         'cycle': cycle_str,
         'written': archive_written,
@@ -756,8 +662,6 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
         ledger.reconcile_missing(folder, fresh_live), walk, fresh_standing_text,
         cycle)
     handoff_path.write_text(new_handoff, encoding='utf-8')
-    # The ledger and standing digests stay adopt-time: witness() checks
-    # the next finish against the files as this write left them.
     lb_final = ledger_path.read_bytes()
     sb_final = standing_path.read_bytes() if standing_path.exists() else b''
     adopt_manifest_row: dict = {
@@ -793,24 +697,16 @@ def verb_adopt(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
         print(f'  gated ({gated_cnt}): {", ".join(gated_names[:5])}')
     for path_dropped, anchor_dropped in where_dropped:
         print(f'  where dropped: {path_dropped} {anchor_dropped!r}')
-    # Conservation counts a line parked under ## Unfiled as carried,
-    # yet every such bullet blocks finish until it is retyped; the
-    # count is the agent's one notice of that work.
+    # Conservation counts a line under ## Unfiled as carried, yet each
+    # such bullet blocks finish until retyped, so this count is the
+    # agent's one notice.
     if unfiled_parts:
         print(f'  unfiled: {len(unfiled_parts)} bullets to rehome')
     _ = never_cnt
-    # Notes:
-    # - The first line measures the file adopt read: every line must
-    #   reach the cursor, standing.md, a label, or the manifest log.
-    # - HANDOFF.orig.md, when present, is a hand-rewritten foreign file;
-    #   the second line measures that rewrite so the agent sees what
-    #   its own step dropped.
-    # - The adopted file reproduces its own title line, which is not
-    #   part of the cursor, so the union must carry it too.
+    # The adopted file reproduces its own title line, which is outside
+    # the cursor, so the union carries it.
     union_cursor = f'# Handoff: {folder.name}\n{cursor_text}'
     union_standing = standing_path.read_text(encoding='utf-8', errors='replace')
-    # A pointer counts as carried only through a label the ledger
-    # holds; the parse alone is no witness.
     witnessed = witnessed_pairs(
         seeded_records, {path: row['label'] for path, row in fresh_live.items()})
     not_carried = carry.conservation(

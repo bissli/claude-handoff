@@ -27,7 +27,7 @@ def render_read(
         Size text per path, as ``read_first_data`` returns it.
     shown : dict[str, tuple[str, str]] | None, default None
         Display path and base phrase per stored path, as ``shown_paths``
-        returns it; a path absent from it prints as stored.
+        returns it. A path absent from it prints as stored.
 
     Returns
     -------
@@ -71,25 +71,24 @@ def artifact_lines(
     Parameters
     ----------
     walk : list[tuple[str, str]]
-        Top-level entries as ``(path, inferred_kind)``; ``'skip'`` entries
-        excluded before this call.
+        Top-level entries as ``(path, inferred_kind)``, ``'skip'`` entries
+        already excluded.
     rows : dict[str, Row]
         Latest ledger row per path, with the caller's ``missing`` marks
-        already applied; the disk is never consulted.
+        applied. The disk is never consulted.
     slug : str
         Handoff slug for the ``hq when`` command a capped label names.
     whole_paths : set[str]
-        Stored paths that print a full line when their row is live, as
-        ``assemble_handoff`` decides them.
+        Stored paths that print a full line when their row is live.
     shown : dict[str, tuple[str, str]] | None, default None
         Display path and base phrase per stored path, as ``shown_paths``
-        returns it; a path absent from it prints as stored.
+        returns it. A path absent from it prints as stored.
 
     Returns
     -------
     tuple[list[str], list[str], dict[str, int], set[str]]
         The full lines and the display paths of the other live rows,
-        both uncapped and in walk order and then ledger order for the
+        both uncapped and in walk order, then ledger order for the
         rows the walk cannot see; the rows no longer live counted by
         status; the base phrases the emitted lines print against.
 
@@ -98,14 +97,9 @@ def artifact_lines(
     - A full line is ``path  kind  read_before  cN  label`` for a live row
       in ``whole_paths``, or ``path  kind?  unstamped`` for a walk entry
       with no row.
-    - An ``always`` row prints no label: ``render_read`` prints it
-      verbatim for every live ``always`` row, so a second copy here is
-      duplicate bytes.
-    - Any other label is resident to ``_LABEL_RESIDENT`` characters and
-      names ``hq when <slug> <path>`` for the rest. The label stays whole
-      in ledger.tsv, which is where conservation reads it.
-    - The bases come from the lines emitted, never from the whole map, so
-      the block names a base only where a printed path resolves from it.
+    - An ``always`` row prints no label, since ``render_read`` already
+      prints it for every live ``always`` row.
+    - A base appears only where an emitted line resolves from it.
     """
     full_lines: list[str] = []
     folded_paths: list[str] = []
@@ -121,9 +115,9 @@ def artifact_lines(
         path : str
             Relative or stored path of the artifact.
         row : Row | None
-            Latest ledger row for the path, or ``None`` when unstamped.
+            Latest ledger row for the path, ``None`` when unstamped.
         inferred : str
-            Kind inferred from the walk; used only when ``row`` is ``None``.
+            Kind inferred from the walk, used only when ``row`` is None.
         """
         display, base = (shown or {}).get(path, (path, ''))
         if row is None:
@@ -176,19 +170,18 @@ def render_artifacts(
     Parameters
     ----------
     walk : list[tuple[str, str]]
-        Top-level entries as ``(path, inferred_kind)``; ``'skip'`` entries
-        excluded before this call.
+        Top-level entries as ``(path, inferred_kind)``, ``'skip'`` entries
+        already excluded.
     rows : dict[str, Row]
         Latest ledger row per path, with the caller's ``missing`` marks
-        already applied; the renderer never consults the disk.
+        applied. The disk is never consulted.
     slug : str
         Handoff slug for the hq command in count lines.
     whole_paths : set[str]
-        Stored paths that print a full line when their row is live, as
-        ``assemble_handoff`` decides them.
+        Stored paths that print a full line when their row is live.
     shown : dict[str, tuple[str, str]] | None, default None
         Display path and base phrase per stored path, as ``shown_paths``
-        returns it; a path absent from it prints as stored.
+        returns it. A path absent from it prints as stored.
 
     Returns
     -------
@@ -202,8 +195,8 @@ def render_artifacts(
 
     Notes
     -----
-    - The closing line keeps ``<path>`` as a placeholder: it serves
-      every path-only line above it, so no one path fills it.
+    - The closing line keeps ``<path>`` as a placeholder, since it serves
+      every path-only line above it.
     """
     full_lines, folded_paths, non_live, bases = artifact_lines(
         walk, rows, slug, whole_paths, shown)
@@ -222,7 +215,7 @@ def render_artifacts(
 
 
 def resident_label(label: str) -> str:
-    """Return the label text an index line carries, cut at a word boundary.
+    """The label text an index line carries, cut at a word boundary.
 
     Parameters
     ----------
@@ -232,16 +225,9 @@ def resident_label(label: str) -> str:
     Returns
     -------
     str
-        The label unchanged when it is within ``_LABEL_RESIDENT``
-        characters, else its head cut at the last space inside that
-        width, or at the width itself when that space would leave under
-        half of it.
-
-    Notes
-    -----
-    - The renderer and ``open``'s label-drift guard both call this, so
-      the block the guard reads and the block the renderer wrote are
-      compared on one definition of resident.
+        The label unchanged within ``_LABEL_RESIDENT`` characters, else
+        its head cut at the last space inside that width, or at the width
+        itself when that space would leave under half of it.
     """
     if len(label) <= _LABEL_RESIDENT:
         return label
@@ -261,21 +247,14 @@ def holdback_line(resident: str, held_chars: int, command: str) -> str:
         Characters of the item left unprinted; 0 or less prints no suffix.
     command : str
         The command that prints the held text, runnable exactly as
-        written. A placeholder inside it is a defect: no reader can fill
-        one from the rendered file.
+        written. A placeholder in it is a defect, since no reader can
+        fill one from the rendered file.
 
     Returns
     -------
     str
         ``<resident>  +<held>c - <command>``, or ``resident`` unchanged
         when nothing is held back.
-
-    Notes
-    -----
-    - The count-line convention of the blocks applied per item: what is
-      resident, how much is not, and the command for the rest.
-    - A holdback is residency and never a cut. The held characters stay
-      in the append-only store, and the command prints them whole.
     """
     if held_chars <= 0:
         return resident
@@ -299,37 +278,24 @@ def render_standing(
     slug : str
         Handoff slug for the hq command a held-back line ends in.
     whole_ids : set[str]
-        Ids of the items that render whole, as ``assemble_handoff``
-        decides them.
+        Ids of the items that render whole.
 
     Returns
     -------
     str
         Block body, each kind under its heading and newest cycle first
-        within it: a live item in ``whole_ids`` whole - a constraint as
-        its headline and the first sentence of its body, a decision,
-        dead end, or evidence item as its headline - and every other
-        live item as ``[id] headline``. Evidence outside ``whole_ids``
-        prints nothing and is counted on one closing line of its group.
-        A closing line naming ``hq standing <slug> <id>`` follows when
-        any item printed as ``[id] headline``.
+        within it. A live item in ``whole_ids`` prints whole, and every
+        other live item as ``[id] headline``. Evidence outside
+        ``whole_ids`` prints nothing and is counted on one closing line
+        of its group. A closing line naming ``hq standing <slug> <id>``
+        follows when any item printed as ``[id] headline``.
 
     Notes
     -----
-    - A superseded item leaves the block with no count line; it stays
-      reachable by id with ``hq standing <slug> <id>``.
-    - Residency, never a cut: a line that holds text back ends in
-      ``+<held>c - hq standing <slug> <id>``, and the held text stays
-      whole in standing.md behind that command.
-    - A constraint holds back its body past the first sentence; a
-      decision or a dead end holds back its body whole.
     - The sort keys on the cycle alone and is stable, so a cycle's own
       items stay in the order they were recorded.
-    - The command carries the item's own id, so it runs as printed.
-    - A constraint body with no sentence end stays resident whole: the
-      split has nothing to hold back.
-    - The closing line keeps ``<id>`` as a placeholder: it serves every
-      ``[id] headline`` line above it, so no one id fills it.
+    - The closing line keeps ``<id>`` as a placeholder, since it serves
+      every ``[id] headline`` line above it.
     - A printed evidence item that a live evidence item's body
       contradicts, ``contradicts [<id>]``, carries ``contradicted by
       [<id>, ...]`` after its headline.
@@ -398,13 +364,13 @@ def render_log(manifest: list[dict], slug: str, n: int = 3) -> str:
     slug : str
         Folder name the rollup line's ``hq arc`` command names.
     n : int, default 3
-        Number of recent cycles to show in full.
+        Recent cycles to show in full.
 
     Returns
     -------
     str
-        Log lines joined with newlines; the cycles older than the last
-        ``n`` collapse into one ``- cycles <a>-<b> - hq arc <slug>`` line.
+        One line per recent cycle. The older cycles collapse into one
+        ``- cycles <a>-<b>`` line ending in the ``hq arc <slug>`` command.
     """
     if not manifest:
         return ''
@@ -430,19 +396,19 @@ def render_arc(
     manifest: list[dict],
     handoff_text: str,
     first_text: str) -> str:
-    """Render the whole-thread arc: where it began, each cycle, where it stands.
+    """Render the whole-thread arc: how it began, each cycle, where it stands.
 
     Parameters
     ----------
     slug : str
         Folder name the title line carries.
     manifest : list[dict]
-        Every finished cycle in order, keyed by MANIFEST_FIELDS; not empty.
+        Every finished cycle in order, keyed by MANIFEST_FIELDS. Not empty.
     handoff_text : str
-        The live HANDOFF.md, source of Task, Now, Open questions, and Plan.
+        The live HANDOFF.md, source of Task, Now, Open questions, Plan.
     first_text : str
-        ``cycles/c<first>.md``, the first finished cycle's archive, or ''
-        where it is absent; source of Began as and the prior Log.
+        The first finished cycle's archive, ``''`` where it is absent.
+        Source of Began as and the prior Log.
 
     Returns
     -------
@@ -464,11 +430,10 @@ def render_arc(
 
     Notes
     -----
-    - Began as prints only when it differs from Task; Before only for a
-      thread adoption began, whose first manifest log names the prior
-      Log; Open questions only when the section holds an item.
-    - Every manifest row and every open item prints, no cap: the arc
-      grows one History line a cycle and replaces reading the archives.
+    - Began as prints only when it differs from Task. Before prints only
+      for an adopted thread, whose first manifest log names the prior
+      Log. Open questions print only when the section holds an item.
+    - Every manifest row and every open item prints, with no cap.
     - A nested open Plan item keeps one level of indent.
     """
     parsed: list[dict[str, list[str]]] = []
@@ -565,18 +530,18 @@ def read_first_data(
     tuple
         ``(rows, spans, sizes, tokens)``: the live ``always`` rows; per
         anchored path, one span per anchor, ``None`` for one that matches
-        no heading; per path, the size text of the read - ``320 tok`` or
+        no heading; per path, the size text of the read (``320 tok`` or
         ``1.2k tok`` for an anchored row, ``186 lines, 8.2k tok`` for a
-        whole file,
-        ``35 KB`` for a file that is not UTF-8 text, ``3 files`` for a
-        directory; and per path the tokens of the read, ``len(text) // 4``.
+        whole file, ``35 KB`` for a file that is not UTF-8 text,
+        ``3 files`` for a directory); per path, the tokens of the read,
+        ``len(text) // 4``.
 
     Notes
     -----
     - A row whose anchors all miss is read whole, so it sizes as a whole
       file.
-    - A file gone from disk sizes by the ledger's line count and counts
-      no tokens; bytes and files count none either.
+    - A file gone from disk sizes by the ledger's line count. It and a
+      non-text file or directory count no tokens.
     """
     rows = [
         r for r in live.values()
@@ -618,7 +583,6 @@ def read_first_data(
             tokens[path] = len(text) // 4
             line_cnt = raw.count(b'\n')
             sizes[path] = f'{line_cnt} lines, '
-        # Under a thousand the count itself reads better than 0.3k.
         tok = tokens[path]
         sizes[path] += f'{tok / 1000:.1f}k tok' if tok >= 1000 else f'{tok} tok'
     return rows, spans, sizes, tokens
@@ -634,18 +598,16 @@ def assemble_handoff(
     standing_text: str,
     cycle: int,
 ) -> str:
-    """Render read/artifacts/standing blocks and return full HANDOFF.md text.
+    """Render the generated blocks and return the full HANDOFF.md text.
 
     Parameters
     ----------
     folder : pathlib.Path
-        Handoff folder; used to resolve row paths and derive the slug.
+        Handoff folder. Its name is the slug.
     cursor_text : str
-        Cursor portion of the handoff (## Directives through ## Open
-        questions).
+        Cursor text, ``## Directives`` through ``## Open questions``.
     header_line : str
-        'Written: ... | Cycle: N | Last worked: ... | branch @ sha7 | clean'
-        line.
+        The header line, as ``finish`` writes it.
     log_body : str
         Rendered log body from render_log.
     live : dict[str, Row]
@@ -672,7 +634,7 @@ def assemble_handoff(
         f'## Read first\n{read_body}\n<!-- /hq:read -->'
     )
     # A name matches as a plain substring, so a short basename inside a
-    # longer word keeps its row whole, at the cost of one resident line.
+    # longer word keeps its row whole, at the cost of one line.
     whole_paths = {
         path for path, row in live.items()
         if row['read_before'] == 'always'

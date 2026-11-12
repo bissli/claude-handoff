@@ -4,9 +4,6 @@
 import os
 import pathlib
 
-# The per-session cache the hooks key by session id. The status line
-# reads the thread file from it, so hq and the hooks must agree on the
-# directory and on the HQ_STATE_DIR that moves it.
 STATE_DIR = os.path.expanduser('~/.claude/cache/claude-handoff')
 
 
@@ -51,18 +48,7 @@ def thread_record(session: str) -> pathlib.Path:
     Returns
     -------
     pathlib.Path
-        ``<slug>.thread`` under HQ_STATE_DIR, beside the state the
-        hooks keep. The file need not exist.
-
-    Notes
-    -----
-    - The file holds the slug and nothing else. The status line
-      repaints continuously, so it reads one short line rather than
-      parsing the document two hooks already read and rewrite whole.
-    - One file per session id, and the id is the one the ledger
-      records. Concurrent sessions on different threads never write
-      the same path, and the line agrees with the ledger on whose
-      cycle this is.
+        ``<slug>.thread`` under HQ_STATE_DIR. The file need not exist.
     """
     safe = session.replace('/', '_')
     state_dir = pathlib.Path(os.environ.get('HQ_STATE_DIR', STATE_DIR))
@@ -70,8 +56,7 @@ def thread_record(session: str) -> pathlib.Path:
 
 
 def record_worked(session: str, folder: pathlib.Path) -> None:
-    """Make folder the session's one worked thread, whose finish moves
-    ``Last worked``.
+    """Make folder the session's worked thread; its finish moves Last worked.
 
     Parameters
     ----------
@@ -79,8 +64,7 @@ def record_worked(session: str, folder: pathlib.Path) -> None:
         Session id, as ``anchors`` resolved it. An empty or 'unknown'
         id records nothing, since every shell without an id shares it.
     folder : pathlib.Path
-        Handoff folder. Its ``.hq.worked`` takes the id over any other
-        session's, and a sibling's record of this id is removed.
+        Handoff folder that takes the session's ``.hq.worked``.
     """
     if session in {'', 'unknown'}:
         return
@@ -100,8 +84,9 @@ def record_worked(session: str, folder: pathlib.Path) -> None:
 
 
 def worked_thread(session: str, folder: pathlib.Path) -> str:
-    """Resolved path of folder or the sibling whose ``.hq.worked`` holds
-    session; '' for none.
+    """Resolved path of folder or the sibling holding session's marker.
+
+    Returns '' for none. The marker is ``.hq.worked``.
     """
     if session in {'', 'unknown'}:
         return ''
@@ -130,19 +115,14 @@ def record_thread(session: str, slug: str) -> None:
 
     Notes
     -----
-    - A cache that cannot be written costs the status line its slug
-      and nothing else, so nothing here raises into a verb that has
-      already done its work.
+    - An unwritable cache raises nothing; the status line loses its slug.
     """
     final = thread_record(session)
     # Notes:
-    # - The rename is what makes the write safe to read. A status line
-    #   repainting during a plain write reads a truncated slug, which
-    #   raises nothing and renders as a real thread. Two writers
-    #   racing one session now get one whole slug or the other.
-    # - The staging name carries the pid, so a subagent writing
-    #   beside its parent cannot land in the other's half-written
-    #   file before either rename runs.
+    # - The rename keeps a status line that repaints mid-write from
+    #   reading a truncated slug.
+    # - The pid in the staging name keeps a subagent and its parent off
+    #   one half-written file.
     staged = final.with_name(f'{final.name}.{os.getpid()}')
     try:
         final.parent.mkdir(parents=True, exist_ok=True)
@@ -163,17 +143,12 @@ def clear_thread(session: str, slug: str) -> None:
     session : str
         Session id, as ``anchors`` resolved it.
     slug : str
-        Folder name the verb was aimed at.
+        Folder name the verb was aimed at. A record naming another thread
+        stays.
 
     Returns
     -------
     None
-
-    Notes
-    -----
-    - Only a record naming this very thread is removed. Finishing one
-      thread from a session working another says nothing about the
-      one it is working.
     """
     final = thread_record(session)
     try:

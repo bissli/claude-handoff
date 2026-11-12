@@ -22,8 +22,8 @@ _NOTE_BATCH_LINE = re.compile(
     r'(?P<body>.*)$')
 
 
-# The characters str.splitlines() breaks on, plus tab. Any of these in a
-# ledger field would yield phantom rows when read_tsv calls splitlines().
+# The characters str.splitlines() breaks on, plus tab. One in a ledger
+# field would split its row when read_tsv calls splitlines().
 _SPLITLINES_CHARS = '\t\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029'
 
 
@@ -53,24 +53,17 @@ def _take_lock(
 
     Notes
     -----
-    - Creation is ``O_CREAT | O_EXCL``, so of two begins racing for an
-      absent lock exactly one creates it and the other re-reads and
-      applies the same rules.
-    - A lock this session already holds is rewritten, carrying its
-      ``takeover`` forward, so a second begin still reaches finish with
-      the takeover recorded.
-    - A lock taken over but not writable is replaced whole, so a lock
-      whose permissions were lost cannot hold the folder forever.
-    - A taken lock prints the work list, then ``hq help write``: the
-      writing rules reach the agent when it writes, a subagent that
-      never loaded the skill included, and the skill need not carry
-      them for the whole session.
+    - A lock this session already holds is rewritten with its
+      ``takeover`` carried forward, so a second begin still reaches
+      finish with the takeover recorded.
     """
     lock_path = folder / '.hq.lock'
     session = anch['session']
     force = getattr(argv, 'force', False)
     created = True
     fd = -1
+    # O_EXCL lets exactly one of two racing begins create the lock;
+    # the other re-reads it and applies the same rules.
     try:
         fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except FileExistsError:
@@ -109,17 +102,14 @@ def _take_lock(
         try:
             lock_path.write_text(content, encoding='utf-8')
         except PermissionError:
+            # A lock with lost permissions is replaced whole, or it
+            # would hold the folder forever.
             lock_path.unlink()
             lock_path.write_text(content, encoding='utf-8')
 
-    # Notes:
-    # - A hand edit since the last finish or adopt: HANDOFF.md no
-    #   longer hashes to what that write left in it.
-    # - live_sha reads the rewrite an adopt row records, not the
-    #   archive its handoff_sha names.
-    # - A file this run seeded is no hand edit: its stub carries
-    #   nothing to fold back, and the name keys on the last finished
-    #   cycle, whose genuine rescue it would overwrite.
+    # A file this run seeded is no hand edit: its stub carries nothing
+    # to fold back, and its name keys on the last finished cycle, whose
+    # genuine rescue it would overwrite.
     manifest_rows = storage.read_tsv(
         folder / 'cycles' / 'manifest.tsv', storage.MANIFEST_FIELDS)
     handoff = folder / 'HANDOFF.md'
@@ -134,6 +124,8 @@ def _take_lock(
                 ' - fold anything wanted back into the cursor')
 
     _print_worklist(folder, anch)
+    # The writing rules reach the agent when it writes, a subagent that
+    # never loaded the skill included.
     print(help_text.HELP_TOPICS['write'])
     return 0
 
@@ -147,19 +139,6 @@ def _print_worklist(folder: pathlib.Path, anch: dict) -> None:
         Handoff folder to report on.
     anch : dict
         Anchors for this invocation; supplies the closing cycle line.
-
-    Notes
-    -----
-    - Every class stops at five names and closes with ``... and N more``,
-      so a sixth item is counted rather than dropped.
-    - A ``skip`` walk entry is a conflicted copy only when its name says
-      so; every other ``skip`` entry - a name carrying a tab, carriage
-      return, or newline, or a non-regular file - prints as unstampable,
-      the separator escaped.
-    - The closing lines name the cycle just opened and, where the file
-      disagrees, the stale ``Cycle:`` field beside it: ``finish`` writes
-      that field last, so the header reads the previous cycle for the
-      whole write and is never the number to attribute work to.
     """
     walk, rows, live, sha_map, manifest, lb, sb = ledger.folder_state(folder)
     for b in storage.witness(manifest[-1] if manifest else None, lb, sb):
@@ -206,10 +185,9 @@ def _print_worklist(folder: pathlib.Path, anch: dict) -> None:
         print(f'  missing live: {path} - hq when {folder.name} {path}')
     if len(missing_live) > 5:
         print(f'  ... and {len(missing_live) - 5} more')
-    # A row the ledger stores as missing - a Key files pointer adopt
-    # found nowhere - is otherwise a count inside the Artifacts block; a
-    # plain re-stamp carries the status forward, so the line names the
-    # move that clears it.
+    # A stored missing row is otherwise a count inside the Artifacts
+    # block, and a plain re-stamp carries the status forward, so the
+    # line names the move that clears it.
     missing_rows = [p for p, r in live.items() if r['status'] == 'missing']
     for path in missing_rows[:5]:
         print(
@@ -224,9 +202,8 @@ def _print_worklist(folder: pathlib.Path, anch: dict) -> None:
             ' - name a new successor or archive the row')
     if len(dangling) > 5:
         print(f'  ... and {len(dangling) - 5} more')
-    # An always row with no anchor is a whole file read at every
-    # resume; stamp refuses its next re-stamp until it conforms, so an
-    # older thread converges as its files are touched.
+    # stamp refuses the next re-stamp of an always row with no anchor,
+    # so an older thread converges as its files are touched.
     for path, row in live.items():
         if (row['status'] == 'live' and row['read_before'] == 'always'
                 and row['where'] == '-'):
@@ -238,9 +215,8 @@ def _print_worklist(folder: pathlib.Path, anch: dict) -> None:
         print(line)
     print(paths.work_dir_line(folder, wd_value, first_cycle=anch['cycle'] == 1))
     print(f'cycle {anch["cycle"]} begun by {anch["session"]} on {anch["host"]}')
-    # The Cycle line is the previous cycle's until finish rewrites it at
-    # the end, so an agent that takes its number from the file credits
-    # this cycle's work to the one that assigned it.
+    # An agent that takes its cycle number from the file would credit
+    # this cycle's work to the previous one.
     handoff_path = folder / 'HANDOFF.md'
     if handoff_path.is_file():
         cycle = anch['cycle']
@@ -255,14 +231,14 @@ def _print_worklist(folder: pathlib.Path, anch: dict) -> None:
 
 
 def verb_begin(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int:
-    """Run begin: create the folder or take the lock on an existing one.
+    """Open a cycle: seed or adopt the folder, then take its lock.
 
     Parameters
     ----------
     folder : pathlib.Path
         Handoff folder to begin; created when absent.
     anch : dict
-        Anchors dict from ``anchors()``; provides session and host.
+        Anchors dict from ``anchors()``; supplies session and host.
     argv : argparse.Namespace
         Parsed begin arguments; ``--force`` overrides a foreign lock.
 
@@ -270,15 +246,16 @@ def verb_begin(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     -------
     int
         0 once the lock is held; 1 when a young foreign lock blocks it,
-        or the thread is marked done.
+        the thread is marked done, a directory stands at HANDOFF.md, or
+        adopt refuses an existing HANDOFF.md whose header does not
+        conform.
 
     Notes
     -----
     - A folder missing both HANDOFF.md and ledger.tsv can still hold
       standing.md, the manifest, and its archives. Those survive, and
-      the line printed reads ``rebuilt`` rather than ``created``.
-    - A refusal writes nothing: the lock is read before the folder is
-      seeded, so a refused run leaves no stub behind.
+      the printed line says ``rebuilt`` where any do, ``created``
+      otherwise.
     """
     refusal = storage.done_refusal(folder, 'begin')
     if refusal:
@@ -287,8 +264,8 @@ def verb_begin(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     if (folder / 'HANDOFF.md').is_dir():
         print('hq: HANDOFF.md is a directory - move the directory aside and re-run')
         return 1
-    # A refused run leaves the folder as it found it, so the lock is
-    # read before the first write rather than at _take_lock below.
+    # The lock is checked before the first write, ahead of _take_lock,
+    # so a refused run leaves the folder untouched.
     refusal = storage.lock_refusal(folder, anch, getattr(argv, 'force', False), 'begin')
     if refusal:
         print(refusal)
@@ -300,14 +277,12 @@ def verb_begin(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
         folder.mkdir(parents=True, exist_ok=True)
         (folder / 'cycles').mkdir(exist_ok=True)
         # Notes:
-        # - The branch fires on a lost HANDOFF.md and ledger.tsv
-        #   alone, and standing.md is append-only, so seeding it
-        #   unconditionally destroys a store nothing rebuilds.
+        # - standing.md is append-only and nothing rebuilds it, so it
+        #   is seeded only where absent.
         # - The manifest indexes cycles/, so truncating it renumbers
         #   the next archive over one already on disk.
-        # - An empty file is no survivor, and an archive outlives the
-        #   manifest that indexed it, so content decides which line
-        #   this prints.
+        # - An empty file is no survivor, and an archive outlives its
+        #   manifest, so content decides the line printed below.
         standing_path = folder / 'standing.md'
         manifest_rows = storage.read_tsv(
             folder / 'cycles' / 'manifest.tsv', storage.MANIFEST_FIELDS)
@@ -318,8 +293,8 @@ def verb_begin(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
             survived.append('the cycle manifest')
         if any((folder / 'cycles').glob('c*.md')):
             survived.append('archived cycles')
-        # A handoff created while the session works another live thread
-        # is a spin-off, which is housekeeping.
+        # A thread created while the session works another live thread
+        # is a spin-off, so it is not recorded as worked.
         held = pathlib.Path(
             threads.worked_thread(str(anch['session']), folder) or folder)
         spin_off = (
@@ -362,43 +337,22 @@ def verb_begin(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
 
 
 def _do_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int:
-    """Write one ledger row after applying R1 checks.
+    """Write one ledger row for a stamp, or a receipt row on an R1 refusal.
 
     Parameters
     ----------
     folder : pathlib.Path
         Handoff folder containing ledger.tsv.
     anch : dict
-        Anchors dict from ``anchors()``; provides cycle and timestamp.
+        Anchors dict from ``anchors()``; supplies cycle and timestamp.
     argv : argparse.Namespace
-        Parsed stamp arguments: path, kind, read_before, status, etc.
+        Parsed stamp arguments; ``path`` is required.
 
     Returns
     -------
     int
-        0 on success; 1 when R1 refuses the stamp; 2 on bad usage.
-
-    Notes
-    -----
-    - The path resolves against the folder, then the project root, then
-      a pinned work dir, and the row stores the form it resolves to -
-      folder-relative with base ``folder``, else ``~`` or absolute with
-      base ``abs`` - so one file keeps one ledger key whichever
-      spelling stamps it. ``--successor`` resolves the same way.
-    - A refusal appends a receipt row; a successful stamp appends the
-      row.
-    - A row that would sit live at ``always`` with no ``--where`` is
-      refused whatever its kind, and the file's headings print under
-      the refusal so the next stamp can anchor it.
-    - A written row shorter than its comparand, or missing one of its
-      backticked tokens or ``s<n>`` references, draws an advisory
-      here, where retyping the label costs nothing; the row stands
-      either way, and both lines can fire at once.
-    - The comparand is the last label an earlier cycle left, or the
-      previous stamp of this cycle where the path has no earlier row.
-    - A label naming an ``s<n>`` section the new spans do not cover
-      draws a third advisory, on a stamp that gave ``--where`` and let
-      ``--label`` carry forward.
+        0 once the row is written, with any label advisory printed;
+        1 when R1 refuses the stamp; 2 on bad usage.
     """
     path = getattr(argv, 'path', '') or ''
     if not path:
@@ -420,20 +374,18 @@ def _do_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
     ledger_path = folder / 'ledger.tsv'
     rows = storage.read_tsv(ledger_path, ledger.LEDGER_FIELDS)
     live = ledger.latest_rows(rows)
-    # A rendered block prints a repo file root- or work-dir-relative,
-    # and the hq when command it prints beside it takes that spelling,
-    # so the write verb resolves it against the same bases. The search
-    # is ungated by --status and --successor: a row retired by the printed
-    # path must retire the row the absolute path opened, not a twin.
+    # Notes:
+    # - A rendered block prints a repo file root- or work-dir-relative,
+    #   and the hq when command beside it takes that spelling, so stamp
+    #   resolves a path against the same bases.
+    # - The lookup ignores --status and --successor, so retiring a file
+    #   by its printed path retires the row opened under its absolute
+    #   path and leaves no twin.
     stored_path, path_obj, base = paths.stamp_path(folder, path, rows)
     never_stamped = all(row['path'] != stored_path for row in rows)
     prev = live.get(stored_path, {})
-    # Notes:
-    # - An abs path not on disk is a file on another host or one still
-    #   to come, and stays an advisory at begin and finish.
-    # - A path gone on purpose is recorded with --status missing,
-    #   --archive, or --successor, which pass; a path with a row already
-    #   is a re-stamp, judged by R1 and R3.
+    # An abs path not on disk is a file on another host or one still
+    # to come, so begin and finish advise on it and stamp accepts it.
     recorded_on_purpose = (
         getattr(argv, 'status', None) in {'missing', 'archived'}
         or getattr(argv, 'archive', False)
@@ -471,19 +423,14 @@ def _do_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
                         break
         except OSError:
             pass
-    # The draft rule names the folder's top level alone: a .py nested in
-    # the folder or outside it infers other, gated by --kind draft.
+    # The draft rule covers the folder's top level alone. A .py nested
+    # deeper or outside the folder infers other. Only --kind draft
+    # gates it.
     top_level = base == 'folder' and '/' not in stored_path
     inferred_kind, seed_rb = ledger.infer_kind(
         path_obj.name, is_dir, first_heading, top_level,
         ledger.kind_dir_of(stored_path, base))
     history = [row for row in rows if row['path'] == stored_path]
-    # Notes:
-    # - R1 binds to every kind the path has ever carried, so an
-    #   --archive that also passes --kind other cannot take a
-    #   once-declared spec out of the gate.
-    # - A kind the agent declares with --kind counts too: a file
-    #   called a spec is gated from that stamp on.
     gate_kind = inferred_kind
     if gate_kind not in {'spec', 'draft'}:
         declared = [getattr(argv, 'kind', None)] + [row['kind'] for row in history]
@@ -494,17 +441,10 @@ def _do_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
         paths.stamp_path(folder, successor_given, rows)[0] if successor_given
         else prev.get('successor', '-') or '-')
     successor_path = paths.successor_path(folder, successor)
-    # Notes:
-    # - R1 judges the resulting row, so a successor carried forward
-    #   from the previous row counts, re-checked every stamp.
-    # - A directory, or the artifact itself under any spelling, is
-    #   not a successor.
     successor_on_disk = (
         successor != '-'
         and successor_path.is_file()
         and successor_path.resolve() != path_obj.resolve())
-    # A refusal receipt records an attempt, not a state; its reason is
-    # skipped when carrying reason forward.
     carried_reason = next(
         (row['reason'] for row in reversed(history)
          if not row['reason'].startswith('refused: ')),
@@ -533,8 +473,7 @@ def _do_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
         explicit_rb = getattr(argv, 'read_before', None)
         carried_rb = prev.get('read_before', ledger.TIER_SEED.get(gate_kind, 'never'))
         # A re-stamp to spec or draft from a row at never takes the new
-        # kind's tier: never carried forward leaves --kind draft refused
-        # by R1. A tier above never is the row's own and stays.
+        # kind's tier, or R1 refuses a --kind draft carried at never.
         kind_changed = bool(prev) and kind != prev.get('kind')
         rb = explicit_rb or (
             ledger.TIER_SEED.get(
@@ -542,8 +481,8 @@ def _do_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
             else carried_rb)
         explicit_status = getattr(argv, 'status', None)
         status = explicit_status or prev.get('status', 'live')
-        # --status archived and --archive are the same demotion and
-        # must land the same row: the two spellings cannot drift.
+        # --status archived and --archive are one demotion and must land
+        # the same row.
         if getattr(argv, 'archive', False) or status == 'archived':
             status = 'archived'
             rb = 'never'
@@ -552,9 +491,6 @@ def _do_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
                 status = 'superseded'
             if not explicit_rb:
                 rb = 'never'
-        # A reason explains the state it was given with; it carries
-        # only while kind, status, and read_before hold. A transition
-        # needs its own reason.
         state_holds = (kind, status, rb) == (
             prev.get('kind', inferred_kind),
             prev.get('status', 'live'),
@@ -574,24 +510,19 @@ def _do_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
             'lines': n_lines, 'reason': reason, 'label': label,
             }
         r1_result = ledger.check_r1(new_row, gate_kind, successor_on_disk)
-        # R1 passes every row whose successor is on disk, so a stamp
-        # that gave one and was refused was refused for that successor.
+        # R1 passes every row whose successor is on disk, so a refused
+        # stamp that gave one was refused for that successor.
         if r1_result and successor_given and successor != '-':
             r1_result = f'R1: successor {successor} is not another file on disk'
         if r1_result:
             refusal_reason = f'refused: {r1_result}'
         elif status == 'live' and rb == 'always' and where == '-':
-            # always is an anchored span read at every resume; a whole
-            # file at that tier is an edit row read too early.
+            # An always row is an anchored span read at every resume, so
+            # a whole file belongs at the edit tier.
             refusal_reason = f'refused: {stored_path} always with no anchor'
     if refusal_reason:
-        # Notes:
-        # - A receipt verifies nothing: it keeps the previous sha so
-        #   a failed stamp cannot clear the R3 gate.
-        # - With no previous row it seeds read_before from the kind
-        #   table, so a refusal never promotes an ungated file into
-        #   the read block, and records the sha on disk so R3 covers
-        #   the file from here on.
+        # With no previous row the receipt records the sha on disk, so
+        # R3 covers the file from here on.
         refused_row: storage.Row = {
             'cycle': str(anch['cycle']), 'ts': anch['now'],
             'path': stored_path, 'base': base,
@@ -626,12 +557,10 @@ def _do_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
         return 1
     storage.append_tsv(ledger_path, ledger.LEDGER_FIELDS, new_row, ledger.LEDGER_HEADER)
     # Notes:
-    # - The gate is the command's own shape. Only a stamp that
-    #   narrowed --where while carrying the label forward can leave a
-    #   label its writer never re-read; a label typed in the same
-    #   command was judged as it was typed.
-    # - Coverage is the heading line, not the whole section, so an
-    #   anchor named by its title covers what s<n> names.
+    # - Only a stamp that narrowed --where and carried the label forward
+    #   can leave a label its writer never re-read.
+    # - Coverage is the heading line alone, so an anchor named by its
+    #   title covers what s<n> names.
     label_unread = (
         bool(getattr(argv, 'where', None))
         and not getattr(argv, 'label', None)
@@ -652,16 +581,12 @@ def _do_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
                         r'(?<![0-9A-Za-z_])s\d+(?:\.\d+)*[a-z]?(?![0-9A-Za-z_])',
                         label)}):
                 token_spans, _ = markdown.resolve_where(file_text_for_advisory, [token])
-                # Notes:
-                # - A token naming a section the file does not have (e.g.
-                #   s11 of a nine-section file) resolves to nothing; report
-                #   it alongside out-of-span tokens because the label still
-                #   advertises a section the span will not print.
-                # - This comparison uses the fuller anchor grammar
-                #   (s\d+(?:\.\d+)*[a-z]?) while advisory 2 above keeps
-                #   \bs\d+\b; they disagree on 's24.4' - advisory 2 sees
-                #   's24', this one sees 's24.4'. Unifying them is wider
-                #   than this ticket.
+                # A token naming a section the file lacks (s11 of a
+                # nine-section file) resolves to nothing and is reported
+                # with the out-of-span tokens, since the label still
+                # advertises it.
+                # TODO: this grammar and the dropped-token advisory's
+                # \bs\d+\b disagree on 's24.4'.
                 if not token_spans or not any(
                         start <= token_spans[0][0] <= end
                         for start, end in spans):
@@ -674,16 +599,12 @@ def _do_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
     # Notes:
     # - The comparand is the last row of an earlier cycle, so two
     #   re-stamps in one cycle are both judged against what the
-    #   previous cycle left; with none, against the earlier re-stamp.
-    # - Backticks are markup, not content, so both tests read the
-    #   label with them stripped: an identifier the new label spells
-    #   plainly is neither a loss nor a shortening, and a formatting
-    #   change reported as an omission cannot be told from a real one.
-    # - A token counts as kept only where it stands on its own.
-    #   Characters of it inside a longer identifier name something
-    #   else, and the old name is gone.
-    # - Both lines can fire on one re-stamp: the dropped line is what
-    #   the operator retypes, the shorter line what is left unnamed.
+    #   previous cycle left. With none, it is the earlier re-stamp.
+    # - Both tests read the label with backticks stripped, so an
+    #   identifier the new label spells plainly is neither a loss nor a
+    #   shortening.
+    # - A token counts as kept only where it stands on its own, since
+    #   characters inside a longer identifier name something else.
     cycle_now = str(anch['cycle'])
     prev_row = next(
         (r for r in reversed(history) if r['cycle'] != cycle_now),
@@ -715,7 +636,7 @@ def _do_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
 
 
 def verb_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int:
-    """Run stamp: record a ledger row for one artifact (or batch from stdin).
+    """Stamp one artifact, or each line of a stdin batch under ``--batch``.
 
     Parameters
     ----------
@@ -743,12 +664,11 @@ def verb_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
             if not line or line == '-':
                 continue
             # Notes:
-            # - The parser's own usage block is swallowed: the batch
-            #   reports a bad line by number on stdout instead.
-            # - Its last stderr line is the cause, and the report keeps
-            #   it: a batch of artifact rows carries long labels, and a
-            #   message naming only the line leaves the reader to guess
-            #   between a quote, a flag and a missing path.
+            # - The parser's usage block goes to a buffer, and the
+            #   batch reports a bad line by number on stdout.
+            # - The last stderr line is the cause, and the report keeps
+            #   it: a message naming only the line leaves the reader to
+            #   guess among a quote, a flag and a missing path.
             usage_err = io.StringIO()
             quote_fault = ''
             with contextlib.redirect_stderr(usage_err):
@@ -783,14 +703,14 @@ def verb_stamp(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
 
 
 def verb_note(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int:
-    """Run note: append one item to standing.md (or batch from stdin).
+    """Append one item to standing.md, or one per stdin line under --batch.
 
     Parameters
     ----------
     folder : pathlib.Path
         Handoff folder holding standing.md.
     anch : dict
-        Anchors dict from anchors(); provides the current cycle number.
+        Anchors dict from anchors(); supplies the current cycle number.
     argv : argparse.Namespace
         Parsed note arguments: note_kind, headline, body, batch, and the
         evidence flags grade, open, contradicts.
@@ -798,22 +718,22 @@ def verb_note(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
     Returns
     -------
     int
-        0 when every item was appended, 2 when any was refused.
+        0 when every item was appended, 2 when any was refused. A batch
+        line that does not parse, names no known kind, or carries no
+        headline is reported by number, and the other lines still run.
 
     Notes
     -----
-    - Under ``--batch`` the kind slot holds the batch marker ``-`` (or
-      nothing) and each stdin line reads ``<kind> --headline <headline>
-      <body>``: the headline quoted or one bare word, the body the rest
-      of the line verbatim. ``--grade <word>``, ``--open`` and
-      ``--contradicts <id>`` may sit between the kind and ``--headline``,
-      in any order and once each; after it they are body text. On the
-      command line beside ``--batch`` they are refused, and nothing is
-      written. Prose is not shell: an apostrophe or a
-      parenthesis in the body carries no meaning here, and a body
-      wrapped whole in one pair of quotes loses only that pair.
-    - A batch line that does not parse, names no known kind, or carries
-      no headline is reported by number; the rest still run.
+    - Under ``--batch`` the kind slot holds ``-`` or nothing, and each
+      stdin line reads ``<kind> --headline <headline> <body>``: the
+      headline quoted or one bare word, the body the rest of the line
+      verbatim. ``--grade <word>``, ``--open`` and ``--contradicts <id>``
+      may sit between the kind and ``--headline``, in any order and once
+      each. After ``--headline`` they are body text. Beside ``--batch``
+      on the command line they are refused and nothing is written.
+    - Prose is not shell: an apostrophe or a parenthesis in the body
+      carries no meaning, and a body wrapped whole in one pair of quotes
+      loses only that pair.
     """
     if getattr(argv, 'batch', False):
         if (getattr(argv, 'grade', None) is not None
@@ -874,7 +794,7 @@ def verb_note(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
 
 
 def verb_supersede(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int:
-    """Run supersede: append a supersession or retire line to standing.md.
+    """Supersede or retire one standing item in standing.md.
 
     Parameters
     ----------
@@ -917,8 +837,8 @@ def verb_supersede(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -
     if new_id and (not old_id or old_id[0] != new_id[0]):
         print(f'hq supersede: ids must share a prefix ({old_id!r} vs {new_id!r})')
         return 1
-    # An id superseded by itself leaves no id now current for hq standing
-    # to name, and drops the item from the block with nothing replacing it.
+    # An item superseded by itself would drop from the block with no id
+    # left to name as current.
     if new_id and old_id == new_id:
         print(
             f'hq supersede: {old_id} cannot supersede itself'
@@ -962,9 +882,6 @@ def verb_supersede(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -
             f'hq supersede: {new_id} was retired in c{new_chain[2][0]}'
             ' - record the replacement with a note, then supersede onto its id')
         return 1
-    # render_standing drops every id named as a source, so a
-    # replacement already superseded leaves the kind with no live item:
-    # c01 -> c02 followed by c02 -> c01 empties the block.
     if new_id in superseded_ids:
         print(
             f'hq supersede: {new_id!r} was itself superseded'
@@ -974,9 +891,6 @@ def verb_supersede(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -
         return 1
     line = f'- (c{anch["cycle"]}) {old_id} -> {new_id or "- " + reason}'
     storage.append_lines(standing_path, [line])
-    # The item leaves the block entirely, so a ruling still live inside
-    # its body would go unseen; the item is echoed as standing.md holds
-    # it on its way out.
     old_item = next(item for item in items if item['id'] == old_id)
     pfx = f'(c{old_item["cycle"]}) ' if old_item['cycle'] else ''
     shown = f'[{old_id}] {pfx}**{old_item["headline"]}** {old_item["body"]}'
@@ -985,7 +899,7 @@ def verb_supersede(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -
 
 
 def verb_done(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int:
-    """Mark the thread finished, or reopen it, by the ``.hq.done`` marker.
+    """Write the ``.hq.done`` marker, or remove it with ``--undo``.
 
     Parameters
     ----------
@@ -1007,17 +921,9 @@ def verb_done(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
 
     Notes
     -----
-    - The marker's existence is the whole test, here as in ``list``,
-      ``begin``, and ``adopt``, so a marker a hand edit left empty or
-      unparseable still counts as marked and ``--undo`` clears it.
-    - The marker is a dot file, so the folder walk skips it and no
-      ledger row, work list, or conservation count sees it.
-    - Marking is not idempotent in silence: a second ``done`` prints the
-      time the first recorded and leaves it, so the finish date survives
-      a repeat and a new ``--reason`` needs ``--undo`` first.
-    - Nothing else changes. Every read verb still answers on a marked
-      folder; only ``list`` hides it, and ``begin`` and ``adopt`` refuse
-      it.
+    - A second ``done`` prints the time the first recorded and changes
+      nothing, so the finish date survives a repeat and a new
+      ``--reason`` needs ``--undo`` first.
     """
     marker = folder / storage.DONE_NAME
     undo = getattr(argv, 'undo', False)

@@ -12,27 +12,25 @@ from handoff import render, standing, storage, threads
 
 
 def verb_open(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int:
-    """Run open: print status, drift, W1/W2, sha-moved rows, and stale paths.
-
-    A label the rendered block and the ledger disagree on is one of the
-    drift classes reported. On the default path, where HANDOFF.md is a
-    file, ``hq help read`` follows the findings, so the reading steps
-    reach the agent when it reads rather than riding in the skill for
-    the whole session; ``--not-carried`` prints its listing alone.
+    """Print a thread's status and drift findings.
 
     Parameters
     ----------
     folder : pathlib.Path
         Handoff folder to inspect.
     anch : dict
-        Anchors dict from ``anchors()``; provides current branch and sha.
+        Current ``branch``, ``sha``, ``cycle`` and ``session``.
     argv : argparse.Namespace
-        Parsed open arguments (none beyond the common flags).
+        Parsed arguments. ``not_carried`` limits the output to the carry
+        listing.
 
     Returns
     -------
     int
-        0 always; findings print to stdout, never block.
+        1 when HANDOFF.md is a directory and ``not_carried`` is off,
+        else 0. Findings print to
+        stdout and never block. A run that finds HANDOFF.md a file ends
+        with the ``hq help read`` text, except under ``not_carried``.
     """
     walk, rows, live, sha_map, manifest, lb, sb = ledger.folder_state(folder)
     if getattr(argv, 'not_carried', False):
@@ -48,8 +46,7 @@ def verb_open(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
             standing_path.read_text(encoding='utf-8')
             if standing_path.exists() else '')
         # finish compares against standing.md with this cycle's Unfiled
-        # items already filed, so the lister files them too; otherwise
-        # it reports a line finish passes.
+        # items filed, so the listing files them too.
         for kind_str, headline, body in unfiled_items:
             line = standing.note_line(
                 standing_now, kind_str, headline, body, int(anch['cycle']))
@@ -103,26 +100,21 @@ def verb_open(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
                 f' > last finished {last_finished}'
                 ' - the header was hand-edited; trust the ledger, report it')
     # Notes:
-    # - A row re-stamped after the last finish leaves the rendered
-    #   blocks holding a label the ledger has moved past. The block sha
-    #   still matches, so no other check here tells.
-    # - The cycle this session began is meant to run ahead of the
-    #   blocks, so its own lock silences the comparison. A lock another
-    #   session left is a cycle that died, and the desync it left is
-    #   what this session has to know about.
-    # - A row is judged by its rendered display path, so a display two
-    #   live rows share, or one a work-dir repin has moved since the
-    #   render, is passed over rather than guessed at.
+    # - A row re-stamped after the last finish leaves a block label the
+    #   ledger has moved past, and the block sha still matches.
+    # - The cycle this session began runs ahead of the blocks, so its
+    #   own lock silences the comparison. A lock another session left
+    #   marks a cycle that died, and its desync is reported.
+    # - A display two live rows share, or one a work-dir repin moved
+    #   since the render, is skipped.
     # - A block an older version rendered carries the stored path where
-    #   this one prints the display, so the stored spelling is read
-    #   when the display finds no line; the next finish leaves only
-    #   the display.
-    # - Both sides are compared stripped of trailing space: the block
-    #   body loses it at its last line, and the ledger keeps it.
-    # - The artifacts block carries a capped label and no label at all
-    #   on an always row, so the comparand is the resident form and the
-    #   holdback suffix comes off first. An always row is judged against
-    #   the read block, the one place its label prints whole.
+    #   this one prints the display, so both spellings are tried.
+    # - The block body loses trailing space at its last line and the
+    #   ledger keeps it, so both sides are stripped.
+    # - The artifacts block holds a capped label and none on an always
+    #   row, so the capped form is the comparand and the holdback
+    #   suffix comes off. An always row is judged against the read
+    #   block, where its label prints whole.
     shown = paths.shown_paths(folder, live)
     artifacts_body = parsed.get('blocks', {}).get('artifacts', '')
     read_body = parsed.get('blocks', {}).get('read', '')
@@ -167,7 +159,6 @@ def verb_open(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
         print(
             f'sha moved since stamp: {row["path"]}'
             ' - read the file, not the span alone')
-    # Git drift: compare header branch/sha against current git state.
     header_line = parsed.get('header', '')
     header_m = re.search(r'\|\s*(\S+)\s*@\s*([0-9a-f]+)', header_line)
     if header_m:
@@ -188,7 +179,6 @@ def verb_open(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
                 f'block sha mismatch: hq:{bname}'
                 f' stored {stored_sha} computed {computed}'
                 ' - a hand edit; trust hq artifacts and hq standing, not the block')
-    # Re-resolved spans: report anchors that moved or became unresolved.
     for row in live.values():
         if row.get('status') != 'live' or row.get('read_before') != 'always':
             continue
@@ -208,12 +198,10 @@ def verb_open(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
                 f'unresolved anchor in {row["path"]}: {anchor_str!r}'
                 ' - read the whole file; at write time re-stamp with a --where'
                 ' that resolves (hq help anchors), then re-run the same open')
-        # Report spans that moved since the stored read block, which
-        # prints a path under the root or the pin relative to it.
+        # The read block prints a path under the root or the pin
+        # relative to it.
         read_block_body = parsed.get('blocks', {}).get('read', '')
         display = shown.get(row['path'], (row['path'], ''))[0]
-        # As at the label check, a read block an older version rendered
-        # carries the stored path where this one prints the display.
         spellings = tuple(dict.fromkeys((display, row['path'])))
         for line in read_block_body.splitlines():
             if not line.startswith(tuple(f'{sp}:' for sp in spellings)):
@@ -233,7 +221,7 @@ def verb_open(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
             new_by_slot = [
                 None if anchor in unresolved else next(resolved_new)
                 for anchor in anchor_list]
-            # Spans pair with anchors by position, and a ? slot on either
+            # Spans pair with anchors by position. A ? slot on either
             # side pairs with nothing.
             pairs = [
                 (old, new) for old, new in zip(old_by_slot, new_by_slot)
@@ -244,18 +232,16 @@ def verb_open(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
                     f'span moved: {row["path"]} {old_spans} -> {new_spans}'
                     ' - the printed spans are current')
     # Notes:
-    # - A `<dir>/<slug>/` mention under a directory an earlier plugin
-    #   version used names where the folder was: the agent wrote the
-    #   path before the rename, and no sha or row check reads prose.
-    # - The scan is bound to those directory names: a source tree
-    #   named after the slug, `src/<slug>/`, is a real place, and a
-    #   stub left at the old location keeps the old directory on disk.
-    # - Only the cursor and standing.md are scanned: the generated
-    #   blocks are rewritten from standing.md at finish, and a notes
-    #   sibling may quote where work used to live.
-    # - A superseded or retired item and a retire line's reason are
-    #   skipped: the file is append-only, so counting them would leave
-    #   a line no move clears.
+    # - No sha or row check reads prose, so a path the agent wrote
+    #   before the rename is found by this scan.
+    # - A source tree named after the slug, `src/<slug>/`, is a real
+    #   place, so the scan reads only the former directory names.
+    # - The generated blocks are rewritten at finish and a notes sibling
+    #   may quote where work used to live, so only the cursor and
+    #   standing.md are scanned.
+    # - standing.md is append-only, so a superseded or retired item and
+    #   a retire line's reason are skipped. Counting them would leave a
+    #   line no move clears.
     # A work dir pinned under or inside a former name is a real place:
     # its per-thread paths are not stale, so that name leaves the scan.
     wd_value, _ = paths.resolve_work_dir(folder)

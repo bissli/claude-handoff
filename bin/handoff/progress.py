@@ -88,13 +88,13 @@ def parse_summary(log: str) -> tuple[
     tuple
         ``(tokens, free_text, error)``:
 
-        - tokens: ``{name: (kind, value)}``, None when the row does not
-          parse or the probe failed, and empty for ``unmeasured``. A
-          counting value is ``(current, goal, step)``, each a Decimal
-          and step None where the token has none. A tally is
-          ``(value, None)``: a stored ``@<step>`` on it is ignored.
-          A repeated name keeps its last token before the row needs a
-          counting token, so ``a=5->0 a=+3`` does not parse.
+        - tokens: ``{name: (kind, value)}``. None when the row does not
+          parse or the probe failed, empty for ``unmeasured``. A
+          counting value is ``(current, goal, step)``, each a Decimal,
+          with step None where the token has none. A tally is
+          ``(value, None)`` and ignores a stored ``@<step>``. A repeated
+          name keeps its last token before the check for a counting
+          token, so ``a=5->0 a=+3`` does not parse.
         - free_text: the text after the first bar, ``''`` with no bar.
           None when the log does not start with ``summary:``.
         - error: why the row does not parse, else None. A failed probe
@@ -134,7 +134,7 @@ def parse_summary(log: str) -> tuple[
 
 
 def stall_count(rows: list[dict]) -> dict:
-    """Count the cycles in a row without progress, by the summary grammar.
+    """Count the consecutive cycles without progress, by the summary grammar.
 
     Parameters
     ----------
@@ -146,7 +146,7 @@ def stall_count(rows: list[dict]) -> dict:
     Returns
     -------
     dict
-        For the newest composed row, or None and 0 with none:
+        For the newest composed row, with None and 0 where none exists:
 
         - ``stall``: the streak. None for a row that does not parse and
           is no ruling, and for an unmeasured row before the first
@@ -159,7 +159,7 @@ def stall_count(rows: list[dict]) -> dict:
     -----
     - A ruling is a composed row whose text after the first bar starts
       with ``stall review:``, at any carried streak. It yields 0, opens
-      the window and clears every name's state.
+      a new window and clears every name's state.
     - Progress, for a counting token's distance from its goal::
 
           distance = max(0, side * (current - goal))   side set
@@ -171,12 +171,12 @@ def stall_count(rows: list[dict]) -> dict:
 
       side is the sign of ``current - goal`` at the name's first entry
       off its goal, unset (0) before it. best and max move only on an
-      improved vote, so gains below the step add up. A changed kind,
-      or a counting token's changed goal or step, restarts the name
-      and votes stuck.
+      improved vote, so gains below the step add up. A changed kind, or
+      a counting token's changed goal or step, restarts the name and
+      votes stuck.
     - The window's first parsed row is neutral. A later row of new names
-      is non-progress, so renamed coordinates still count. A failed row
-      is non-progress, an unmeasured row leaves the streak.
+      is non-progress, so a renamed coordinate still counts. A failed
+      row is non-progress, and an unmeasured row leaves the streak.
     """
     state: dict[str, dict] = {}
     streak = 0
@@ -293,16 +293,16 @@ def run_probe(probe: pathlib.Path, cwd: pathlib.Path) -> tuple[str, bool, str]:
         ``(row, met, reason)``. row is what follows ``summary:`` in the
         stored log: the token line, ``unmeasured``, or ``probe-failed:
         <cause>``. met is True at exit 3, or when every counting token
-        is at its goal. reason is the finish-line reason: the last stderr
-        line, else the token line.
+        is at its goal. reason is the last stderr line, else the token
+        line.
 
     Notes
     -----
     - The probe gets stdin ``/dev/null``, ``HQ_MEASURE=1`` and
-      ``HQ_TALLY``, and runs in its own session, whose process group the
-      ``PROBE_CAP_SECS`` cap kills.
-    - Each run of whitespace collapses to one space, and a ``|`` in a
-      cause is stored as ``/``, so the row keeps one bar per segment.
+      ``HQ_TALLY``, and runs in its own session, whose process group
+      the ``PROBE_CAP_SECS`` cap kills.
+    - Whitespace runs collapse to one space and a ``|`` in a cause is
+      stored as ``/``, so the stored row keeps its one bar.
     """
     env = dict(
         os.environ, HQ_MEASURE='1',

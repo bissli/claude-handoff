@@ -1,4 +1,4 @@
-"""Store files on disk: root and folder lookup, TSV and key=value I/O, digests, locks.
+"""Disk access: root and folder lookup, TSV and key=value I/O, locks.
 """
 
 import argparse
@@ -14,8 +14,6 @@ import sys
 Row = dict[str, str]
 
 
-# Each later column trails the ones before it, so a manifest written
-# before it existed still reads by position; read_tsv pads it to `-`.
 MANIFEST_FIELDS = [
     'cycle', 'written', 'session', 'repos', 'cursor_lines', 'payload_tokens',
     'handoff_sha', 'ledger_bytes', 'ledger_sha', 'standing_bytes',
@@ -27,14 +25,9 @@ MANIFEST_HEADER = '\t'.join(MANIFEST_FIELDS)
 
 
 # Notes:
-# - The append-only stores the agent dictates through a verb instead
-#   of opening, each against the verb that replaces a direct read.
-#   `read` refuses them by this map and the PreToolUse gate reports
-#   them by it, so both halves name the same route.
-# - cycles/ is absent: no verb prints an archived cycle whole, so the
-#   agent reads cycles/cNN.md by range and never edits it.
-# - Each verb prints one item or one path's rows: a reader sent here
-#   never pays for the whole store, which bare hq standing prints.
+# - cycles/ is absent: no verb prints an archived cycle whole.
+# - Each verb prints one item or one path's rows. Bare `hq standing`
+#   prints the whole store, which a reader sent here should not pay for.
 STORE_VERBS = {
     'ledger.tsv': 'hq when {slug} <path>',
     'standing.md': 'hq standing {slug} <id>',
@@ -44,8 +37,6 @@ STORE_VERBS = {
 HANDOFF_DIRNAME = '.handoff'
 
 
-# The directories earlier plugin versions kept the folder under; a
-# path written under one of them names where a folder used to be.
 FORMER_HANDOFF_DIRNAMES = ('working', 'scratch')
 
 
@@ -56,15 +47,14 @@ TWO_HOURS = 7200
 
 
 def anchors(folder: pathlib.Path, argv: argparse.Namespace) -> dict:
-    """Return environment fields for the current invocation.
+    """Environment fields for the current invocation.
 
     Parameters
     ----------
     folder : pathlib.Path
-        Handoff folder; read to determine the current cycle from the manifest.
+        Handoff folder; its manifest sets the cycle.
     argv : argparse.Namespace
-        Parsed flags; ``--session`` overrides its ``HQ_SESSION``
-        environment fallback.
+        Parsed flags; ``--session`` overrides ``HQ_SESSION``.
 
     Returns
     -------
@@ -75,13 +65,9 @@ def anchors(folder: pathlib.Path, argv: argparse.Namespace) -> dict:
 
     Notes
     -----
-    - Precedence: ``HQ_CYCLE``, ``HQ_NOW``, and ``HQ_HOST`` each override
-      the manifest cycle, the clock, and the hostname they fall back to;
-      ``--session`` overrides ``HQ_SESSION`` the same way.
-    - ``HQ_GIT=0`` disables git calls; branch and sha become ``'-'``.
-    - cycle is last manifest row's cycle + 1, or 1 with no manifest rows.
-    - A cycle or timestamp that does not parse exits before any verb runs:
-      2 for the env value, 1 for a manifest row.
+    - ``HQ_GIT=0`` skips git; branch and sha become ``'-'``.
+    - A cycle or timestamp that does not parse exits 2 for an env value
+      and 1 for a manifest row.
     """
     root = resolve_root(argv)
     cycle_raw = os.environ.get('HQ_CYCLE')
@@ -128,7 +114,7 @@ def witness(
     ledger_bytes: bytes,
     standing_bytes: bytes,
 ) -> list[str]:
-    """Detect any edit to a recorded line in the append-only files.
+    """Break descriptions for a changed prefix of ledger or standing.
 
     Parameters
     ----------
@@ -142,15 +128,7 @@ def witness(
     Returns
     -------
     list[str]
-        Each entry is a ``'W1 ...'`` or ``'W2 ...'`` break description.
-
-    Notes
-    -----
-    - Computes sha256 of the first N bytes of each file (N from the
-      manifest row) and compares against the sha stored at the last finish.
-    - A pure append leaves the first N bytes unchanged and passes.
-    - An in-line deletion, a clause rewrite, or a deletion masked by an
-      append all fail.
+        One ``'W1 ...'`` or ``'W2 ...'`` description per broken prefix.
     """
     if prev_manifest is None:
         return []
@@ -174,7 +152,7 @@ def witness(
 
 
 def live_sha(row: dict) -> str:
-    """Return the digest a manifest row's write left in HANDOFF.md.
+    """The sha12 a manifest row names for the live HANDOFF.md.
 
     Parameters
     ----------
@@ -188,43 +166,26 @@ def live_sha(row: dict) -> str:
 
     Notes
     -----
-    - finish writes one text to HANDOFF.md and to ``cycles/c<N>.md``, so
-      its row leaves ``rewrite_sha`` as ``-`` and ``handoff_sha`` names
-      both files.
-    - adopt archives the file it read and rewrites HANDOFF.md, so its row
-      names the archive in ``handoff_sha`` and the rewrite here.
-    - A row with no ``rewrite_sha`` column reads ``-`` and falls back.
-      That holds for an adopt row from before the column too: its
-      ``handoff_sha`` names the rewrite, not the archive.
+    - An adopt row written before the ``rewrite_sha`` column holds the
+      rewrite's sha in ``handoff_sha``.
     """
     rewrite = row.get('rewrite_sha', '-')
     return rewrite if rewrite not in {'', '-'} else row.get('handoff_sha', '')
 
 
 def resolve_root(argv: argparse.Namespace) -> pathlib.Path:
-    """Return the project root from flags, env, git, or cwd.
+    """Project root from flags, env, git, or the cwd.
 
     Parameters
     ----------
     argv : argparse.Namespace
-        Parsed flags; ``--root`` overrides all other sources.
+        Parsed flags; ``--root`` overrides every other source.
 
     Returns
     -------
     pathlib.Path
-        Project root, in priority order: ``--root`` flag, ``HQ_ROOT``
-        env var, ``git rev-parse --show-toplevel``, the nearest ancestor
-        of the cwd (itself included) that holds a ``.handoff`` directory,
-        cwd.
-
-    Notes
-    -----
-    - A root that exists and is not a directory exits 2; every caller
-      would otherwise raise NotADirectoryError joining ``.handoff`` onto
-      it.
-    - The ancestor walk covers a shell whose cwd moved into
-      ``.handoff/<slug>/`` outside a repo; taking that cwd as the root
-      would look for ``.handoff/<slug>/.handoff/<slug>``.
+        The root. A ``--root`` or ``HQ_ROOT`` path that exists and is not
+        a directory exits 2.
     """
     root = getattr(argv, 'root', None) or os.environ.get('HQ_ROOT')
     if root:
@@ -244,6 +205,7 @@ def resolve_root(argv: argparse.Namespace) -> pathlib.Path:
     except (subprocess.CalledProcessError, FileNotFoundError):
         pass
     cwd = pathlib.Path.cwd()
+    # A shell outside a repo may sit inside .handoff/<slug>/.
     for ancestor in (cwd, *cwd.parents):
         if (ancestor / HANDOFF_DIRNAME).is_dir():
             return ancestor
@@ -251,7 +213,7 @@ def resolve_root(argv: argparse.Namespace) -> pathlib.Path:
 
 
 def _git_state(root: pathlib.Path) -> tuple[str, str, list[str]]:
-    """Return (branch, sha7, dirty_paths) from git; hyphens on error.
+    """Branch, short sha and dirty paths from git.
 
     Parameters
     ----------
@@ -262,13 +224,8 @@ def _git_state(root: pathlib.Path) -> tuple[str, str, list[str]]:
     -------
     tuple[str, str, list[str]]
         Branch name, seven-hex HEAD sha, and one path per porcelain
-        status line. ``('-', '-', [])`` when git is absent or fails.
-
-    Notes
-    -----
-    - The dirty list comes from ``git status --porcelain``, so a staged
-      edit and an untracked file count as dirty alongside an unstaged one.
-    - A rename line (``R  old -> new``) counts as its new name.
+        status line, a rename counted by its new name. ``('-', '-', [])``
+        when git is absent or fails.
     """
     try:
         branch = subprocess.run(
@@ -296,13 +253,13 @@ def _git_state(root: pathlib.Path) -> tuple[str, str, list[str]]:
 
 
 def sha12(data: bytes) -> str:
-    """Return the first 12 hex of sha256 of data.
+    """First 12 hex digits of the sha256 of data.
     """
     return hashlib.sha256(data).hexdigest()[:12]
 
 
 def sha12_path(path: pathlib.Path) -> str:
-    """Return the first 12 hex of sha256 of path's bytes, or '-' on error.
+    """First 12 hex digits of the sha256 of a file, or '-' if unreadable.
     """
     try:
         return sha12(path.read_bytes())
@@ -311,7 +268,9 @@ def sha12_path(path: pathlib.Path) -> str:
 
 
 def read_tsv(path: pathlib.Path, fields: list[str]) -> list[dict]:
-    """Read a tab-separated file into a list of dicts, skipping the header.
+    """Rows of a TSV file as dicts, header skipped.
+
+    A short row pads with '-'; an absent file gives an empty list.
     """
     if not path.exists():
         return []
@@ -334,12 +293,6 @@ def append_lines(path: pathlib.Path, lines: list[str]) -> None:
         File to append to; created when absent.
     lines : list[str]
         Lines without their newline.
-
-    Notes
-    -----
-    - The guard is the one ``append_tsv`` applies to the ledger: a file
-      whose last byte is not a newline gets one before the append, so
-      the byte-prefix witness still holds and no two items share a line.
     """
     last_byte = b''
     if path.exists() and path.stat().st_size:
@@ -367,11 +320,6 @@ def append_tsv(path: pathlib.Path, fields: list[str], row: dict, header: str) ->
         tab, carriage return, or newline inside a value becomes a space.
     header : str
         Header line for a new file.
-
-    Notes
-    -----
-    - A file whose last byte is not a newline gets one before the row, so
-      an append can never glue two rows onto one line.
     """
     if not path.exists():
         path.write_text(header + '\n', encoding='utf-8')
@@ -395,35 +343,30 @@ def find_folder(
     slug: str,
     missing_ok: bool = False,
 ) -> pathlib.Path:
-    """Resolve slug to a handoff folder, exiting 2 on ambiguity or no match.
+    """Folder for slug under ``.handoff/``; creates nothing.
 
     Parameters
     ----------
     root : pathlib.Path
         Project root.
     slug : str
-        Exact folder name or a unique prefix under ``root/.handoff/``.
+        Exact folder name or a unique prefix. One path component:
+        ``[A-Za-z0-9][A-Za-z0-9._-]*``, with no ``..``.
     missing_ok : bool, default False
-        When True, return ``.handoff/<slug>`` whenever no folder bears
-        that exact name, ahead of any prefix match. ``begin`` creates it.
+        When True, return ``.handoff/<slug>`` if no folder has that exact
+        name, with no prefix match.
 
     Returns
     -------
     pathlib.Path
         The resolved folder path.
 
-    Notes
-    -----
-    - The slug is one path component: ``[A-Za-z0-9][A-Za-z0-9._-]*``. It
-      is joined onto ``.handoff/`` unquoted, so ``..`` or an embedded
-      separator would place a handoff folder outside ``.handoff/``.
-    - Prefix resolution serves the verbs that resume a thread, which can
-      only mean one already on disk. ``begin`` is the verb that creates,
-      so it takes the slug as typed and a longer neighbor never claims
-      it: ``begin auth`` beside ``authz`` opens ``auth``.
-    - Nothing here writes: a read-only verb on a mistyped root leaves
-      the disk as it found it, and ``begin`` creates the folder itself.
+    Raises
+    ------
+    SystemExit
+        2 on an invalid slug, an ambiguous prefix, or no match.
     """
+    # The slug joins onto .handoff/, so '..' or a separator escapes it.
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', slug) or '..' in slug:
         print(
             f'hq: invalid slug {slug!r}'
@@ -455,7 +398,7 @@ def find_folder(
 
 
 def read_kv(path: pathlib.Path) -> dict[str, str]:
-    """Read a key=value file as a dict; return {} when absent or unreadable.
+    """Fields of a key=value file; {} when absent or unreadable.
     """
     if not path.exists():
         return {}
@@ -472,13 +415,13 @@ def read_kv(path: pathlib.Path) -> dict[str, str]:
 
 
 def read_lock(folder: pathlib.Path) -> dict[str, str]:
-    """Read .hq.lock as a key=value dict; return {} when absent or unreadable.
+    """Fields of .hq.lock; {} when absent or unreadable.
     """
     return read_kv(folder / '.hq.lock')
 
 
 def done_refusal(folder: pathlib.Path, verb: str) -> str:
-    """Return the line refusing a folder marked done, '' when it is not.
+    """The line refusing a folder marked done, '' when it is not.
 
     Parameters
     ----------
@@ -490,15 +433,8 @@ def done_refusal(folder: pathlib.Path, verb: str) -> str:
     Returns
     -------
     str
-        The refusal, or '' where the folder carries no marker.
-
-    Notes
-    -----
-    - The marker's existence is the whole test, and every reader of it
-      uses this one. A marker a hand edit left empty, unparseable, or a
-      directory still refuses; the fields it cannot read print as ``-``.
-      Reading the fields instead would hide a folder from ``list`` while
-      ``begin`` opened a cycle on it.
+        The refusal, or '' where the folder carries no marker. An
+        unreadable field prints as ``-``.
     """
     if not (folder / DONE_NAME).exists():
         return ''
@@ -510,7 +446,7 @@ def done_refusal(folder: pathlib.Path, verb: str) -> str:
 
 
 def line_count(path: pathlib.Path) -> int:
-    """Return the ledger's ``lines`` figure for a file or directory.
+    """The ledger's ``lines`` figure for a file or directory.
 
     Parameters
     ----------
@@ -535,7 +471,7 @@ def line_count(path: pathlib.Path) -> int:
 
 
 def dirty_str(dirty: list[str]) -> str:
-    """Return the dirty-paths tail for the Written header, or ' | clean'.
+    """Dirty-paths tail of the Written header.
 
     Parameters
     ----------
@@ -556,7 +492,7 @@ def dirty_str(dirty: list[str]) -> str:
 
 
 def lock_age(lock: dict[str, str], now: str) -> float | None:
-    """Return a lock's age in seconds, or None when its time does not parse.
+    """A lock's age in seconds, or None when its time does not parse.
 
     Parameters
     ----------
@@ -574,9 +510,8 @@ def lock_age(lock: dict[str, str], now: str) -> float | None:
 
     Notes
     -----
-    - Both times are compared as naive local time; an aware value is
-      converted first, since a lock written on the other synced host
-      may carry an offset.
+    - An aware time converts to naive local time first, since a lock
+      written on another host may carry an offset.
     """
     now_dt = datetime.datetime.fromisoformat(now)
     if now_dt.tzinfo is not None:
@@ -591,7 +526,7 @@ def lock_age(lock: dict[str, str], now: str) -> float | None:
 
 
 def lock_refusal(folder: pathlib.Path, anch: dict, force: bool, verb: str) -> str:
-    """Return the line that refuses a verb for a foreign lock, or ''.
+    """The line refusing a verb for a foreign lock, or ''.
 
     Parameters
     ----------
@@ -613,10 +548,7 @@ def lock_refusal(folder: pathlib.Path, anch: dict, force: bool, verb: str) -> st
 
     Notes
     -----
-    - An absent lock, this session's own lock, and a foreign lock older
-      than two hours pass.
-    - A lock that cannot be read or parsed refuses, so a takeover of it
-      is always explicit.
+    - A lock with no parseable time refuses, so its takeover is explicit.
     """
     lock_path = folder / '.hq.lock'
     if force or not lock_path.exists():

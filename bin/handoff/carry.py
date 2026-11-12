@@ -24,31 +24,26 @@ def collisions(
     headings: list[tuple[str, int, str]],
     rarity: dict[str, int],
 ) -> list[str]:
-    """Find terms in the Now step that collide with dead-end or spec headings.
+    """Terms in the Now step that recur in a dead-end or spec heading.
 
     Parameters
     ----------
     now_text : str
         The Now section text.
     headlines : list[tuple[str, str]]
-        Dead-end item pairs of ``(headline_text, source_id)``.
+        Dead-end items as ``(headline_text, source_id)``.
     headings : list[tuple[str, int, str]]
-        Spec heading triples of ``(file_path, line_number, heading_text)``.
+        Spec headings as ``(file_path, line_number, heading_text)``.
     rarity : dict[str, int]
-        Maps each term to the count of top-level files containing it;
-        lower means rarer.
+        Count of top-level files containing each term. A term absent
+        from it counts 0.
 
     Returns
     -------
     list[str]
-        Hit strings as ``'collides: <term> <- <where> "<text>"'``, sorted
-        by ascending rarity, at most three.
-
-    Notes
-    -----
-    - The quoted text is the heading's own words: leading ``#`` markers
-      and every backtick are stripped, so the hit reads as the design
-      writes it.
+        At most three hits as ``'collides: <term> <- <where> "<text>"'``,
+        rarest term first. The quoted text drops the heading's ``#``
+        markers and backticks.
     """
     now_terms = extract_terms(now_text)
     hits: list[tuple[int, str, str, str]] = []
@@ -81,7 +76,7 @@ def conservation(
     standing: str,
     labels: list[str],
 ) -> list[str]:
-    """Return lines of the original handoff missing from the adopted union.
+    """Lines of the original handoff missing from the adopted union.
 
     Parameters
     ----------
@@ -92,7 +87,11 @@ def conservation(
     standing : str
         Content of ``standing.md`` after adoption.
     labels : list[str]
-        Ledger label strings written during adoption.
+        Ledger label strings written during adoption, and any other text
+        that counts as carrying a line. Adoption also passes the legacy
+        Log lines and the wrapped header's tail, and, for the
+        ``HANDOFF.orig.md`` comparison, the text of every live notes row
+        and every row graded ``edit``.
 
     Returns
     -------
@@ -101,24 +100,15 @@ def conservation(
 
     Notes
     -----
-    - Union membership uses substring containment, so a wrapped bullet
-      stored as one line in standing.md still passes, and so does a line
-      the union wraps onto indented continuation lines: they join back
-      onto the line above before the comparison.
-    - Whitespace runs collapse on both sides, so a line re-spaced in the
-      union still passes.
-    - ``labels`` may carry any extra union text; adoption passes the
-      legacy Log lines and the wrapped header's tail it moved into the
-      manifest row and, for the ``HANDOFF.orig.md`` line, the text of
-      every live notes row and every row graded ``edit``.
-    - A heading is covered when its normalized text is in the union OR
-      when at least one content line from its section is in the union,
-      so drained sections whose bullets moved to standing are not
-      reported as missing.
+    - Whitespace runs collapse on both sides. A wrapped bullet stored as
+      one line, or a line the union wraps onto indented continuation
+      lines, still matches.
+    - A heading is covered when its normalized text is in the union, or
+      when one content line from its section is, so a drained section
+      is not reported missing.
     - The header line, wherever ``Written: ... | Cycle: N`` sits on it,
-      is the script's, and never reported.
-    - A checkbox after the bullet marker (``[ ]``, ``[x]``) is structure:
-      a Plan item ticked done still counts as carried.
+      is never reported.
+    - A checkbox after the bullet marker (``[ ]``, ``[x]``) is structure.
     """
     _standing_prefix = re.compile(r'^- \[[dcxe]\d+\] \(c\d+\) ')
     _kf_grade = re.compile(r'^(read now|reference only)\s*:\s*', re.IGNORECASE)
@@ -131,27 +121,21 @@ def conservation(
         s = ' '.join(line.split())
         if _kf_label_only.match(s):
             return ''
-        # Notes:
-        # - Standing prefix (``- [dcx<n>] (c<n>) ``) is collapsed to
-        #   ``- `` so a bullet already filed compares equal to its
-        #   original.
-        # - Pointer prefix, grade label, and leading markers are
-        #   stripped so the label text alone is compared.
+        # A standing prefix collapses to ``- `` so a filed bullet
+        # compares equal to its original.
         s = _standing_prefix.sub('- ', s)
         s = re.sub(r'^#+\s*', '', s)
         s = re.sub(r'^[-*+]\s+', '', s)
-        # A ticked box is the same item: the checkbox is structure.
         s = re.sub(r'^\[[ xX]\]\s*', '', s)
         s = re.sub(r'^\d+[.)]\s+', '', s)
         s = re.sub(r'^unfiled:\s+', '', s)
         s = s.replace('**', '').replace('`', '')
         # Notes:
         # - The bold span, backticks, the ``unfiled:`` tag, and a grade
-        #   label - leading, or inline after a pointer's path - are
-        #   structure on both sides of the comparison, never wording.
-        # - A pointer keeps its path, so the union must carry the
-        #   pointer as written, ``<path> <text>``, for the line to
-        #   count.
+        #   label, leading or inline after a pointer's path, are
+        #   structure on both sides of the comparison.
+        # - A pointer keeps its path, so the union must carry it as
+        #   written, ``<path> <text>``, for the line to count.
         s = _kf_grade.sub('', s)
         return re.sub(
             r'^(\S+)\s+(?:read now|reference only)\s*:?\s*', r'\1 ', s,
@@ -170,16 +154,14 @@ def conservation(
                 out_lines.append(raw)
         return out_lines
 
-    # A line the rewrite wrapped at the column joins back before the
-    # comparison, as a Log item or a standing bullet does; the raw lines
-    # stay in the union too, so nothing that passed before fails.
+    # The raw lines stay in the union beside the joined ones, so a
+    # line that matched unjoined still matches.
     union_text = '\n'.join(
         _normalize(ln)
         for part in [cursor, standing] + labels
         for ln in part.splitlines() + _joined(part)
         if ln.strip())
 
-    # Build per-section content index for heading coverage checks.
     orig_lines = original.splitlines()
     section_content: dict[str, list[str]] = {}
     current_heading: str | None = None
@@ -205,23 +187,20 @@ def conservation(
         if markdown.HEADER_PAT.search(ln):
             continue
         is_heading = ln.lstrip().startswith('#')
-        # A heading-form grade label is structure only under Key files;
-        # anywhere else a heading adopt drops is a lost line.
+        # A heading-form grade label is structure only under Key files.
         kf_label = in_key_files and bool(markdown.KF_LABEL_PAT.match(ln.lstrip()))
         if is_heading and not kf_label:
             in_key_files = _normalize(ln) == 'Key files'
         norm = _normalize(ln)
         if not norm:
-            # Only a bare grade label normalizes to nothing and is
-            # structure; any other empty form is content the union
-            # lacks.
+            # Only a bare grade label is structure, so any other empty
+            # form is content the union lacks.
             if _kf_label_only.match(ln.strip()):
                 continue
             result.append(ln)
             continue
-        # An item carried but annotated keeps every word of the
-        # original and appends after its final mark, so that mark is
-        # the only thing blocking the match.
+        # An annotated item keeps every word and appends after its
+        # final mark, so that mark alone blocks the match.
         trimmed = norm.rstrip('.,;:')
         if norm in union_text or (
                 trimmed != norm and trimmed and trimmed in union_text):
@@ -233,7 +212,7 @@ def conservation(
 
 
 def sibling_texts(folder: pathlib.Path, live: dict[str, storage.Row]) -> list[str]:
-    """Return the text of every live notes or edit-graded sibling on disk.
+    """Text of every live notes or edit-graded sibling on disk.
 
     Parameters
     ----------
@@ -245,15 +224,9 @@ def sibling_texts(folder: pathlib.Path, live: dict[str, storage.Row]) -> list[st
     Returns
     -------
     list[str]
-        File contents, in ``live`` order, of each row whose status is
-        ``live`` and whose kind is ``notes`` or whose read obligation is
-        ``edit``; a row whose file is absent or unreadable is skipped.
-
-    Notes
-    -----
-    - The skill rehomes what fits nowhere into a sibling stamped notes
-      or edit, so a conservation check counts those files as carrying
-      the lines moved into them.
+        File contents, in ``live`` order, of each live row whose kind is
+        ``notes`` or whose read obligation is ``edit``. A row whose file
+        is absent or unreadable is skipped.
     """
     texts: list[str] = []
     for row in live.values():
@@ -281,7 +254,7 @@ def not_carried(
     standing: str,
     cycle: int,
 ) -> tuple[int, list[str]]:
-    """Return the last finished cycle and its cursor lines nothing carries.
+    """The last finished cycle and its cursor lines nothing carries.
 
     Parameters
     ----------
@@ -292,7 +265,7 @@ def not_carried(
     live : dict[str, Row]
         Live rows keyed by path, supplying the label and sibling witnesses.
     manifest : list[dict]
-        Cycle manifest; its last row names the cycle compared against.
+        Cycle manifest. Its last row names the cycle compared against.
     cursor : str
         Cursor of the cycle being filed, with Unfiled already drained.
     standing : str
@@ -310,15 +283,15 @@ def not_carried(
 
     Notes
     -----
-    - A heading carries no fact, so a section omitted as empty is never
+    - A heading carries no fact, so an omitted empty section is never
       reported by its heading.
-    - A Now step is spent by design, since the cycle completing it
-      writes the next one in its place. That exemption reaches only
-      lines appearing nowhere else in the previous cursor, so a Plan
-      item the Now step quotes is still reported when it is dropped.
+    - A Now step is spent by design, since completing it writes the next
+      one. The exemption reaches only lines found nowhere else in the
+      previous cursor, so a dropped Plan item the Now step quotes is
+      still reported.
     - A file stamped this cycle carries the lines rehomed into it. A
-      sibling stamped in an earlier cycle carries them only when its
-      kind is ``notes`` or its read obligation is ``edit``.
+      sibling stamped earlier does so only when its kind is ``notes`` or
+      its read obligation is ``edit``.
     """
     if not manifest:
         return 0, []
@@ -333,9 +306,9 @@ def not_carried(
         if row['status'] != 'live' or row.get('label', '-') == '-':
             continue
         witnesses.extend((row['label'], f'{path} {row["label"]}'))
-    # The folder's own bookkeeping is no witness: cycles/cNN.md holds
-    # the very cursor being compared against and HANDOFF.md holds the
-    # one being filed, so stamping either would pass every line at once.
+    # cycles/cNN.md holds the cursor being compared against and
+    # HANDOFF.md the one being filed, so either as a witness would pass
+    # every line.
     stamped_now = {
         r['path'] for r in rows
         if r['cycle'].strip() == str(cycle)
@@ -364,9 +337,6 @@ def not_carried(
         outside = (
             prev_cursor[:now_m.start()]
             + prev_cursor[now_m.end() + len(spent):])
-    # A line the Now step shares with another section is not spent: a
-    # Now step written as the Plan item it names must not exempt that
-    # item's own drop.
     spent_lines = {
         ' '.join(ln.split()) for ln in spent.splitlines() if ln.strip()}
     spent_lines -= {
@@ -380,7 +350,7 @@ def not_carried(
 
 
 def extract_terms(text: str) -> set[str]:
-    """Extract backticked tokens and distinctive terms from text.
+    """Backticked tokens and distinctive words of text.
 
     Parameters
     ----------
@@ -390,16 +360,14 @@ def extract_terms(text: str) -> set[str]:
     Returns
     -------
     set[str]
-        Backtick-enclosed tokens and distinctive words from the text.
+        Backticked tokens taken verbatim, then outside backticks the
+        CamelCase words, snake_case identifiers and capitalized words
+        not at a sentence start.
     """
     terms: set[str] = set()
     # Notes:
-    # - Backtick-enclosed tokens are taken verbatim.
-    # - Outside backticks: CamelCase words, snake_case identifiers, and
-    #   capitalized words not at a sentence start are extracted.
-    # Notes:
-    # - A backticked `2` or `ka` is a marker in prose, not a term worth
-    #   a collision line: three characters and a letter are its floor.
+    # - A backticked token needs three characters and not all digits,
+    #   since `2` or `ka` is a marker in prose.
     # - A plain word needs four characters and must not be a stopword,
     #   so `The` and `Step` at the head of a Now step stay quiet, and
     #   so do `State`, `Build`, and `Phase` mid-sentence.

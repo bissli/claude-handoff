@@ -14,7 +14,7 @@ _TYPED_PREFIX = re.compile(r'(?:summary|stall review):\s*', re.IGNORECASE)
 
 
 def verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int:
-    """Run finish: check all conditions, then write everything in one pass.
+    """Close the cycle: refuse on any failed check, else write it all.
 
     Parameters
     ----------
@@ -23,40 +23,16 @@ def verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
     anch : dict
         Anchors for this invocation.
     argv : argparse.Namespace
-        Parsed flags; ``--log`` is required, ``--acknowledge`` passes a
-        witness break, and ``--replace-directives`` passes a changed
+        Parsed flags. ``--log`` is required. ``--acknowledge`` passes a
+        witness break. ``--replace-directives`` passes a changed
         ``## Directives`` section and records its reason in a decision
         that supersedes every live ``Directives replaced`` decision.
 
     Returns
     -------
     int
-        0 once everything is written, 1 on the first class that fires.
-
-    Notes
-    -----
-    - Check order (design section 5, step 7): the lock is not this
-      session's; a path it writes that it cannot write; W1 or W2;
-      an R3 sha mismatch; a live gated row absent from disk; an
-      ``## Unfiled`` section below the first block marker; an untyped
-      ``## Unfiled`` bullet; a ``## Directives`` section that differs
-      from the previous finish's archive without
-      ``--replace-directives``, or that flag on an unchanged section.
-    - Every check, the path preflight included, precedes the first
-      write, so a refusal leaves the folder byte-identical and a re-run
-      appends nothing twice.
-    - An interruption between the writes leaves the drained decision in
-      standing.md and the ``## Unfiled`` section still in HANDOFF.md,
-      so the re-run records that decision a second time under a fresh
-      id, which ``hq supersede`` retires. Writing HANDOFF.md first
-      would lose the decision instead, which nothing retrieves.
-    - standing.md takes no preflight entry: it is written first, and
-      only where a note drained, so a failure there half-writes
-      nothing and the append reports for itself.
-    - ``Last worked`` is today only when this handoff is the session's
-      worked thread (``record_worked``); otherwise it keeps the
-      previous header's value, else its ``Written`` date, else the last
-      cycle's, else today.
+        0 once everything is written. 1 when a check refuses, with
+        nothing written.
     """
     if (folder / 'HANDOFF.md').is_dir():
         print('hq: HANDOFF.md is a directory - move the directory aside and re-run')
@@ -76,11 +52,12 @@ def verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
             folder / 'HANDOFF.md',
             folder / 'cycles' / f'c{anch["cycle"]:02d}.md', manifest_path):
         # Notes:
-        # - A target that does not exist yet is created, so what has
-        #   to be writable is the nearest directory that does exist -
-        #   the archive's `cycles/` is itself made by this command.
-        # - A target that does exist has to be a regular file: a
-        #   directory in its place takes a hand to move, not a retry.
+        # - A missing target is created, so the nearest existing
+        #   directory must be writable: `cycles/` is made here.
+        # - An existing target must be a regular file, since a retry
+        #   cannot move a directory aside.
+        # - standing.md takes no entry: its append runs only where a
+        #   note drained and reports its own failure.
         base = target
         while not base.exists():
             base = base.parent
@@ -139,8 +116,6 @@ def verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
     # --- Refusal: directives changed ---
     replace_why = ' '.join((getattr(argv, 'replace_directives', None) or '').split())
     directives_old: str | None = None
-    # An adopt row archives the foreign file it read, whose sections
-    # adopt merged and reordered, so only a finish row's archive compares.
     if manifest and manifest[-1].get('rewrite_sha', '-') in {'', '-'}:
         prev_archive = folder / 'cycles' / f'c{int(manifest[-1]["cycle"]):02d}.md'
         if prev_archive.is_file():
@@ -192,8 +167,6 @@ def verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
             for term in now_terms:
                 if re.search(r'(?<!\w)' + re.escape(term) + r'(?!\w)', file_text):
                     rarity[term] += 1
-            # A live spec heading uses the ledger kind and status when
-            # a row exists, the inferred kind for an unstamped file.
             row = live.get(name)
             is_live_spec = (
                 row['kind'] == 'spec' and row['status'] == 'live' if row
@@ -221,13 +194,11 @@ def verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
             print(f'advisory: unstamped {k} x{len(names)}: {shown}{tail} - stamp each')
     # --- Advisory: made files placed against the work dir ---
     # Notes:
-    # - Only a path first stamped this cycle is named: an older row was
-    #   placed under an earlier ruling, and moving it is the agent's
-    #   call.
-    # - A directory of the agent's own name is an organized unit under
-    #   either ruling, so only a loose file at the top level is named -
-    #   and, under a pin, a file in specs/, drafts/, or outputs/, whose
-    #   place the pin claims.
+    # - Only a path first stamped this cycle is named: an older row sat
+    #   under an earlier ruling, and moving it is the agent's call.
+    # - A directory is an organized unit under either ruling, so only a
+    #   loose top-level file is named. Under a pin, a file in specs/,
+    #   drafts/ or outputs/ is named too, since the pin claims them.
     wd_value, wd_lines = paths.resolve_work_dir(folder)
     for line in wd_lines:
         print(line)
@@ -256,8 +227,6 @@ def verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
                 f'advisory: made at the top level x{len(misplaced)}: {shown}{tail}'
                 ' - move each under specs/, drafts/, notes/, or outputs/'
                 ' and re-stamp with --successor')
-    # A skip entry the ledger cannot carry: a sync duplicate by name
-    # or a name holding a tab or newline, shown escaped.
     for n, k in walk:
         if k != 'skip':
             continue
@@ -309,9 +278,6 @@ def verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
                     f'advisory: one-line span at {p_key}:{start}; a wrapped heading?'
                     ' - anchor the last wrapped line, or join the heading'
                     ' where the file may be edited')
-    # The drained items are formatted in memory: nothing touches disk
-    # until the whole handoff text exists, so a failure writes nothing
-    # and a re-run appends nothing twice.
     standing_text_new = (
         standing_path.read_text(encoding='utf-8') if standing_path.exists() else ''
         )
@@ -324,8 +290,6 @@ def verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
             return 1
         new_note_lines.append(line)
         standing_text_new += line + '\n'
-    # The decision quotes the replaced section whole, so not_carried
-    # below finds each old directive line carried in standing.md.
     if replace_why:
         standing_items_old, not_live_old = standing.parse_standing(standing_text_new)
         line = standing.note_line(
@@ -335,7 +299,7 @@ def verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
         new_id = standing.parse_standing(line)[0][0]['id']
         new_note_lines.append(line)
         standing_text_new += line + '\n'
-        # A supersession line keeps the prior decision's text in
+        # A supersession line leaves the old decision's text in
         # standing.md, where not_carried still reads it.
         for item in standing_items_old:
             if (item['prefix'] == 'd'
@@ -345,16 +309,8 @@ def verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
                 new_note_lines.append(retire)
                 standing_text_new += retire + '\n'
     # --- Advisory: cursor lines not carried ---
-    # Notes:
-    # - The cursor is rewritten every cycle, so the previous archive is
-    #   the one record of what it held; a line that neither the new
-    #   cursor, standing.md, a live label, nor a rehomed sibling
-    #   carries is listed and counted in the manifest, never refused;
-    #   only a changed ## Directives section is refused, above.
-    # - Every line prints: once this cycle files, hq open --not-carried
-    #   compares against it and lists none of them.
-    # - A cursor heading carries no fact, so a section omitted as empty
-    #   is not reported by its heading.
+    # Every line prints: once this cycle files, hq open --not-carried
+    # compares against it and lists none of them.
     prev_cycle, dropped_lines = carry.not_carried(
         folder, rows, live, manifest, cursor_clean, standing_text_new,
         int(anch['cycle']))
@@ -495,9 +451,8 @@ def verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
         folder, cursor_clean, header_line, log_body,
         live, walk, standing_text_new, int(anch['cycle']))
     (folder / 'cycles').mkdir(exist_ok=True)
-    # The archive is written before HANDOFF.md is truncated, so a write
-    # that fails partway through HANDOFF.md leaves the new text whole in
-    # cycles/.
+    # The archive precedes HANDOFF.md, so a failed HANDOFF.md write
+    # leaves the new text whole in cycles/.
     cycle_archive = folder / 'cycles' / f'c{anch["cycle"]:02d}.md'
     cycle_archive.write_text(new_handoff, encoding='utf-8')
     if new_note_lines:
@@ -564,7 +519,7 @@ def verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
         if hold_line:
             (loop_dir / 'hold').write_text(hold_line + '\n', encoding='utf-8')
             print(f'{hold_line} {progress.HOLD_TEXT}')
-    # The slope, not the level: every reset gets erased, and this is the
+    # The change shows what the level erases, every reset. This is the
     # only place a session sees the erasure while it can still act.
     prev_tokens = manifest[-1].get('payload_tokens', '') if manifest else ''
     if prev_tokens.isdigit():

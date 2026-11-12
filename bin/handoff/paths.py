@@ -32,17 +32,6 @@ def validate_work_dir(root: pathlib.Path, token: str) -> tuple[str, str]:
         to the root when under it, else its ``~`` or absolute spelling -
         or ``('', reason)``, the reason a clause that follows the token
         in a printed line.
-
-    Notes
-    -----
-    - The root itself, anything under ``.handoff/``, and anything under
-      the system temp directory are refused: the first turns the root
-      into a dump, the second is the handoff's own, the third does not
-      outlive the host. Any other directory passes, inside the root or
-      out; a root that itself sits under the temp directory keeps its
-      own subdirectories.
-    - The directory must already be on disk: a pin names where the
-      thread's work already lives, so a missing one is a mistyped path.
     """
     clean = token.strip().strip('`')
     root_abs = pathlib.Path(os.path.abspath(os.path.expanduser(str(root))))
@@ -52,9 +41,9 @@ def validate_work_dir(root: pathlib.Path, token: str) -> tuple[str, str]:
         candidate = pathlib.Path(os.path.normpath(root_abs / clean))
     if candidate == root_abs:
         return '', 'is the root itself'
-    # Containment is lexical first, then by real path, so a root reached
-    # through a symlink still owns its directories spelled either way
-    # and is still itself spelled either way.
+    # A root reached through a symlink owns its directories and is
+    # itself under either spelling, so containment is lexical, then by
+    # real path.
     under_root = root_abs in candidate.parents
     if not under_root:
         real_root = pathlib.Path(os.path.realpath(root_abs))
@@ -70,8 +59,7 @@ def validate_work_dir(root: pathlib.Path, token: str) -> tuple[str, str]:
         if rel == storage.HANDOFF_DIRNAME or rel.startswith(
             storage.HANDOFF_DIRNAME + '/'):
             return '', f'is under {storage.HANDOFF_DIRNAME}/'
-    # A project checked out under the temp directory keeps its own
-    # subdirectories; the temp refusal names a path outside the root.
+    # A root under the temp directory keeps its own subdirectories.
     elif any(candidate == d or d in candidate.parents for d in _TEMP_DIRS):
         return '', 'is under the system temp directory'
     if not candidate.exists():
@@ -103,16 +91,8 @@ def resolve_work_dir(folder: pathlib.Path) -> tuple[str, list[str]]:
         ``(value, lines)``: the pinned directory as ``validate_work_dir``
         returns it, or ``''`` when the folder's own kind folders take the
         made files. ``lines`` are the printed lines for a pin that failed
-        its check, each naming its move.
-
-    Notes
-    -----
-    - No pin is the default, not a finding: the folder's kind folders
-      hold what the thread makes. Only a pin naming no directory prints.
-    - A bad pin is reported and passed over, never fatal: begin and
-      finish must still run on one.
-    - A directory under the pin's name is such a pin: the walk skips the
-      reserved name, so a file put there is invisible until it moves.
+        its check, each naming its move. A bad pin returns ``''`` and its
+        lines, so begin and finish still run.
     """
     pin = folder / WORK_PIN_NAME
     if pin.is_dir():
@@ -150,9 +130,8 @@ def work_dir_line(folder: pathlib.Path, value: str, first_cycle: bool = False) -
         The pinned directory as ``resolve_work_dir`` returns it, or
         ``''`` for the folder's own kind folders.
     first_cycle : bool, default False
-        True at a thread's first begin: the line then ends in the pin
-        command, since that is when a thread whose work already lives in
-        a project directory says so.
+        True at a thread's first begin: the default line then ends in the
+        pin command.
 
     Returns
     -------
@@ -193,11 +172,8 @@ def pointer_path(
 
     Notes
     -----
-    - A foreign file names repo files relative to the repo root, so a
-      token the folder does not hold is tried against the project root
-      (the folder's grandparent), the cwd, and home before it is seeded
-      as a missing folder path. ``stamp`` searches the bases a rendered
-      block prints against; the cwd and home are adoption's alone.
+    - The cwd and home are searched here and by no other verb. ``stamp``
+      searches the root and the pin alone.
     """
     stored, path_obj, base = stored_path(folder, token)
     if base == 'abs' or path_obj.exists():
@@ -222,8 +198,7 @@ def _search_bases(folder: pathlib.Path) -> list[pathlib.Path]:
     Parameters
     ----------
     folder : pathlib.Path
-        Handoff folder; the project root is its grandparent and the pin
-        its ``work-dir`` file.
+        Handoff folder; the root is its grandparent.
 
     Returns
     -------
@@ -231,13 +206,6 @@ def _search_bases(folder: pathlib.Path) -> list[pathlib.Path]:
         The project root, then the pinned work dir where one is pinned.
         A pin spelled with ``/`` or ``~`` is expanded; any other pin
         resolves against the root.
-
-    Notes
-    -----
-    - One list serves the write verb and the read-only verbs, so the
-      spelling a rendered block prints is the spelling every verb
-      takes. They differ in what counts as a hit: ``stamp`` matches on
-      the file existing, ``read`` and ``when`` on a row existing.
     """
     root = folder.parent.parent
     bases = [root]
@@ -271,17 +239,8 @@ def stored_path(
 
     Notes
     -----
-    - One file has one stored path: ``SPEC.md``, ``./SPEC.md``,
-      ``sub/../SPEC.md``, the folder's own absolute spelling, and the
-      ``.handoff/<slug>/SPEC.md`` a rendered block prints all key on
-      ``SPEC.md``.
     - Normalization is lexical, so a symlink in the spelling reaches the
       ledger as written.
-    - An outside path stores as ``~/...`` under home, else absolute. A
-      relative token is never searched for under the cwd or home,
-      which are adoption's alone. The one retry is
-      against the root, and it is kept only when it lands inside the
-      folder, which is the block's own spelling and no repo file.
     """
     path_clean = token.strip('`')
     home = pathlib.Path(os.path.abspath(os.path.expanduser('~')))
@@ -290,10 +249,8 @@ def stored_path(
         candidate = pathlib.Path(os.path.normpath(os.path.expanduser(path_clean)))
     else:
         candidate = pathlib.Path(os.path.normpath(folder_abs / path_clean))
-        # The blocks print a file in the folder from the root -
-        # .handoff/<slug>/specs/SPEC.md - so that spelling keys on the
-        # row the bare one keys on. A relative token the root holds
-        # anywhere else is still never searched for.
+        # A block prints a folder file from the root, so that spelling
+        # keys on the bare one's row; no other root path is searched.
         if not candidate.exists():
             from_root = pathlib.Path(os.path.normpath(
                 folder_abs.parent.parent / path_clean))
@@ -336,11 +293,8 @@ def stamp_path(
     -----
     - A spelling is held where its file exists or its key has a row.
       The folder spelling wins when held, then each of
-      ``_search_bases`` in order; a token no base holds keeps the
-      folder spelling.
-    - A ``/`` or ``~`` token is never searched.
-    - A token the root or the work dir holds prints
-      ``hq stamp: <token> -> <key> (root)`` or ``(work dir)``.
+      ``_search_bases`` in order. A ``/`` or ``~`` token is never
+      searched.
     """
     stored, path_obj, base = stored_path(folder, token)
     clean = token.strip('`')
@@ -361,13 +315,12 @@ def shown_paths(
     live: dict[str, storage.Row],
     extra_paths: tuple[str, ...] = (),
 ) -> dict[str, tuple[str, str]]:
-    """Map each stored path under the root or the pin to how a block prints it.
+    """Map each stored path under the root or pin to how a block prints it.
 
     Parameters
     ----------
     folder : pathlib.Path
-        Handoff folder; the root is its grandparent and the pin its
-        ``work-dir`` file.
+        Handoff folder; the root is its grandparent.
     live : dict[str, Row]
         Latest ledger row per path.
     extra_paths : tuple[str, ...], default ()
@@ -382,27 +335,14 @@ def shown_paths(
         the base phrase a block's first line names - ``root ~/code/proj``
         or ``work dir ~/code/proj-wt``. Every other row is absent and
         prints as stored.
-
-    Notes
-    -----
-    - A ``folder`` row is placed by the folder's own absolute path, so it
-      prints ``.handoff/<slug>/specs/SPEC.md`` under the root rather than
-      the bare ``specs/SPEC.md`` the ledger stores, which resolves from
-      the folder and not from the base the block names.
-    - The root is the one base a thread normally prints against. A pin
-      outside the root is the only second base, tried first so the made
-      files of a worktree thread print short.
-    - A base prints by ``~`` under home, else absolutely, the spelling
-      ``hq work-dir`` uses.
     """
     home = pathlib.Path(os.path.abspath(os.path.expanduser('~')))
     root = pathlib.Path(os.path.abspath(folder.parent.parent))
     folder_abs = pathlib.Path(os.path.abspath(os.path.expanduser(str(folder))))
     pin_value, _ = resolve_work_dir(folder)
     bases: list[tuple[str, pathlib.Path]] = []
-    # A pin under the root resolves from the root already, and
-    # resolve_work_dir spells such a pin relative to it; only a pin
-    # outside the root earns a second base line.
+    # A pin under the root resolves from the root already, so only a pin
+    # outside it earns a second base.
     if pin_value.startswith(('/', '~')):
         bases.append((
             'work dir',
@@ -436,8 +376,7 @@ def ledger_key(folder: pathlib.Path, token: str, known: set[str]) -> str | None:
     Parameters
     ----------
     folder : pathlib.Path
-        Handoff folder; the root is its grandparent and the pin its
-        ``work-dir`` file.
+        Handoff folder; the root is its grandparent.
     token : str
         The path as typed: folder-relative, root-relative, pin-relative,
         or by ``~`` or absolutely.
@@ -448,15 +387,9 @@ def ledger_key(folder: pathlib.Path, token: str, known: set[str]) -> str | None:
     -------
     str | None
         The stored path whose row the token names, or ``None`` when no
-        spelling of it has a row.
-
-    Notes
-    -----
-    - A relative token is tried as ``stamp`` stores it, then against the
-      project root, then against the pinned work dir, so a repo file
-      is found by the path the cursor names. ``stamp`` searches the same
-      bases, matching on the file existing where these verbs match on a
-      row existing.
+        spelling of it has a row. Tried in order: as ``stamp`` stores it,
+        then against the root, then the pinned work dir. A ``/`` or ``~``
+        token is not searched.
     """
     stored = stored_path(folder, token)[0]
     if stored in known:

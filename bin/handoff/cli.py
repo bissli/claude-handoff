@@ -9,16 +9,11 @@ import shlex
 from handoff import help_text, standing, storage, threads
 from handoff.verbs import adopt, cycle, finish, open_, query
 
-# The verbs that put a session on a thread, each recorded only once it
-# exits 0: a refused begin entered nothing. done clears the record
-# instead, and a query against another thread - when, diff, artifacts,
-# standing, read - leaves the session where it was.
+# Recorded only after the verb exits 0, so a refused begin enters
+# nothing.
 _THREAD_VERBS = ('adopt', 'begin', 'open')
 
 
-# The verbs that write inside an open cycle. Each answers to the lock
-# begin took, on the same terms begin itself applies: no lock, this
-# session's lock, and a lock past two hours all pass.
 _CYCLE_WRITE_VERBS = ('note', 'stamp', 'supersede')
 
 
@@ -499,13 +494,11 @@ def main(argv: list[str]) -> int:
 
     Notes
     -----
-    - A bare ``-`` is the batch marker. Python 3.13 and later bind it to
-      the kind slot; 3.11 leaves it over. It is a leftover either way and
-      never a usage error.
-    - Any other leftover is a usage error, except a note body: 3.11
-      argparse will not read a positional that follows an option, so the
+    - A bare ``-`` is the batch marker and never a usage error.
+    - Any other leftover is a usage error, except a note body. Python
+      3.11 argparse reads no positional that follows an option, so the
       body of ``note <slug> decision --headline H <body>`` arrives as a
-      leftover there and in the body slot on 3.13.
+      leftover there.
     """
     parser = build_parser()
     try:

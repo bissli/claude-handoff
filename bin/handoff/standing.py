@@ -10,7 +10,7 @@ KIND_PREFIX = {'decision': 'd', 'constraint': 'c', 'dead-end': 'x', 'evidence': 
 
 
 def join_headline_body(headline: str, body: str) -> str:
-    """Join a bold headline to its body with the correct separator.
+    """A bold headline joined to its body.
 
     Parameters
     ----------
@@ -22,26 +22,20 @@ def join_headline_body(headline: str, body: str) -> str:
     Returns
     -------
     str
-        Headline and body joined, with no separator when the body opens
-        with punctuation that continues the headline's sentence, and a
-        single space otherwise. Returns the headline unchanged when body
-        is empty.
-
-    Notes
-    -----
-    - Punctuation set: ``,``, ``.``, ``;``, ``:``, ``)``, ``!``, ``?``.
-    - A body that opens with punctuation continues the headline's own
-      sentence; a space before the comma would change the wording that
-      adoption preserves.
+        The headline alone for an empty body; a body opening with one of
+        ``, . ; : ) ! ?`` joins with no separator, any other with one
+        space.
     """
     if not body:
         return headline
+    # A space before leading punctuation would alter the adopted
+    # wording.
     joiner = '' if body[:1] in {',', '.', ';', ':', ')', '!', '?'} else ' '
     return f'{headline}{joiner}{body}'
 
 
 def split_headline(content: str) -> tuple[str, str]:
-    """Split one plain item's text into its headline and the body after it.
+    """Headline and body of one plain item's text.
 
     Parameters
     ----------
@@ -53,19 +47,8 @@ def split_headline(content: str) -> tuple[str, str]:
     -------
     tuple[str, str]
         The headline and the body, both stripped; the body is empty when
-        the headline is the whole text.
-
-    Notes
-    -----
-    - A sentence ends at ``.``, ``!``, or ``?`` followed by a space or
-      the end, so a dot inside a file name or a version does not split.
-    - A candidate that leaves a double quote open is skipped: a quoted
-      sentence end is the quotation's, not the item's. A closing quote
-      may follow the punctuation, ``later."``.
-    - A candidate of one or two words with text after it is a label,
-      ``Cycle 26.``, not the item, so the headline runs on to the next
-      sentence; a candidate with no word at all is returned as is, so
-      the caller's no-headline refusal still fires.
+        the headline is the whole text. A first sentence with no word is
+        returned as the headline, so the caller's refusal still runs.
     """
     for m in re.finditer(r'[.!?]"?(?=\s|$)', content):
         head, rest = content[:m.end()], content[m.end():]
@@ -77,15 +60,15 @@ def split_headline(content: str) -> tuple[str, str]:
     return content.strip(), ''
 
 
-# A standing id cited as a word of its own: not part of a path, a
-# longer token, or a hyphenated name.
+# A standing id standing alone as a word, outside a path or a hyphenated
+# name.
 CITED_ID = re.compile(r'(?<![\w/.-])([cdxe]\d{2,})(?![\w-])')
 
 
 def drain_unfiled(
     cursor_text: str,
 ) -> tuple[list[tuple[str, str, str]], str, str | None]:
-    """Parse the ## Unfiled section and extract typed bullets.
+    """Typed bullets of the ## Unfiled section, and the cursor without it.
 
     Parameters
     ----------
@@ -101,20 +84,8 @@ def drain_unfiled(
 
     Notes
     -----
-    - Accepted prefixes: ``- decision: ``, ``- constraint: ``,
-      ``- dead-end: ``. An ``- evidence: `` bullet is refused with
-      its own move.
-    - The headline is the bold span when the content opens with one,
-      else the first sentence as ``split_headline`` reads it: never
-      ending inside an open quotation, and past a one- or two-word
-      label such as ``Cycle 26.``.
-    - A bold span further along the line is body text, as it is to
-      the adopt-side reader, so no word ahead of it is dropped.
-    - An indented line continues the bullet above it, joined by one space,
-      as ``adopt`` joins a wrapped standing bullet.
-    - Any other bullet, and any unindented line that is no bullet, is the
-      refusal.
-    - A newline in a body becomes a space.
+    - A bold span after the first word is body text, as ``adopt`` reads
+      it, so no word ahead of it is dropped.
     """
     unfiled_pat = re.compile(r'^## Unfiled\s*$', re.MULTILINE)
     next_h2 = re.compile(r'^## ', re.MULTILINE)
@@ -150,8 +121,7 @@ def drain_unfiled(
                 kind = prefix
                 content = content[len(prefix) + 2:].lstrip()
                 break
-        # A claim needs its grade, so evidence takes its own move and is
-        # never relabeled as a decision to get past the refusal.
+        # Evidence needs a grade, so its refusal points to hq note.
         if kind is None and content.lower().startswith('evidence:'):
             return (
                 [], cursor_text,
@@ -180,7 +150,7 @@ def drain_unfiled(
 
 
 def parse_standing(text: str) -> tuple[list[dict], set[str]]:
-    """Parse standing.md into items and the set of superseded ids.
+    """Items of standing.md and the ids that are no longer live.
 
     Parameters
     ----------
@@ -190,12 +160,10 @@ def parse_standing(text: str) -> tuple[list[dict], set[str]]:
     Returns
     -------
     tuple[list[dict], set[str]]
-        A pair of: all standing items and the set of superseded ids.
-        Each item dict has keys ``id``, ``prefix`` (first character of
-        the id), ``cycle``, ``headline``, and ``body``. The superseded-id
-        set holds every id that is not live: the source of a supersession
-        line ``(c<n>) <old> -> <new>`` or of a retire line
-        ``(c<n>) <old> -> - <reason>``.
+        Every item, and the set of ids that are the old side of a
+        supersession or retire line. Each item dict has keys ``id``,
+        ``prefix`` (first character of the id), ``cycle`` (``''`` when
+        absent), ``headline`` and ``body``.
     """
     items: list[dict] = []
     superseded_ids: set[str] = set()
@@ -249,8 +217,6 @@ def supersession_chains(
         for m in re.finditer(
             r'^[ \t]*- \(c(\d+)\)[ \t]+([dcxe]\d+)[ \t]*->[ \t]*-(?!\S)(.*)$', text, re.MULTILINE)
         }
-    # standing.md is append-only and hand-editable, so the seen set
-    # stops a cycle in the edges from looping here.
     chains: dict[str, tuple[list[str], str, tuple[str, str] | None]] = {}
     for start in successors:
         chain = [start]
@@ -270,7 +236,7 @@ def supersession_chains(
 
 
 def _next_id(items: list[dict], prefix: str) -> str:
-    """Return the next unused two-digit-minimum id for the given prefix.
+    """The lowest unused id for a prefix, two digits at least.
     """
     existing = {item['id'] for item in items if item['prefix'] == prefix}
     n = 1
@@ -288,7 +254,7 @@ def note_line(
     body: str,
     cycle: int | str,
 ) -> str | None:
-    """Format one standing item with the next free id for its kind.
+    """One standing item line with the next free id for its kind.
 
     Parameters
     ----------
@@ -297,8 +263,8 @@ def note_line(
     kind_str : str
         Item kind: a key of ``KIND_PREFIX``.
     headline : str
-        Bold-span headline text for the item. A tab or a newline becomes
-        a space.
+        Headline text. A tab or newline becomes a space and ``**`` markers
+        are dropped.
     body : str
         Body text following the headline; may be empty. A newline becomes
         a space.
@@ -309,15 +275,6 @@ def note_line(
     -------
     str | None
         The item line without its newline, or ``None`` for an unknown kind.
-
-    Notes
-    -----
-    - The item is one physical line: a separator left in the headline
-      would split it, and every reader of ``standing.md`` - the block,
-      ``standing``, ``supersede``, and the next id - reads line by line.
-    - A headline carrying its own ``**`` span keeps its words and loses
-      the markers, since the line wraps the headline in a span of its
-      own and the inner pair would close the outer one early.
     """
     prefix = KIND_PREFIX.get(kind_str)
     if not prefix:
@@ -357,12 +314,12 @@ def do_note(
         evidence, whose body names its source.
     grade : str | None, default None
         Evidence only, and required there: measured, inferred, or
-        asserted. Written as ``<grade>: `` at the head of the headline.
+        asserted.
     is_open : bool, default False
-        Evidence only: the head becomes ``<grade>, open: ``.
+        Evidence only: marks the evidence as still open.
     contradicts : str | None, default None
-        Evidence only: a live standing id of any kind, appended to the
-        body as ``; contradicts [<id>]``.
+        Evidence only: a live standing id of any kind that the evidence
+        contradicts.
 
     Returns
     -------
@@ -371,15 +328,6 @@ def do_note(
         evidence flag on another kind, or evidence with no grade or no
         body; 1 when ``contradicts`` names no live item. A refusal
         writes nothing.
-
-    Notes
-    -----
-    - The headline is required: an item with an empty bold span is
-      invisible to ``parse_standing``, so the block, ``standing``, and
-      ``supersede`` never see it while ``_next_id`` reissues its id.
-    - The assigned id and its cycle are printed as the item lands, so a
-      caller cites the id it was handed rather than one reconstructed
-      from the ids it expects to be in use.
     """
     standing_path = folder / 'standing.md'
     text = (
