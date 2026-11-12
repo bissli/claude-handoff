@@ -300,7 +300,8 @@ the skip.
 
   `finish` renders the header line and the blocks after this pass, so
   they are a cycle behind. A stale or absent sha, cycle, id, row, or
-  label there is never a finding.
+  label there is never a finding. Never open `ledger.tsv` or
+  `standing.md`.
 
   1. From the file alone, fill five slots: the task, the next action,
      why it is next, how to verify it, and what to ask the user. An
