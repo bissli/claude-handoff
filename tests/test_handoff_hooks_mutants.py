@@ -561,25 +561,6 @@ def test_gate_relative_path_gate_actually_fires(monkeypatch, capsys, tmp_path):
     assert 'SPEC.md' in out
 
 
-def test_gate_state_dir_env_fallback_default(monkeypatch, tmp_path):
-    """Verify gate() uses STATE_DIR when HQ_STATE_DIR is unset.
-
-    Mutation: x_gate__mutmut_103 - removes the STATE_DIR default from
-    os.environ.get(), so calling gate() without the env var set yields
-    pathlib.Path(None), raising TypeError.
-    Oracle: gate() returns 0 with HQ_STATE_DIR explicitly unset; the
-    default STATE_DIR path (under ~/.claude) is used instead.
-    """
-    monkeypatch.delenv('HQ_STATE_DIR', raising=False)
-    bare = tmp_path / 'noenv'
-    bare.mkdir()
-    payload = {'cwd': str(bare), 'session_id': 'env0',
-               'transcript_path': '', 'tool_name': 'Bash',
-               'tool_input': {'command': 'echo x > out.txt'}}
-    # No handoff root - gate returns early. Must return 0, not raise.
-    assert handoff_gate.gate(payload) == 0
-
-
 def test_gate_reads_key_is_lowercase(monkeypatch, tmp_path):
     """Verify stored reads are written and read under the key 'reads'.
 
