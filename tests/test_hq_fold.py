@@ -9,7 +9,7 @@ import contextlib
 import io
 import pathlib
 
-from bin import hq
+from handoff import cli, ledger, markdown, render
 
 _SLUG = 'fold-slug'
 
@@ -33,7 +33,7 @@ def _run(argv):
     out = io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
         try:
-            rc = hq.main(argv)
+            rc = cli.main(argv)
         except SystemExit as exc:
             rc = exc.code
     return rc, out.getvalue()
@@ -50,7 +50,7 @@ def _cursor(folder, body):
 def _blocks(folder):
     """Return the rendered Standing and Artifacts block bodies as lines.
     """
-    blocks = hq.split_handoff((folder / 'HANDOFF.md').read_text())['blocks']
+    blocks = markdown.split_handoff((folder / 'HANDOFF.md').read_text())['blocks']
     return blocks['standing'].splitlines(), blocks['artifacts'].splitlines()
 
 
@@ -66,13 +66,13 @@ def test_a_cited_id_or_this_cycles_item_renders_whole(tmp_path):
     """
     folder = tmp_path / 'slug'
     folder.mkdir()
-    (folder / 'ledger.tsv').write_text(hq._LEDGER_HEADER + '\n')
+    (folder / 'ledger.tsv').write_text(ledger.LEDGER_HEADER + '\n')
     standing = ''.join(
         f'- [{item_id}] (c{cycle}) **Item {item_id}** Body.\n'
         for item_id, cycle in (
             ('c01', 1), ('c05', 5), ('d02', 1), ('d06', 3), ('x03', 2),
             ('x04', 1)))
-    text = hq._assemble_handoff(
+    text = render.assemble_handoff(
         folder,
         cursor_text=(
             '## Task\nKeep c01 in force (x04).\n\n'
@@ -83,7 +83,7 @@ def test_a_cited_id_or_this_cycles_item_renders_whole(tmp_path):
         walk=[],
         standing_text=standing,
         cycle=5)
-    lines = hq.split_handoff(text)['blocks']['standing'].splitlines()
+    lines = markdown.split_handoff(text)['blocks']['standing'].splitlines()
     whole = {ln[1:4] for ln in lines if ln.startswith('[') and '**' in ln}
     folded = {ln[1:4] for ln in lines if ln.startswith('[') and '**' not in ln}
     assert whole == {'c01', 'c05', 'x04'}
@@ -160,13 +160,13 @@ def test_the_closing_line_follows_only_a_block_with_a_folded_item():
         {'id': 'd01', 'prefix': 'd', 'cycle': '1',
          'headline': 'Refresh in-process', 'body': ''},
         ]
-    assert hq.render_standing(items, set(), 's', {'c01', 'd01'}).splitlines() == [
+    assert render.render_standing(items, set(), 's', {'c01', 'd01'}).splitlines() == [
         '### Constraints',
         '[c01] (c1) **Never log token values**',
         '### Decisions',
         '[d01] (c1) **Refresh in-process**',
         ]
-    assert hq.render_standing(items, set(), 's', {'d01'}).splitlines() == [
+    assert render.render_standing(items, set(), 's', {'d01'}).splitlines() == [
         '### Constraints',
         '[c01] Never log token values',
         '### Decisions',
@@ -192,13 +192,13 @@ def test_every_folded_row_prints_its_path_whatever_its_tier():
         'outputs/c.md': {'status': 'live', 'read_before': 'edit',
                          'kind': 'other', 'cycle': '1', 'label': 'c'},
         }
-    assert hq.render_artifacts([], rows, 's', set()).splitlines() == [
+    assert render.render_artifacts([], rows, 's', set()).splitlines() == [
         'notes/a.md',
         'notes/b.md',
         'outputs/c.md',
         'hq when s <path> prints any row above whole',
         ]
-    assert hq.render_artifacts([], rows, 's', set(rows)).splitlines() == [
+    assert render.render_artifacts([], rows, 's', set(rows)).splitlines() == [
         'notes/a.md  notes  mention  c1  a',
         'notes/b.md  notes  never  c1  b',
         'outputs/c.md  other  edit  c1  c',

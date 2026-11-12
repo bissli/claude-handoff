@@ -9,7 +9,7 @@ import contextlib
 import io
 import pathlib
 
-from bin import hq
+from handoff import cli, ledger, storage
 
 _SLUG = 'field-guard-slug'
 _SESSION = 'session-field-guard'
@@ -46,7 +46,7 @@ def _env(tmp_path, monkeypatch):
 
 
 def _run(argv):
-    """Drive hq.main over one argument list and capture stdout.
+    """Drive cli.main over one argument list and capture stdout.
 
     Returns
     -------
@@ -56,7 +56,7 @@ def _run(argv):
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         try:
-            rc = hq.main(argv)
+            rc = cli.main(argv)
         except SystemExit as exc:
             rc = exc.code
     return rc, out.getvalue(), err.getvalue()
@@ -113,6 +113,6 @@ def test_a_label_with_punctuation_still_stamps(tmp_path, monkeypatch):
         '--where', 'Spec',
         '--label', rich_label])
     assert rc == 0
-    rows = hq._read_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS)
-    row = hq.latest_rows(rows)['SPEC.md']
+    rows = storage.read_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS)
+    row = ledger.latest_rows(rows)['SPEC.md']
     assert row['label'] == rich_label

@@ -15,7 +15,7 @@ import re
 import shutil
 import subprocess
 
-from bin import hq
+from handoff import cli, help_text, markdown, storage
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FIXTURES = os.path.join(HERE, 'fixtures', 'handoff')
@@ -48,7 +48,7 @@ def _run(argv):
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         try:
-            rc = hq.main(argv)
+            rc = cli.main(argv)
         except SystemExit as exc:
             rc = exc.code
     return rc, out.getvalue(), err.getvalue()
@@ -56,7 +56,7 @@ def _run(argv):
 
 def _strip_read(out):
     """Remove the appended read topic from open output before comparing."""
-    return out.replace(hq.HELP_TOPICS['read'] + '\n', '')
+    return out.replace(help_text.HELP_TOPICS['read'] + '\n', '')
 
 
 def _lock(folder, session, time_str, cycle=1):
@@ -106,7 +106,7 @@ def test_adopt_refusals_name_their_cause(tmp_path, monkeypatch):
     assert rc == 1
     lines = out.splitlines()
     _adoption_ref = str(
-        pathlib.Path(hq.__file__).resolve().parent.parent
+        pathlib.Path(__file__).resolve().parent.parent
         / 'skills' / 'handoff' / 'reference' / 'adoption.md')
     assert lines[0] == (
         'hq adopt: non-conforming header; write a conforming HANDOFF.md first'
@@ -636,7 +636,7 @@ def test_read_sends_a_store_to_its_verb_not_to_the_file(tmp_path, monkeypatch):
     'read the span needed by hand' and so tells the agent to do the one thing
     the PreToolUse gate reports it for; or cycles/ left in the map, so
     an archived cycle the agent may read by range is refused as a store.
-    Oracle: the hand-written verb per store from hq.STORE_VERBS, and
+    Oracle: the hand-written verb per store from storage.STORE_VERBS, and
     exit 1 on each; the not-in-ledger line for cycles/c01.md.
     """
     folder = _root(tmp_path, monkeypatch)
@@ -732,23 +732,23 @@ def test_the_reference_example_file_is_the_scripts_own_output(
     monkeypatch.setenv('HQ_NOW', '2026-08-24T10:00:00')
     monkeypatch.chdir(root)
     slug = 'auth-refresh'
-    assert hq.main(['begin', slug]) == 0
-    assert hq.main([
+    assert cli.main(['begin', slug]) == 0
+    assert cli.main([
         'stamp', slug, 'specs/SPEC.md', '--where', '3. Retry',
         '--label', 'refresh contract; s3 is the retry schedule']) == 0
-    assert hq.main([
+    assert cli.main([
         'stamp', slug, 'notes/idp-quirks.md', '--read-before', 'edit',
         '--label', 'staging IdP quirks, found the hard way']) == 0
-    assert hq.main([
+    assert cli.main([
         'stamp', slug, str(root / 'scripts' / 'auth.py'), '--kind', 'draft',
         '--label', 'poller; the 401 branch is under edit']) == 0
-    assert hq.main([
+    assert cli.main([
         'note', slug, 'decision', '--headline', 'Refresh in-process, no sidecar',
         'One caller; latency is fine. Settled.']) == 0
-    assert hq.main([
+    assert cli.main([
         'note', slug, 'constraint', '--headline', 'Never log token values',
         'Not even at debug; the user said so.']) == 0
-    assert hq.main([
+    assert cli.main([
         'note', slug, 'dead-end', '--headline', 'httpx event hooks for auto-refresh',
         'A hook cannot retry the original request.']) == 0
     example_text = EXAMPLE.read_text()
@@ -762,13 +762,14 @@ def test_the_reference_example_file_is_the_scripts_own_output(
     handoff = folder / 'HANDOFF.md'
     text = handoff.read_text()
     handoff.write_text(text[:text.index('\n## ') + 1] + cursor)
-    assert hq.main(['finish', slug, '--log', 'token store and refresh endpoint written']) == 0
+    assert cli.main(
+        ['finish', slug, '--log', 'token store and refresh endpoint written']) == 0
     for day, log in (
             ('25', 'refresh verified against staging; backoff added'),
             ('26', 'poll() wiring started')):
         monkeypatch.setenv('HQ_NOW', f'2026-08-{day}T10:00:00')
-        assert hq.main(['begin', slug]) == 0
-        assert hq.main(['finish', slug, '--log', log]) == 0
+        assert cli.main(['begin', slug]) == 0
+        assert cli.main(['finish', slug, '--log', log]) == 0
 
     def _normalize(text):
         text = text.replace(str(root), '~/code/poller')
@@ -797,7 +798,8 @@ def test_the_artifacts_block_prints_every_full_row_with_no_cap(
     rc, out, _ = _run(['finish', _SLUG, '--log', 'forty-one'])
     assert rc == 0
     assert 'advisory: artifacts' not in out
-    block = hq.split_handoff((folder / 'HANDOFF.md').read_text())['blocks']['artifacts']
+    block = markdown.split_handoff(
+        (folder / 'HANDOFF.md').read_text())['blocks']['artifacts']
     full = [ln for ln in block.splitlines() if '  other  never  ' in ln]
     assert len(full) == 41
     assert not any(' - hq artifacts ' in ln for ln in block.splitlines())
@@ -887,7 +889,7 @@ def test_a_dropped_cursor_line_is_listed_counted_and_never_refused(
         '  not carried: - Verified: refresh round-trips against staging.'
         in lines)
     assert (folder / 'cycles' / 'c02.md').is_file()
-    rows = hq._read_tsv(folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS)
+    rows = storage.read_tsv(folder / 'cycles' / 'manifest.tsv', storage.MANIFEST_FIELDS)
     assert rows[-1]['note'] == '1 not carried from c01'
 
 
@@ -990,7 +992,7 @@ def test_stamping_the_previous_archive_does_not_clear_the_advisory(
     rc, out, _ = _run(['finish', _SLUG, '--log', 'two'])
     assert rc == 0
     assert _ADVISORY.format(n=1, c=1) in out.splitlines()
-    rows = hq._read_tsv(folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS)
+    rows = storage.read_tsv(folder / 'cycles' / 'manifest.tsv', storage.MANIFEST_FIELDS)
     assert rows[-1]['note'] == '1 not carried from c01'
 
 

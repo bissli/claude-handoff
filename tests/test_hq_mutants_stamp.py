@@ -14,7 +14,8 @@ import shutil
 import socket
 import subprocess
 
-from bin import hq
+from handoff import cli, ledger, standing, storage
+from handoff.verbs import cycle
 
 _SLUG = 'mut-stamp-slug'
 _SESSION = 'session-mut'
@@ -43,7 +44,7 @@ def _rows(folder):
     """Return ledger data rows as dicts, dropping the header."""
     lines = (folder / 'ledger.tsv').read_text().splitlines()[1:]
     return [
-        dict(zip(hq.LEDGER_FIELDS, ln.split('\t')))
+        dict(zip(ledger.LEDGER_FIELDS, ln.split('\t')))
         for ln in lines if ln.strip()
         ]
 
@@ -89,7 +90,7 @@ def test_anchors_env_used_when_argv_attrs_absent(tmp_path, monkeypatch):
     folder = root / '.handoff' / 'test'
     folder.mkdir(parents=True)
     ns = argparse.Namespace()
-    anch = hq.anchors(folder, ns)
+    anch = storage.anchors(folder, ns)
     assert anch['cycle'] == 7
     assert anch['now'] == '2026-01-01T00:00:00'
     assert anch['session'] == 'env-sess'
@@ -114,7 +115,7 @@ def test_anchors_session_fallback_to_unknown(tmp_path, monkeypatch):
     monkeypatch.delenv('claude_code_session_id', raising=False)
     folder = tmp_path / 'root' / '.handoff' / 'test'
     folder.mkdir(parents=True)
-    anch = hq.anchors(folder, argparse.Namespace())
+    anch = storage.anchors(folder, argparse.Namespace())
     assert anch['session'] == 'unknown'
 
 
@@ -135,7 +136,7 @@ def test_anchors_session_reads_correct_env_var(tmp_path, monkeypatch):
     monkeypatch.delenv('claude_code_session_id', raising=False)
     folder = tmp_path / 'root' / '.handoff' / 'test'
     folder.mkdir(parents=True)
-    anch = hq.anchors(folder, argparse.Namespace())
+    anch = storage.anchors(folder, argparse.Namespace())
     assert anch['session'] == 'real-sess-id'
 
 
@@ -155,7 +156,7 @@ def test_anchors_host_from_hq_host_env(tmp_path, monkeypatch):
     monkeypatch.delenv('hq_host', raising=False)
     folder = tmp_path / 'root' / '.handoff' / 'test'
     folder.mkdir(parents=True)
-    anch = hq.anchors(folder, argparse.Namespace())
+    anch = storage.anchors(folder, argparse.Namespace())
     assert anch['host'] == 'from-env-host'
 
 
@@ -175,7 +176,7 @@ def test_anchors_host_falls_back_to_gethostname(tmp_path, monkeypatch):
     monkeypatch.delenv('hq_host', raising=False)
     folder = tmp_path / 'root' / '.handoff' / 'test'
     folder.mkdir(parents=True)
-    anch = hq.anchors(folder, argparse.Namespace())
+    anch = storage.anchors(folder, argparse.Namespace())
     assert anch['host'] == socket.gethostname()
 
 
@@ -197,7 +198,7 @@ def test_anchors_hq_git_zero_disables_git_state(tmp_path, monkeypatch):
     monkeypatch.delenv('hq_git', raising=False)
     folder = root / '.handoff' / 'test'
     folder.mkdir(parents=True)
-    anch = hq.anchors(folder, argparse.Namespace())
+    anch = storage.anchors(folder, argparse.Namespace())
     assert anch['branch'] == '-'
     assert anch['sha'] == '-'
     assert anch['dirty'] == []
@@ -219,7 +220,7 @@ def test_anchors_now_isoformat_uses_seconds(tmp_path, monkeypatch):
     monkeypatch.delenv('HQ_NOW', raising=False)
     folder = root / '.handoff' / 'test'
     folder.mkdir(parents=True)
-    anch = hq.anchors(folder, argparse.Namespace())
+    anch = storage.anchors(folder, argparse.Namespace())
     # seconds resolution: no fractional seconds part
     assert '.' not in anch['now']
     # valid ISO 8601 - must parse without error
@@ -235,7 +236,7 @@ def test_anchors_result_has_lowercase_root_key(tmp_path, monkeypatch):
     """
     folder = _root(tmp_path, monkeypatch)
     folder.mkdir(parents=True)
-    anch = hq.anchors(folder, argparse.Namespace())
+    anch = storage.anchors(folder, argparse.Namespace())
     assert 'root' in anch
     assert 'ROOT' not in anch
 
@@ -261,7 +262,7 @@ def test_resolve_root_uses_git_toplevel(tmp_path, monkeypatch):
     try:
         os.chdir(subdir)
         ns = argparse.Namespace()
-        result = hq._resolve_root(ns)
+        result = storage.resolve_root(ns)
         assert result == repo.resolve()
     finally:
         os.chdir(orig_cwd)
@@ -280,7 +281,7 @@ def test_git_state_branch_and_sha_are_strings(tmp_path):
     """
     repo = tmp_path / 'repo'
     _git_repo(repo)
-    branch, sha, dirty = hq._git_state(repo)
+    branch, sha, dirty = storage._git_state(repo)
     assert isinstance(branch, str)
     assert isinstance(sha, str)
     assert branch == 'main'
@@ -300,7 +301,7 @@ def test_git_state_status_uses_cwd_root(tmp_path):
     orig_cwd = os.getcwd()
     try:
         os.chdir(tmp_path)
-        branch, sha, dirty = hq._git_state(repo)
+        branch, sha, dirty = storage._git_state(repo)
         assert 'untracked.txt' in dirty
     finally:
         os.chdir(orig_cwd)
@@ -328,7 +329,7 @@ def test_git_state_rename_with_arrow_in_name(tmp_path):
     subprocess.run(
         ['git', '-C', str(repo), 'add', '-A'],
         check=True, capture_output=True)
-    branch, sha, dirty = hq._git_state(repo)
+    branch, sha, dirty = storage._git_state(repo)
     assert any(new_name in d for d in dirty)
 
 
@@ -348,7 +349,7 @@ def test_find_folder_rejects_uppercase_slug(tmp_path):
     handoff_dir.mkdir()
     folder = handoff_dir / 'TestSlug'
     folder.mkdir()
-    result = hq._find_folder(root, 'TestSlug')
+    result = storage.find_folder(root, 'TestSlug')
     assert result == folder
 
 
@@ -364,7 +365,7 @@ def test_find_folder_returns_first_candidate(tmp_path):
     (handoff_dir / 'prefix-a').mkdir()
     (handoff_dir / 'prefix-b').mkdir()
     # exact match returns immediately; prefix match returns candidates[0]
-    result = hq._find_folder(root, 'prefix-a')
+    result = storage.find_folder(root, 'prefix-a')
     assert result.name == 'prefix-a'
 
 
@@ -378,12 +379,12 @@ def test_find_folder_ambiguous_exits_2(tmp_path):
     handoff_dir = root / '.handoff'
     handoff_dir.mkdir()
     (handoff_dir / 'slug-a').mkdir()
-    result = hq._find_folder(root, 'slug')
+    result = storage.find_folder(root, 'slug')
     assert result.name == 'slug-a'
     # two matches should exit 2
     (handoff_dir / 'slug-b').mkdir()
     try:
-        hq._find_folder(root, 'slug')
+        storage.find_folder(root, 'slug')
         raise AssertionError('expected SystemExit')
     except SystemExit as exc:
         assert exc.code == 2
@@ -398,7 +399,7 @@ def test_find_folder_missing_exits_code_2(tmp_path):
     root = tmp_path
     (root / '.handoff').mkdir()
     try:
-        hq._find_folder(root, 'no-such-slug')
+        storage.find_folder(root, 'no-such-slug')
         raise AssertionError('expected SystemExit')
     except SystemExit as exc:
         assert exc.code == 2
@@ -420,7 +421,7 @@ def test_apply_stem_rule_skips_non_spec_stems_then_processes_later(tmp_path):
         ('SPEC.md', 'spec', 2.0),
         ('SPEC.pdf', 'draft', 1.0),
         ]
-    result = hq.apply_stem_rule(entries)
+    result = ledger.apply_stem_rule(entries)
     assert 'SPEC.pdf' in result
     assert result['SPEC.pdf'] == 'SPEC.md'
 
@@ -436,7 +437,7 @@ def test_apply_stem_rule_continues_over_single_mate(tmp_path):
         ('SPEC.md', 'spec', 3.0),
         ('SPEC.pdf', 'draft', 1.0),
         ]
-    result = hq.apply_stem_rule(entries)
+    result = ledger.apply_stem_rule(entries)
     # README has no spec-mates; SPEC.pdf should be superseded by SPEC.md
     assert 'SPEC.pdf' in result
     assert result['SPEC.pdf'] == 'SPEC.md'
@@ -455,7 +456,7 @@ def test_apply_stem_rule_continues_over_no_spec_mates(tmp_path):
         ('plan.md', 'spec', 3.0),
         ('plan.pdf', 'draft', 1.0),
         ]
-    result = hq.apply_stem_rule(entries)
+    result = ledger.apply_stem_rule(entries)
     assert 'plan.pdf' in result
     assert result['plan.pdf'] == 'plan.md'
 
@@ -475,7 +476,7 @@ def test_apply_stem_rule_sorts_spec_mates_by_mtime(tmp_path):
         ('plan.pdf', 'spec', 3.0),
         ('plan.txt', 'spec', 1.0),
         ]
-    result = hq.apply_stem_rule(entries)
+    result = ledger.apply_stem_rule(entries)
     # mtime sort: plan.pdf (3.0) is newest; plan.txt (1.0) -> plan.pdf
     assert result.get('plan.txt') == 'plan.pdf'
     # A sort by name would pick plan.txt as newest instead of plan.pdf.
@@ -494,7 +495,7 @@ def test_check_r1_row_with_no_fields_passes(tmp_path):
     Oracle: hand-computed None (no refusal) from empty row dict.
     """
     row = {}
-    result = hq.check_r1(row, 'spec', False)
+    result = ledger.check_r1(row, 'spec', False)
     assert result is None
 
 
@@ -506,7 +507,7 @@ def test_check_r1_archived_without_reason_still_applies_r1(tmp_path):
     Oracle: row with status='archived' but no reason key is refused by R1.
     """
     row = {'status': 'archived'}
-    result = hq.check_r1(row, 'spec', False)
+    result = ledger.check_r1(row, 'spec', False)
     # status != 'live' should trigger R1 refusal
     assert result is not None
     assert 'status' in result
@@ -520,9 +521,9 @@ def test_check_r1_non_spec_gate_kind_returns_none(tmp_path):
     Oracle: gate_kind='other' returns None; gate_kind='spec' may refusal.
     """
     # non-spec gate kind: always None
-    assert hq.check_r1({}, 'other', False) is None
+    assert ledger.check_r1({}, 'other', False) is None
     # spec gate kind with empty row: None (defaults keep it live)
-    assert hq.check_r1({}, 'spec', False) is None
+    assert ledger.check_r1({}, 'spec', False) is None
 
 
 # ---------------------------------------------------------------------------
@@ -538,10 +539,10 @@ def test_next_id_skips_taken_ids_and_fills_the_first_gap():
     Oracle: hand-computed - d01 taken gives d02; d01, d02, d04 taken gives
     d03; a c-prefixed item does not occupy a d id.
     """
-    assert hq._next_id([{'id': 'd01', 'prefix': 'd'}], 'd') == 'd02'
+    assert standing._next_id([{'id': 'd01', 'prefix': 'd'}], 'd') == 'd02'
     taken = [{'id': i, 'prefix': i[0]} for i in ('d01', 'd02', 'd04', 'c03')]
-    assert hq._next_id(taken, 'd') == 'd03'
-    assert hq._next_id(taken, 'c') == 'c01'
+    assert standing._next_id(taken, 'd') == 'd03'
+    assert standing._next_id(taken, 'c') == 'c01'
 
 
 # ---------------------------------------------------------------------------
@@ -556,7 +557,7 @@ def test_line_count_file_counts_newlines(tmp_path):
     """
     f = tmp_path / 'test.txt'
     f.write_bytes(b'line1\nline2\nline3\n')
-    assert hq._line_count(f) == 3
+    assert storage.line_count(f) == 3
 
 
 def test_line_count_dir_counts_non_dot_files(tmp_path):
@@ -572,7 +573,7 @@ def test_line_count_dir_counts_non_dot_files(tmp_path):
     (d / 'b.txt').write_text('y\n')
     (d / '.hidden').write_text('h\n')
     (d / 'subdir').mkdir()
-    assert hq._line_count(d) == 2
+    assert storage.line_count(d) == 2
 
 
 def test_line_count_missing_file_returns_zero(tmp_path):
@@ -582,7 +583,7 @@ def test_line_count_missing_file_returns_zero(tmp_path):
     Oracle: missing path -> 0.
     """
     missing = tmp_path / 'no-such-file.txt'
-    assert hq._line_count(missing) == 0
+    assert storage.line_count(missing) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -598,7 +599,7 @@ def test_do_stamp_minimal_namespace_all_optional_attrs_absent(tmp_path,
     Oracle: stamp returns 0 and writes a correct ledger row.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'test.md').write_text('# Test\n\nContent.\n')
     anch = {
         'cycle': 1, 'now': _NOW, 'session': _SESSION,
@@ -606,7 +607,7 @@ def test_do_stamp_minimal_namespace_all_optional_attrs_absent(tmp_path,
         'root': folder.parent.parent,
         }
     ns = argparse.Namespace(path='test.md')
-    rc = hq._do_stamp(folder, anch, ns)
+    rc = cycle._do_stamp(folder, anch, ns)
     assert rc == 0
     rows = _rows(folder)
     assert rows[-1]['path'] == 'test.md'
@@ -620,9 +621,9 @@ def test_do_stamp_ledger_row_uses_lowercase_keys(tmp_path, monkeypatch):
     Oracle: cycle and ts fields in ledger match the expected values.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'doc.md').write_text('# Doc\n\nContent.\n')
-    hq.main(['stamp', _SLUG, 'doc.md'])
+    cli.main(['stamp', _SLUG, 'doc.md'])
     rows = _rows(folder)
     row = rows[-1]
     assert row['cycle'] == '1'
@@ -639,11 +640,11 @@ def test_do_stamp_refused_row_uses_correct_defaults(tmp_path, monkeypatch):
     Oracle: refused_row's successor and where fields are '-' for a new path.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     # Create spec file; stamp with --read-before=never triggers R1 refusal
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n')
-    hq.main(['stamp', _SLUG, 'SPEC.md'])
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--read-before=never'])
+    cli.main(['stamp', _SLUG, 'SPEC.md'])
+    cli.main(['stamp', _SLUG, 'SPEC.md', '--read-before=never'])
     rows = _rows(folder)
     refused = next(r for r in reversed(rows) if r['reason'].startswith('refused:'))
     assert refused['successor'] == '-'
@@ -657,10 +658,10 @@ def test_do_stamp_refused_row_lowercase_ts_key(tmp_path, monkeypatch):
     Oracle: refused_row ts field equals the configured HQ_NOW value.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n')
-    hq.main(['stamp', _SLUG, 'SPEC.md'])
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--read-before=never'])
+    cli.main(['stamp', _SLUG, 'SPEC.md'])
+    cli.main(['stamp', _SLUG, 'SPEC.md', '--read-before=never'])
     rows = _rows(folder)
     refused = next(r for r in reversed(rows) if r['reason'].startswith('refused:'))
     assert refused['ts'] == _NOW
@@ -675,11 +676,11 @@ def test_do_stamp_top_level_false_for_nested_file(tmp_path, monkeypatch):
     Oracle: sub/script.py nested in folder gets kind='other', not 'draft'.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     sub = folder / 'sub'
     sub.mkdir()
     (sub / 'script.py').write_text('x = 1\n')
-    hq.main(['stamp', _SLUG, 'sub/script.py'])
+    cli.main(['stamp', _SLUG, 'sub/script.py'])
     rows = _rows(folder)
     assert rows[-1]['kind'] == 'other'
 
@@ -692,9 +693,9 @@ def test_do_stamp_archive_without_reason_returns_2(tmp_path, monkeypatch):
     Oracle: normal stamp (no --archive) completes; --archive alone errors.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'doc.md').write_text('# Doc\n\nContent.\n')
-    rc = hq.main(['stamp', _SLUG, 'doc.md', '--archive'])
+    rc = cli.main(['stamp', _SLUG, 'doc.md', '--archive'])
     assert rc == 2
 
 
@@ -706,9 +707,9 @@ def test_do_stamp_archive_error_prints_lowercase_message(
     Oracle: captured stdout contains lowercase 'hq stamp: --archive'.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'doc.md').write_text('# Doc\n\nContent.\n')
-    hq.main(['stamp', _SLUG, 'doc.md', '--archive'])
+    cli.main(['stamp', _SLUG, 'doc.md', '--archive'])
     out = capsys.readouterr().out
     assert 'hq stamp: --archive' in out.lower()
     assert 'HQ STAMP' not in out
@@ -723,10 +724,10 @@ def test_do_stamp_status_archived_without_reason_returns_2(
     Oracle: --status archived without --reason exits 2.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'doc.md').write_text('# Doc\n\nContent.\n')
-    hq.main(['stamp', _SLUG, 'doc.md'])
-    rc = hq.main(['stamp', _SLUG, 'doc.md', '--status', 'archived'])
+    cli.main(['stamp', _SLUG, 'doc.md'])
+    rc = cli.main(['stamp', _SLUG, 'doc.md', '--status', 'archived'])
     assert rc == 2
 
 
@@ -739,13 +740,13 @@ def test_do_stamp_successor_check_refusal_not_overridden(
     Oracle: reason in ledger is the successor-not-live message.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'old.md').write_text('# Old\n\nContent.\n')
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n')
-    hq.main(['stamp', _SLUG, 'old.md'])
-    hq.main(['stamp', _SLUG, 'old.md', '--archive', '--reason', 'done'])
-    hq.main(['stamp', _SLUG, 'SPEC.md'])
-    rc = hq.main([
+    cli.main(['stamp', _SLUG, 'old.md'])
+    cli.main(['stamp', _SLUG, 'old.md', '--archive', '--reason', 'done'])
+    cli.main(['stamp', _SLUG, 'SPEC.md'])
+    rc = cli.main([
         'stamp', _SLUG, 'SPEC.md', '--successor', 'old.md',
         '--status', 'superseded'])
     rows = _rows(folder)
@@ -762,10 +763,10 @@ def test_do_stamp_refusal_reason_default_successor(tmp_path, monkeypatch):
     Oracle: first refused stamp has successor=='-'.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n')
-    hq.main(['stamp', _SLUG, 'SPEC.md'])
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--read-before=never'])
+    cli.main(['stamp', _SLUG, 'SPEC.md'])
+    cli.main(['stamp', _SLUG, 'SPEC.md', '--read-before=never'])
     rows = _rows(folder)
     refused = next(r for r in reversed(rows) if r['reason'].startswith('refused:'))
     assert refused['successor'] == '-'
@@ -779,9 +780,9 @@ def test_do_stamp_read_before_default_for_spec(tmp_path, monkeypatch):
     Oracle: new spec file stamped without --read-before gets read_before='always'.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n')
-    hq.main(['stamp', _SLUG, 'SPEC.md'])
+    cli.main(['stamp', _SLUG, 'SPEC.md'])
     rows = _rows(folder)
     assert rows[-1]['read_before'] == 'always'
 
@@ -793,9 +794,9 @@ def test_do_stamp_read_before_default_for_other(tmp_path, monkeypatch):
     Oracle: new plain file stamped without --read-before gets read_before='never'.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'notes.md').write_text('# Notes\n\nContent.\n')
-    hq.main(['stamp', _SLUG, 'notes.md'])
+    cli.main(['stamp', _SLUG, 'notes.md'])
     rows = _rows(folder)
     assert rows[-1]['read_before'] == 'never'
 
@@ -808,10 +809,10 @@ def test_do_stamp_kind_carried_from_prev_row(tmp_path, monkeypatch):
     Oracle: second stamp of doc.md carries 'spec' kind from first.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'doc.md').write_text('# Doc\n\nContent.\n')
-    hq.main(['stamp', _SLUG, 'doc.md', '--kind', 'spec', '--where', 'Doc'])
-    hq.main(['stamp', _SLUG, 'doc.md'])
+    cli.main(['stamp', _SLUG, 'doc.md', '--kind', 'spec', '--where', 'Doc'])
+    cli.main(['stamp', _SLUG, 'doc.md'])
     rows = _rows(folder)
     assert rows[-1]['kind'] == 'spec'
 
@@ -824,13 +825,13 @@ def test_do_stamp_path_required_message_lowercase(tmp_path, monkeypatch,
     Oracle: stdout contains lowercase 'hq stamp: path is required'.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     anch = {
         'cycle': 1, 'now': _NOW, 'session': _SESSION,
         'host': _HOST, 'branch': '-', 'sha': '-', 'dirty': [],
         'root': folder.parent.parent,
         }
-    rc = hq._do_stamp(folder, anch, argparse.Namespace(path=''))
+    rc = cycle._do_stamp(folder, anch, argparse.Namespace(path=''))
     assert rc == 2
     out = capsys.readouterr().out
     assert 'hq stamp: path is required' in out
@@ -846,9 +847,9 @@ def test_do_stamp_reason_cannot_start_with_refused(tmp_path, monkeypatch,
     Oracle: --reason 'refused: manual' returns 2 with lowercase message.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'doc.md').write_text('# Doc\n\nContent.\n')
-    rc = hq.main(['stamp', _SLUG, 'doc.md', '--reason', 'refused: manual'])
+    rc = cli.main(['stamp', _SLUG, 'doc.md', '--reason', 'refused: manual'])
     assert rc == 2
     out = capsys.readouterr().out
     assert 'refused:' in out
@@ -863,10 +864,10 @@ def test_do_stamp_status_archived_message_lowercase(tmp_path, monkeypatch,
     Oracle: stdout contains lowercase form.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'doc.md').write_text('# Doc\n\nContent.\n')
-    hq.main(['stamp', _SLUG, 'doc.md'])
-    hq.main(['stamp', _SLUG, 'doc.md', '--status', 'archived'])
+    cli.main(['stamp', _SLUG, 'doc.md'])
+    cli.main(['stamp', _SLUG, 'doc.md', '--status', 'archived'])
     out = capsys.readouterr().out
     assert 'hq stamp: --status archived requires --reason' in out.lower()
     assert 'HQ STAMP' not in out
@@ -880,9 +881,9 @@ def test_do_stamp_refusal_for_refused_reason_prefix(tmp_path, monkeypatch):
     Oracle: stamp without --reason completes (rc 0 or 1 depending on R1).
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'doc.md').write_text('# Doc\n\nContent.\n')
-    rc = hq.main(['stamp', _SLUG, 'doc.md'])
+    rc = cli.main(['stamp', _SLUG, 'doc.md'])
     assert rc == 0
 
 
@@ -897,9 +898,9 @@ def test_verb_stamp_batch_mode_off_by_default(tmp_path, monkeypatch):
     Oracle: single stamp updates ledger with no stdin interaction.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'doc.md').write_text('# Doc\n\nContent.\n')
-    rc = hq.main(['stamp', _SLUG, 'doc.md'])
+    rc = cli.main(['stamp', _SLUG, 'doc.md'])
     assert rc == 0
     rows = _rows(folder)
     assert len(rows) == 1
@@ -912,12 +913,12 @@ def test_verb_stamp_batch_rc_starts_at_zero(tmp_path, monkeypatch):
     Oracle: one successful batch line -> rc=0.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'doc.md').write_text('# Doc\n\nContent.\n')
     from unittest import mock
     batch_input = 'doc.md\n'
     with mock.patch('sys.stdin', io.StringIO(batch_input)):
-        rc = hq.main(['stamp', _SLUG, '--batch'])
+        rc = cli.main(['stamp', _SLUG, '--batch'])
     assert rc == 0
 
 
@@ -928,12 +929,12 @@ def test_verb_stamp_batch_skips_dash_lines(tmp_path, monkeypatch):
     Oracle: '-' line followed by valid line -> only one ledger row written.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'doc.md').write_text('# Doc\n\nContent.\n')
     from unittest import mock
     batch_input = '-\ndoc.md\n'
     with mock.patch('sys.stdin', io.StringIO(batch_input)):
-        rc = hq.main(['stamp', _SLUG, '--batch'])
+        rc = cli.main(['stamp', _SLUG, '--batch'])
     rows = _rows(folder)
     assert len(rows) == 1
 
@@ -945,12 +946,12 @@ def test_verb_stamp_batch_continue_not_break_on_dash(tmp_path, monkeypatch):
     Oracle: '-', then 'doc.md' -> one ledger row (not zero).
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'doc.md').write_text('# Doc\n\nContent.\n')
     from unittest import mock
     batch_input = '-\ndoc.md\n'
     with mock.patch('sys.stdin', io.StringIO(batch_input)):
-        hq.main(['stamp', _SLUG, '--batch'])
+        cli.main(['stamp', _SLUG, '--batch'])
     rows = _rows(folder)
     assert len(rows) == 1
 
@@ -968,15 +969,15 @@ def test_do_note_errors_handler_replace_tolerates_bad_bytes(
     Oracle: standing.md with an invalid UTF-8 byte is read without error.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    standing = folder / 'standing.md'
-    standing.write_bytes(b'## Notes\n- bad byte: \xff\n')
+    cli.main(['begin', _SLUG])
+    standing_path = folder / 'standing.md'
+    standing_path.write_bytes(b'## Notes\n- bad byte: \xff\n')
     anch = {
         'cycle': 1, 'now': _NOW, 'session': _SESSION,
         'host': _HOST, 'branch': '-', 'sha': '-', 'dirty': [],
         'root': folder.parent.parent,
         }
-    rc = hq._do_note(folder, anch, 'decision', 'Headline', '')
+    rc = standing.do_note(folder, anch, 'decision', 'Headline', '')
     assert rc == 0
 
 
@@ -991,8 +992,8 @@ def test_verb_note_batch_off_by_default(tmp_path, monkeypatch):
     Oracle: single note command writes one item to standing.md.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    hq.main(['note', _SLUG, 'decision', '--headline', 'Keep the design'])
+    cli.main(['begin', _SLUG])
+    cli.main(['note', _SLUG, 'decision', '--headline', 'Keep the design'])
     standing = (folder / 'standing.md').read_text()
     assert 'd01' in standing
     assert 'Keep the design' in standing
@@ -1005,11 +1006,11 @@ def test_verb_note_batch_skips_dash_lines(tmp_path, monkeypatch):
     Oracle: '-' then valid line -> one item in standing.md.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     from unittest import mock
     batch = '-\ndecision --headline Keep\n'
     with mock.patch('sys.stdin', io.StringIO(batch)):
-        rc = hq.main(['note', _SLUG, '--batch'])
+        rc = cli.main(['note', _SLUG, '--batch'])
     standing = (folder / 'standing.md').read_text()
     assert standing.count('d0') == 1
 
@@ -1021,11 +1022,11 @@ def test_verb_note_batch_continue_after_dash(tmp_path, monkeypatch):
     Oracle: '-', then valid decision -> one item written.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     from unittest import mock
     batch = '-\ndecision --headline Important\n'
     with mock.patch('sys.stdin', io.StringIO(batch)):
-        hq.main(['note', _SLUG, '--batch'])
+        cli.main(['note', _SLUG, '--batch'])
     standing = (folder / 'standing.md').read_text()
     assert 'Important' in standing
 
@@ -1037,11 +1038,11 @@ def test_verb_note_batch_unpack_failure_is_graceful(tmp_path, monkeypatch):
     Oracle: an invalid batch line reports error but does not raise.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     from unittest import mock
     batch = '--unknown-flag\ndecision --headline Good\n'
     with mock.patch('sys.stdin', io.StringIO(batch)):
-        rc = hq.main(['note', _SLUG, '--batch'])
+        rc = cli.main(['note', _SLUG, '--batch'])
     # at least the good line should succeed; rc can be 0 or 2
     # main thing: no TypeError propagated
     assert isinstance(rc, int)
@@ -1055,11 +1056,11 @@ def test_verb_note_batch_decision_kind_case_sensitive(tmp_path, monkeypatch):
     Oracle: batch line 'decision --headline H' writes one decision item.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     from unittest import mock
     batch = 'decision --headline Choose this\n'
     with mock.patch('sys.stdin', io.StringIO(batch)):
-        rc = hq.main(['note', _SLUG, '--batch'])
+        rc = cli.main(['note', _SLUG, '--batch'])
     assert rc == 0
     standing = (folder / 'standing.md').read_text()
     assert 'd01' in standing  # decision item written
@@ -1072,11 +1073,11 @@ def test_verb_note_batch_dead_end_kind_case_sensitive(tmp_path, monkeypatch):
     Oracle: batch line 'dead-end --headline H' writes one dead-end item.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     from unittest import mock
     batch = 'dead-end --headline Bad approach\n'
     with mock.patch('sys.stdin', io.StringIO(batch)):
-        rc = hq.main(['note', _SLUG, '--batch'])
+        rc = cli.main(['note', _SLUG, '--batch'])
     assert rc == 0
     standing = (folder / 'standing.md').read_text()
     assert 'x01' in standing or 'Bad' in standing  # dead-end item written
@@ -1092,11 +1093,11 @@ def test_verb_note_batch_keeps_a_flag_shaped_word_in_the_body(
     Oracle: rc 0 and the body '--unknown-flag value' in standing.md.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     from unittest import mock
     batch = 'decision --headline H --unknown-flag value\n'
     with mock.patch('sys.stdin', io.StringIO(batch)):
-        rc = hq.main(['note', _SLUG, '--batch'])
+        rc = cli.main(['note', _SLUG, '--batch'])
     assert rc == 0
     assert '**H** --unknown-flag value' in (folder / 'standing.md').read_text()
 
@@ -1109,11 +1110,11 @@ def test_verb_note_batch_body_from_correct_attr(tmp_path, monkeypatch):
     Oracle: batch note with explicit body appears in standing.md.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     from unittest import mock
     batch = 'decision --headline The plan because it works\n'
     with mock.patch('sys.stdin', io.StringIO(batch)):
-        hq.main(['note', _SLUG, '--batch'])
+        cli.main(['note', _SLUG, '--batch'])
     standing = (folder / 'standing.md').read_text()
     assert 'd01' in standing  # item was written with body
 
@@ -1129,10 +1130,10 @@ def test_verb_supersede_different_prefix_exits_1(tmp_path, monkeypatch):
     Oracle: d01 vs c01 (different prefixes) -> SystemExit code 1.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    hq.main(['note', _SLUG, 'decision', '--headline', 'One'])
-    hq.main(['note', _SLUG, 'constraint', '--headline', 'Two'])
-    rc = hq.main(['supersede', _SLUG, 'd01', 'c01'])
+    cli.main(['begin', _SLUG])
+    cli.main(['note', _SLUG, 'decision', '--headline', 'One'])
+    cli.main(['note', _SLUG, 'constraint', '--headline', 'Two'])
+    rc = cli.main(['supersede', _SLUG, 'd01', 'c01'])
     assert rc == 1
 
 
@@ -1143,10 +1144,10 @@ def test_verb_supersede_new_id_empty_exits_1_not_2(tmp_path, monkeypatch):
     Oracle: empty new_id returns rc=1 (clean error, not IndexError).
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    hq.main(['note', _SLUG, 'decision', '--headline', 'One'])
+    cli.main(['begin', _SLUG])
+    cli.main(['note', _SLUG, 'decision', '--headline', 'One'])
     try:
-        rc = hq.main(['supersede', _SLUG, 'd01', ''])
+        rc = cli.main(['supersede', _SLUG, 'd01', ''])
         # old supersede check should catch empty new_id
         assert rc in {1, 2}
     except (IndexError, SystemExit):
@@ -1160,9 +1161,9 @@ def test_verb_supersede_old_not_found_exits_1(tmp_path, monkeypatch):
     Oracle: unknown old_id 'd99' -> rc=1.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    hq.main(['note', _SLUG, 'decision', '--headline', 'One'])
-    rc = hq.main(['supersede', _SLUG, 'd99', 'd01'])
+    cli.main(['begin', _SLUG])
+    cli.main(['note', _SLUG, 'decision', '--headline', 'One'])
+    rc = cli.main(['supersede', _SLUG, 'd99', 'd01'])
     assert rc == 1
 
 
@@ -1173,9 +1174,9 @@ def test_verb_supersede_new_not_found_exits_1(tmp_path, monkeypatch):
     Oracle: known old_id 'd01' but unknown new_id 'd99' -> rc=1.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    hq.main(['note', _SLUG, 'decision', '--headline', 'One'])
-    rc = hq.main(['supersede', _SLUG, 'd01', 'd99'])
+    cli.main(['begin', _SLUG])
+    cli.main(['note', _SLUG, 'decision', '--headline', 'One'])
+    rc = cli.main(['supersede', _SLUG, 'd01', 'd99'])
     assert rc == 1
 
 
@@ -1190,7 +1191,7 @@ def test_build_parser_subparsers_required(tmp_path, monkeypatch):
     Oracle: main([]) returns non-zero exit code.
     """
     monkeypatch.setenv('HQ_ROOT', str(tmp_path))
-    rc = hq.main([])
+    rc = cli.main([])
     assert rc != 0
 
 
@@ -1202,8 +1203,8 @@ def test_build_parser_stamp_path_optional(tmp_path, monkeypatch):
     not argparse failure).
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    rc = hq.main(['stamp', _SLUG])
+    cli.main(['begin', _SLUG])
+    rc = cli.main(['stamp', _SLUG])
     # rc=2 from stamp logic (path is required), not from argparse
     assert rc == 2
 
@@ -1215,9 +1216,9 @@ def test_build_parser_stamp_kind_choice_todo(tmp_path, monkeypatch):
     Oracle: stamp with --kind todo parses and stamps.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'todo.md').write_text('# Todo\n\nContent.\n')
-    rc = hq.main(['stamp', _SLUG, 'todo.md', '--kind', 'todo'])
+    rc = cli.main(['stamp', _SLUG, 'todo.md', '--kind', 'todo'])
     assert rc == 0
 
 
@@ -1228,9 +1229,9 @@ def test_build_parser_stamp_kind_choice_snapshot(tmp_path, monkeypatch):
     Oracle: stamp with --kind snapshot parses.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'snap.md').write_text('# Snap\n\nContent.\n')
-    rc = hq.main(['stamp', _SLUG, 'snap.md', '--kind', 'snapshot'])
+    rc = cli.main(['stamp', _SLUG, 'snap.md', '--kind', 'snapshot'])
     assert rc == 0
 
 
@@ -1241,10 +1242,10 @@ def test_build_parser_stamp_kind_choice_probe_dir(tmp_path, monkeypatch):
     Oracle: stamp with --kind probe-dir parses.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     sub = folder / 'subdir'
     sub.mkdir()
-    rc = hq.main(['stamp', _SLUG, 'subdir', '--kind', 'probe-dir'])
+    rc = cli.main(['stamp', _SLUG, 'subdir', '--kind', 'probe-dir'])
     assert rc == 0
 
 
@@ -1255,10 +1256,10 @@ def test_build_parser_stamp_status_choice_superseded(tmp_path, monkeypatch):
     Oracle: stamp with --status superseded and --reason parses.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'doc.md').write_text('# Doc\n\nContent.\n')
-    hq.main(['stamp', _SLUG, 'doc.md'])
-    rc = hq.main([
+    cli.main(['stamp', _SLUG, 'doc.md'])
+    rc = cli.main([
         'stamp', _SLUG, 'doc.md',
         '--status', 'superseded', '--reason', 'replaced'])
     assert rc in {0, 1}
@@ -1271,8 +1272,8 @@ def test_build_parser_stamp_batch_is_store_true(tmp_path, monkeypatch):
     Oracle: --batch without a value is accepted (stores True).
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    ns = hq._build_parser().parse_args(['stamp', _SLUG, '--batch'])
+    cli.main(['begin', _SLUG])
+    ns = cli.build_parser().parse_args(['stamp', _SLUG, '--batch'])
     assert ns.batch is True
 
 
@@ -1283,8 +1284,8 @@ def test_build_parser_note_kind_optional(tmp_path, monkeypatch):
     Oracle: 'note slug' with no note_kind parses (rc from note logic).
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    ns = hq._build_parser().parse_args(['note', _SLUG])
+    cli.main(['begin', _SLUG])
+    ns = cli.build_parser().parse_args(['note', _SLUG])
     assert hasattr(ns, 'note_kind')
 
 
@@ -1295,8 +1296,8 @@ def test_build_parser_note_body_arg_name(tmp_path, monkeypatch):
     Oracle: 'note slug decision body_text ...' stores body in 'body' attr.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    hq.main(['note', _SLUG, 'decision', 'body text', '--headline', 'H'])
+    cli.main(['begin', _SLUG])
+    cli.main(['note', _SLUG, 'decision', 'body text', '--headline', 'H'])
     standing = (folder / 'standing.md').read_text()
     assert 'body text' in standing
 
@@ -1308,8 +1309,8 @@ def test_build_parser_note_batch_is_store_true(tmp_path, monkeypatch):
     Oracle: note --batch without value parses (stores True).
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    ns = hq._build_parser().parse_args(['note', _SLUG, '--batch'])
+    cli.main(['begin', _SLUG])
+    ns = cli.build_parser().parse_args(['note', _SLUG, '--batch'])
     assert ns.batch is True
 
 
@@ -1320,8 +1321,8 @@ def test_build_parser_finish_log_required(tmp_path, monkeypatch):
     Oracle: 'finish slug' without --log returns non-zero.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    rc = hq.main(['finish', _SLUG])
+    cli.main(['begin', _SLUG])
+    rc = cli.main(['finish', _SLUG])
     assert rc != 0
 
 
@@ -1334,9 +1335,9 @@ def test_build_parser_diff_takes_cycle_spellings_a_section_and_full():
     Oracle: parsed values for 'diff slug c3 05' and 'diff slug 3 5 now
     --full'.
     """
-    ns = hq._build_parser().parse_args(['diff', 'slug', 'c3', '05'])
+    ns = cli.build_parser().parse_args(['diff', 'slug', 'c3', '05'])
     assert (ns.c1, ns.c2, ns.section, ns.full) == ('c3', '05', None, False)
-    ns = hq._build_parser().parse_args(['diff', 'slug', '3', '5', 'now', '--full'])
+    ns = cli.build_parser().parse_args(['diff', 'slug', '3', '5', 'now', '--full'])
     assert (ns.c1, ns.c2, ns.section, ns.full) == ('3', '5', 'now', True)
 
 
@@ -1352,7 +1353,7 @@ def test_main_batch_default_false_for_non_batch_verbs(tmp_path, monkeypatch):
     Oracle: non-batch verb processes without treating input as batch.
     """
     folder = _root(tmp_path, monkeypatch)
-    rc = hq.main(['begin', _SLUG])
+    rc = cli.main(['begin', _SLUG])
     assert rc == 0
 
 
@@ -1363,8 +1364,8 @@ def test_main_note_body_from_correct_attr(tmp_path, monkeypatch):
     Oracle: note with body positional has body appear in standing.md.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    hq.main(['note', _SLUG, 'decision', 'key reason', '--headline', 'Plan'])
+    cli.main(['begin', _SLUG])
+    cli.main(['note', _SLUG, 'decision', 'key reason', '--headline', 'Plan'])
     standing = (folder / 'standing.md').read_text()
     assert 'key reason' in standing
 
@@ -1391,7 +1392,7 @@ def test_anchors_hq_git_zero_in_real_git_repo(tmp_path, monkeypatch):
     monkeypatch.delenv('hq_git', raising=False)
     folder = repo / '.handoff' / 'test'
     folder.mkdir(parents=True)
-    anch = hq.anchors(folder, argparse.Namespace())
+    anch = storage.anchors(folder, argparse.Namespace())
     assert anch['branch'] == '-'
     assert anch['sha'] == '-'
     assert anch['dirty'] == []
@@ -1406,7 +1407,7 @@ def test_find_folder_invalid_slug_exits_code_2(tmp_path):
     root = tmp_path
     (root / '.handoff').mkdir()
     try:
-        hq._find_folder(root, '--bad')
+        storage.find_folder(root, '--bad')
         raise AssertionError('expected SystemExit')
     except SystemExit as exc:
         assert exc.code == 2
@@ -1425,10 +1426,10 @@ def test_do_stamp_first_stamp_refused_row_has_dash_successor(
     Oracle: SPEC.md refused by R1 on first stamp has successor=='-'.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n')
     # First stamp is refused: R1 requires read_before='always' for spec
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--read-before=never'])
+    cli.main(['stamp', _SLUG, 'SPEC.md', '--read-before=never'])
     rows = _rows(folder)
     # Only one row: the refusal receipt (no prior row)
     assert rows[-1]['reason'].startswith('refused:')
@@ -1444,9 +1445,9 @@ def test_do_stamp_new_row_where_field_lowercase(tmp_path, monkeypatch):
     Oracle: a stamp with --where has a where field matching the value.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'note.md').write_text('# Note\n\nContent.\n')
-    hq.main(['stamp', _SLUG, 'note.md', '--where', 'section-2'])
+    cli.main(['stamp', _SLUG, 'note.md', '--where', 'section-2'])
     rows = _rows(folder)
     assert rows[-1]['where'] == 'section-2'
 
@@ -1459,9 +1460,9 @@ def test_do_stamp_new_row_label_field_lowercase(tmp_path, monkeypatch):
     Oracle: a stamp with --label has a label field matching the value.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'note.md').write_text('# Note\n\nContent.\n')
-    hq.main(['stamp', _SLUG, 'note.md', '--label', 'v1.2'])
+    cli.main(['stamp', _SLUG, 'note.md', '--label', 'v1.2'])
     rows = _rows(folder)
     assert rows[-1]['label'] == 'v1.2'
 
@@ -1478,11 +1479,11 @@ def test_verb_note_batch_dash_only_lines_give_rc_zero(tmp_path, monkeypatch):
     Oracle: batch with only '-' lines returns rc==0 (all skipped, no errors).
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     from unittest import mock
     batch = '-\n-\n-\n'
     with mock.patch('sys.stdin', io.StringIO(batch)):
-        rc = hq.main(['note', _SLUG, '--batch'])
+        rc = cli.main(['note', _SLUG, '--batch'])
     assert rc == 0
     standing = folder / 'standing.md'
     # Nothing written: the file is absent or holds no typed item.
@@ -1500,7 +1501,7 @@ def test_verb_note_batch_shlex_error_handled_gracefully(
     Oracle: batch line with unclosed quote returns int rc (not TypeError).
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     from unittest import mock
 
     # Unclosed quote causes shlex.split to raise ValueError
@@ -1508,7 +1509,7 @@ def test_verb_note_batch_shlex_error_handled_gracefully(
     good_line = 'decision --headline Good\n'
     batch = bad_line + good_line
     with mock.patch('sys.stdin', io.StringIO(batch)):
-        rc = hq.main(['note', _SLUG, '--batch'])
+        rc = cli.main(['note', _SLUG, '--batch'])
     # Should return an int, not raise TypeError
     assert isinstance(rc, int)
     # The good line should still be processed
@@ -1527,11 +1528,11 @@ def test_verb_note_batch_refuses_a_body_placed_before_the_headline(
     Oracle: rc 2 and no standing.md item for the line.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     from unittest import mock
     batch = 'decision evidence-text --headline Decision\n'
     with mock.patch('sys.stdin', io.StringIO(batch)):
-        rc = hq.main(['note', _SLUG, '--batch'])
+        rc = cli.main(['note', _SLUG, '--batch'])
     assert rc == 2
     standing = folder / 'standing.md'
     assert not standing.exists() or 'Decision' not in standing.read_text()
@@ -1551,7 +1552,7 @@ def test_verb_supersede_empty_new_id_exits_1_not_indexerror(
     Oracle: rc==1 when new_id is empty.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    hq.main(['note', _SLUG, 'decision', '--headline', 'One'])
-    rc = hq.main(['supersede', _SLUG, 'd01', ''])
+    cli.main(['begin', _SLUG])
+    cli.main(['note', _SLUG, 'decision', '--headline', 'One'])
+    rc = cli.main(['supersede', _SLUG, 'd01', ''])
     assert rc == 1

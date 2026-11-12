@@ -9,15 +9,14 @@ import json
 import pathlib
 import sys
 
+from handoff import ledger, storage, threads
 from scripts import handoff_gate, handoff_stop
-
-from bin import hq
 
 _SLUG = 'demo-slug'
 _NOW = '2026-09-09T12:00:00'
 _SPEC_TEXT = '# Spec\n\n## Scope\n\nOne.\nTwo.\n\n## Risks\n\nThree.\n'
-_LEDGER_HEADER = '\t'.join(hq.LEDGER_FIELDS)
-_MANIFEST_HEADER = '\t'.join(hq.MANIFEST_FIELDS)
+_LEDGER_HEADER = '\t'.join(ledger.LEDGER_FIELDS)
+_MANIFEST_HEADER = '\t'.join(storage.MANIFEST_FIELDS)
 
 
 def _row(path, **overrides):
@@ -70,11 +69,11 @@ def _handoff_root(tmp_path, slug=_SLUG):
                                      encoding='utf-8')
     (folder / 'HANDOFF.md').write_text('# Handoff\n\n## Task\n\nWork.\n',
                                        encoding='utf-8')
-    ledger = folder / 'ledger.tsv'
+    ledger_path = folder / 'ledger.tsv'
     for row in (_row('SPEC.md'),
                 _row('NOTES.md', read_before='mention'),
                 _row('OLD.md', status='superseded')):
-        hq._append_tsv(ledger, hq.LEDGER_FIELDS, row, _LEDGER_HEADER)
+        storage.append_tsv(ledger_path, ledger.LEDGER_FIELDS, row, _LEDGER_HEADER)
     return root, folder
 
 
@@ -156,10 +155,10 @@ def _finished(folder, cycle, sha):
         HANDOFF.md digest the cycle finished on.
     """
     (folder / 'cycles').mkdir(exist_ok=True)
-    row = dict.fromkeys(hq.MANIFEST_FIELDS, '-')
+    row = dict.fromkeys(storage.MANIFEST_FIELDS, '-')
     row.update({'cycle': cycle, 'written': _NOW, 'handoff_sha': sha})
-    hq._append_tsv(folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS,
-                   row, _MANIFEST_HEADER)
+    storage.append_tsv(folder / 'cycles' / 'manifest.tsv', storage.MANIFEST_FIELDS,
+                       row, _MANIFEST_HEADER)
 
 
 def _stop_payload(root, session, **extra):
@@ -804,10 +803,10 @@ def test_gate_row_loop_continues_past_non_live_rows(monkeypatch, capsys,
     (root / 'src' / 'app.py').write_text('x=1', encoding='utf-8')
     (folder / 'SPEC.md').write_text(_SPEC_TEXT, encoding='utf-8')
     (folder / 'HANDOFF.md').write_text('# H\n', encoding='utf-8')
-    ledger = folder / 'ledger.tsv'
+    ledger_path = folder / 'ledger.tsv'
     # OLD.md first (superseded/status filter skips it); SPEC.md second.
     for r in (_row('OLD.md', status='superseded'), _row('SPEC.md')):
-        hq._append_tsv(ledger, hq.LEDGER_FIELDS, r, _LEDGER_HEADER)
+        storage.append_tsv(ledger_path, ledger.LEDGER_FIELDS, r, _LEDGER_HEADER)
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     tr = _transcript(tmp_path / 't.jsonl',
                      [_bash(f'hq.py open {_SLUG}')])
@@ -832,8 +831,8 @@ def test_gate_abs_base_path_resolution(monkeypatch, capsys, tmp_path):
     # Add a row with base='abs' pointing to src/app.py.
     abs_path = str(root / 'src' / 'app.py')
     abs_row = _row(abs_path, base='abs', where='-')
-    hq._append_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS, abs_row,
-                   _LEDGER_HEADER)
+    storage.append_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS, abs_row,
+                       _LEDGER_HEADER)
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     tr = _transcript(tmp_path / 't.jsonl', [
         _bash(f'hq.py open {_SLUG}'),
@@ -865,10 +864,10 @@ def test_gate_opened_loop_continues_past_read_match(monkeypatch, capsys,
     (folder / 'NOTES.md').write_text('# Notes\n\n## Scope\n\nA.\n',
                                      encoding='utf-8')
     (folder / 'HANDOFF.md').write_text('# H\n', encoding='utf-8')
-    ledger = folder / 'ledger.tsv'
+    ledger_path = folder / 'ledger.tsv'
     # Two live/always rows: NOTES.md first, then SPEC.md.
     for r in (_row('NOTES.md'), _row('SPEC.md')):
-        hq._append_tsv(ledger, hq.LEDGER_FIELDS, r, _LEDGER_HEADER)
+        storage.append_tsv(ledger_path, ledger.LEDGER_FIELDS, r, _LEDGER_HEADER)
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     # Read NOTES.md but not SPEC.md.
     tr = _transcript(tmp_path / 't.jsonl', [
@@ -927,10 +926,10 @@ def test_gate_token_check_continues_past_match(monkeypatch, capsys, tmp_path):
     (folder / 'EXTRA.md').write_text('# Extra\n\n## Scope\n\nB.\n',
                                      encoding='utf-8')
     (folder / 'HANDOFF.md').write_text('# H\n', encoding='utf-8')
-    ledger = folder / 'ledger.tsv'
+    ledger_path = folder / 'ledger.tsv'
     # SPEC.md first (will be token-matched), EXTRA.md second (unread).
     for r in (_row('SPEC.md'), _row('EXTRA.md')):
-        hq._append_tsv(ledger, hq.LEDGER_FIELDS, r, _LEDGER_HEADER)
+        storage.append_tsv(ledger_path, ledger.LEDGER_FIELDS, r, _LEDGER_HEADER)
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     # Command mentions SPEC.md (token match clears it), not EXTRA.md.
     spec_path = str(folder / 'SPEC.md')
@@ -964,10 +963,10 @@ def test_gate_receipt_check_continues_past_match(monkeypatch, capsys,
     (folder / 'PLAN.md').write_text('# Plan\n\n## Scope\n\nC.\n',
                                     encoding='utf-8')
     (folder / 'HANDOFF.md').write_text('# H\n', encoding='utf-8')
-    ledger = folder / 'ledger.tsv'
+    ledger_path = folder / 'ledger.tsv'
     # SPEC.md cleared by receipt, PLAN.md second.
     for r in (_row('SPEC.md'), _row('PLAN.md')):
-        hq._append_tsv(ledger, hq.LEDGER_FIELDS, r, _LEDGER_HEADER)
+        storage.append_tsv(ledger_path, ledger.LEDGER_FIELDS, r, _LEDGER_HEADER)
     state = tmp_path / 'state'
     state.mkdir()
     monkeypatch.setenv('HQ_STATE_DIR', str(state))
@@ -995,11 +994,11 @@ def test_gate_span_text_is_whole_file_not_uppercase(monkeypatch, capsys,
     """
     root, folder = _handoff_root(tmp_path)
     # Override SPEC.md row to have where='-' (whole-file span).
-    ledger = folder / 'ledger.tsv'
+    ledger_path = folder / 'ledger.tsv'
     # Rewrite ledger with just the where='-' row.
-    ledger.unlink()
-    hq._append_tsv(ledger, hq.LEDGER_FIELDS,
-                   _row('SPEC.md', where='-'), _LEDGER_HEADER)
+    ledger_path.unlink()
+    storage.append_tsv(ledger_path, ledger.LEDGER_FIELDS,
+                       _row('SPEC.md', where='-'), _LEDGER_HEADER)
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     tr = _transcript(tmp_path / 't.jsonl',
                      [_bash(f'hq.py open {_SLUG}')])
@@ -1041,11 +1040,11 @@ def test_gate_anchor_not_found_text_is_lowercase(monkeypatch, capsys,
     anchor does not appear in the gated file.
     """
     root, folder = _handoff_root(tmp_path)
-    ledger = folder / 'ledger.tsv'
-    ledger.unlink()
+    ledger_path = folder / 'ledger.tsv'
+    ledger_path.unlink()
     # Row with a 'where' anchor that doesn't exist in SPEC.md.
-    hq._append_tsv(ledger, hq.LEDGER_FIELDS,
-                   _row('SPEC.md', where='NoSuchSection'), _LEDGER_HEADER)
+    storage.append_tsv(ledger_path, ledger.LEDGER_FIELDS,
+                       _row('SPEC.md', where='NoSuchSection'), _LEDGER_HEADER)
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     tr = _transcript(tmp_path / 't.jsonl',
                      [_bash(f'hq.py open {_SLUG}')])
@@ -1145,7 +1144,7 @@ def test_report_returns_zero_when_thread_folder_missing(monkeypatch, tmp_path):
     Oracle: direct report() return value.
     """
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
-    hq._record_thread('rr32', _SLUG)
+    threads.record_thread('rr32', _SLUG)
     payload = _stop_payload(tmp_path, 'rr32')
     assert handoff_stop.report(payload) == 0
 
@@ -1160,8 +1159,8 @@ def test_report_returns_zero_when_no_drift(monkeypatch, tmp_path):
     root, folder = _handoff_root(tmp_path)
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     handoff = folder / 'HANDOFF.md'
-    _finished(folder, '1', hq._sha12_path(handoff))
-    hq._record_thread('nd79', _SLUG)
+    _finished(folder, '1', storage.sha12_path(handoff))
+    threads.record_thread('nd79', _SLUG)
     payload = _stop_payload(root, 'nd79')
     assert handoff_stop.report(payload) == 0
 
@@ -1180,7 +1179,7 @@ def test_report_returns_zero_when_all_already_announced(monkeypatch,
     monkeypatch.setenv('HQ_STATE_DIR', str(state))
     handoff = folder / 'HANDOFF.md'
     _finished(folder, '1', 'aaaaaaaaaaaa')
-    hq._record_thread('an127', _SLUG)
+    threads.record_thread('an127', _SLUG)
     # First call reports the drift.
     handoff_stop.report(_stop_payload(root, 'an127'))
     # Second call: same drift, already announced -> must return 0.
@@ -1199,7 +1198,7 @@ def test_report_mkdir_creates_nested_state_dir(monkeypatch, tmp_path):
     state = tmp_path / 'new2' / 'nested' / 'statedir'
     monkeypatch.setenv('HQ_STATE_DIR', str(state))
     _finished(folder, '1', 'deadbeefaaaa')
-    hq._record_thread('mk136', _SLUG)
+    threads.record_thread('mk136', _SLUG)
     payload = _stop_payload(root, 'mk136')
     # Raises FileNotFoundError under mutant; succeeds here.
     assert handoff_stop.report(payload) == 0
@@ -1218,7 +1217,7 @@ def test_report_returns_zero_at_end_after_printing(monkeypatch, tmp_path):
     state.mkdir()
     monkeypatch.setenv('HQ_STATE_DIR', str(state))
     _finished(folder, '1', 'aaaaaaaaaaaa')
-    hq._record_thread('end157', _SLUG)
+    threads.record_thread('end157', _SLUG)
     result = handoff_stop.report(_stop_payload(root, 'end157'))
     assert result == 0
 
@@ -1450,8 +1449,9 @@ def test_gate_exact_match_prevents_fuzzy_collision(monkeypatch, capsys,
     folder.mkdir()
     (folder / 'SPEC.md').write_text(_SPEC_TEXT, encoding='utf-8')
     (folder / 'HANDOFF.md').write_text('# H\n', encoding='utf-8')
-    ledger = folder / 'ledger.tsv'
-    hq._append_tsv(ledger, hq.LEDGER_FIELDS, _row('SPEC.md'), _LEDGER_HEADER)
+    ledger_path = folder / 'ledger.tsv'
+    storage.append_tsv(
+        ledger_path, ledger.LEDGER_FIELDS, _row('SPEC.md'), _LEDGER_HEADER)
     # Second folder with same prefix, different suffix.
     extra = root / '.handoff' / f'{_SLUG}-extra'
     extra.mkdir()
@@ -1504,9 +1504,9 @@ def test_report_session_fallback_is_lowercase(monkeypatch, tmp_path):
     state = tmp_path / 'state'
     monkeypatch.setenv('HQ_STATE_DIR', str(state))
     (folder / 'HANDOFF.md').write_text('# H\n', encoding='utf-8')
-    _finished(folder, '1', hq._sha12_path(folder / 'HANDOFF.md'))
+    _finished(folder, '1', storage.sha12_path(folder / 'HANDOFF.md'))
     (folder / 'HANDOFF.md').write_text('# Changed\n', encoding='utf-8')
-    hq._record_thread('unknown', _SLUG)
+    threads.record_thread('unknown', _SLUG)
     # No session_id -> fallback to 'unknown'.
     payload = _stop_payload(root, None)
     handoff_stop.report(payload)
@@ -1527,10 +1527,10 @@ def test_report_state_dir_default_fires_without_env(monkeypatch, tmp_path):
     monkeypatch.delenv('HQ_STATE_DIR', raising=False)
     monkeypatch.setattr(handoff_stop, 'STATE_DIR',
                         str(tmp_path / 'default_state'))
-    monkeypatch.setattr(hq, 'STATE_DIR', str(tmp_path / 'default_state'))
-    hq._record_thread('sd99', _SLUG)
+    monkeypatch.setattr(threads, 'STATE_DIR', str(tmp_path / 'default_state'))
+    threads.record_thread('sd99', _SLUG)
     (folder / 'HANDOFF.md').write_text('# H\n', encoding='utf-8')
-    _finished(folder, '1', hq._sha12_path(folder / 'HANDOFF.md'))
+    _finished(folder, '1', storage.sha12_path(folder / 'HANDOFF.md'))
     (folder / 'HANDOFF.md').write_text('# Changed\n', encoding='utf-8')
     payload = _stop_payload(root, 'sd99')
     # TypeError under mutant; 0 under original.

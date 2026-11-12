@@ -13,7 +13,7 @@ import itertools
 import pathlib
 import random
 
-from bin import hq
+from handoff import cli, help_text, ledger, storage
 
 _SLUG = 'fuzz-slug'
 _GATED = {'spec', 'draft'}
@@ -47,18 +47,20 @@ def _env(tmp_path, monkeypatch):
 def _run(argv):
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        rc = hq.main(argv)
+        rc = cli.main(argv)
     return rc, out.getvalue()
 
 
 def _strip_read(out: str) -> str:
     """Remove the appended read topic from open output before comparing."""
-    return out.replace(hq.HELP_TOPICS['read'] + '\n', '')
+    return out.replace(help_text.HELP_TOPICS['read'] + '\n', '')
 
 
 def _rows(folder):
     lines = (folder / 'ledger.tsv').read_text().splitlines()[1:]
-    return [dict(zip(hq.LEDGER_FIELDS, ln.split('\t'))) for ln in lines if ln.strip()]
+    return [
+        dict(zip(ledger.LEDGER_FIELDS, ln.split('\t')))
+        for ln in lines if ln.strip()]
 
 
 def _covered(folder, live, path):
@@ -81,7 +83,7 @@ def _gate_kind(folder, live, path):
     if p.is_file():
         heading = next((ln.strip() for ln in p.read_text().splitlines()
                         if ln.startswith('#')), '')
-    inferred, _ = hq.infer_kind(path, p.is_dir(), heading)
+    inferred, _ = ledger.infer_kind(path, p.is_dir(), heading)
     stored = live.get(path, {}).get('kind', '')
     return next((k for k in (inferred, stored) if k in _GATED), '')
 
@@ -92,8 +94,8 @@ def _check_stamp(folder, before, path, argv, rc, ctx=None):
     """
     case = (ctx, argv)
     rows = _rows(folder)
-    live = hq.latest_rows(rows)
-    prev = hq.latest_rows(before).get(path)
+    live = ledger.latest_rows(rows)
+    prev = ledger.latest_rows(before).get(path)
     if rc == 2:
         assert rows == before, case
         return
@@ -129,7 +131,7 @@ def test_every_flag_combination_on_a_fresh_spec_is_covered_or_refused(
     only a receipt row and exit 2 must leave nothing.
     """
     folder = _env(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     header = (folder / 'ledger.tsv').read_text()
     grid = itertools.product(
         (None, 'always', 'edit', 'mention', 'never'),
@@ -165,7 +167,7 @@ def test_every_flag_combination_on_a_stamped_spec_is_covered_or_refused(
     equal their predecessor in every field but reason.
     """
     folder = _env(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     header = (folder / 'ledger.tsv').read_text()
     priors = {
         'gated': ['stamp', _SLUG, 'SPEC.md', '--where', 'Spec', '--reason', 'wip'],
@@ -217,7 +219,7 @@ def test_random_verb_sequences_hold_the_ledger_invariants(tmp_path, monkeypatch)
         rng = random.Random(seed)
         folder = _env(tmp_path / f's{seed}', monkeypatch)
         owned = ['HANDOFF.md', 'ledger.tsv', 'standing.md', 'cycles/manifest.tsv']
-        hq.main(['begin', _SLUG])
+        cli.main(['begin', _SLUG])
         for step in range(30):
             ledger_before = (folder / 'ledger.tsv').read_bytes()
             standing_before = (folder / 'standing.md').read_bytes()
@@ -276,8 +278,8 @@ def test_random_verb_sequences_hold_the_ledger_invariants(tmp_path, monkeypatch)
                         assert (folder / name).read_bytes() == data, (where, name, out)
                 else:
                     _assert_dangling_named(folder, out, where)
-                    manifest = hq._read_tsv(
-                        folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS)
+                    manifest = storage.read_tsv(
+                        folder / 'cycles' / 'manifest.tsv', storage.MANIFEST_FIELDS)
                     cycle = int(manifest[-1]['cycle'])
                     archive = folder / 'cycles' / f'c{cycle:02d}.md'
                     assert archive.read_bytes() == (folder / 'HANDOFF.md').read_bytes(), where
@@ -286,13 +288,13 @@ def test_random_verb_sequences_hold_the_ledger_invariants(tmp_path, monkeypatch)
                     opened = _strip_read(opened)
                     for bad in ('WARNING', 'LEDGER BEHIND', 'block sha mismatch'):
                         assert bad not in opened, (where, opened)
-                    hq.main(['begin', _SLUG])
+                    cli.main(['begin', _SLUG])
             assert (folder / 'ledger.tsv').read_bytes().startswith(ledger_before), where
             assert (folder / 'standing.md').read_bytes().startswith(standing_before), where
 
 
 def _assert_dangling_named(folder, out, where):
-    live = hq.latest_rows(_rows(folder))
+    live = ledger.latest_rows(_rows(folder))
     for path, row in live.items():
         successor = row['successor']
         if row['status'] == 'superseded' and successor != '-' \
@@ -309,6 +311,7 @@ def test_live_sha_prefers_the_rewrite_and_falls_back_to_the_archive():
     column existed answers `-` and every begin after finish saves one.
     Oracle: hand-computed - three rows, one per branch.
     """
-    assert hq.live_sha({'handoff_sha': 'a' * 12, 'rewrite_sha': 'b' * 12}) == 'b' * 12
-    assert hq.live_sha({'handoff_sha': 'a' * 12, 'rewrite_sha': '-'}) == 'a' * 12
-    assert hq.live_sha({'handoff_sha': 'a' * 12}) == 'a' * 12
+    assert storage.live_sha(
+        {'handoff_sha': 'a' * 12, 'rewrite_sha': 'b' * 12}) == 'b' * 12
+    assert storage.live_sha({'handoff_sha': 'a' * 12, 'rewrite_sha': '-'}) == 'a' * 12
+    assert storage.live_sha({'handoff_sha': 'a' * 12}) == 'a' * 12

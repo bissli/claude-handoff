@@ -9,14 +9,13 @@ import types
 from typing import Any
 
 import pytest
+from handoff import ledger, paths, storage, threads
 from scripts import handoff_gate, handoff_stop
-
-from bin import hq
 
 _SLUG = 'test-proj'
 _NOW = '2026-09-09T12:00:00'
-_LEDGER_HEADER = '\t'.join(hq.LEDGER_FIELDS)
-_MANIFEST_HEADER = '\t'.join(hq.MANIFEST_FIELDS)
+_LEDGER_HEADER = '\t'.join(ledger.LEDGER_FIELDS)
+_MANIFEST_HEADER = '\t'.join(storage.MANIFEST_FIELDS)
 
 
 def _row(path: str, **overrides: str) -> dict:
@@ -32,7 +31,7 @@ def _row(path: str, **overrides: str) -> dict:
     Returns
     -------
     dict
-        A row carrying every field in ``hq.LEDGER_FIELDS``.
+        A row carrying every field in ``ledger.LEDGER_FIELDS``.
     """
     row = {
         'cycle': '1', 'ts': _NOW, 'path': path, 'base': 'folder',
@@ -69,8 +68,9 @@ def _handoff_root(
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n', encoding='utf-8')
     (folder / 'HANDOFF.md').write_text(
         '# Handoff\n\n## Task\n\nWork.\n', encoding='utf-8')
-    ledger = folder / 'ledger.tsv'
-    hq._append_tsv(ledger, hq.LEDGER_FIELDS, _row('SPEC.md'), _LEDGER_HEADER)
+    ledger_path = folder / 'ledger.tsv'
+    storage.append_tsv(
+        ledger_path, ledger.LEDGER_FIELDS, _row('SPEC.md'), _LEDGER_HEADER)
     return root, folder
 
 
@@ -91,10 +91,10 @@ def _finished(folder: pathlib.Path, cycle: int | str, sha: str) -> None:
     None
     """
     (folder / 'cycles').mkdir(exist_ok=True)
-    row = dict.fromkeys(hq.MANIFEST_FIELDS, '-')
+    row = dict.fromkeys(storage.MANIFEST_FIELDS, '-')
     row.update({'cycle': cycle, 'written': _NOW, 'handoff_sha': sha})
-    hq._append_tsv(folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS,
-                   row, _MANIFEST_HEADER)
+    storage.append_tsv(folder / 'cycles' / 'manifest.tsv', storage.MANIFEST_FIELDS,
+                       row, _MANIFEST_HEADER)
 
 
 def _bash(command: str) -> dict:
@@ -186,8 +186,8 @@ def test_stop_silent_on_unreadable_handoff(monkeypatch, capsys, tmp_path):
     root, folder = _handoff_root(tmp_path)
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     handoff = folder / 'HANDOFF.md'
-    _finished(folder, '1', hq._sha12_path(handoff))
-    hq._record_thread('U1', _SLUG)
+    _finished(folder, '1', storage.sha12_path(handoff))
+    threads.record_thread('U1', _SLUG)
     handoff.chmod(0o000)
     try:
         out = _run(monkeypatch, capsys, handoff_stop, _stop_payload(root, 'U1'))
@@ -559,7 +559,7 @@ def test_gate_reaches_the_pinned_work_dir(monkeypatch, capsys, tmp_path):
     cannot reach it.
     """
     root, folder = _handoff_root(tmp_path)
-    monkeypatch.setattr(handoff_gate.hq, '_TEMP_DIRS', ())
+    monkeypatch.setattr(paths, '_TEMP_DIRS', ())
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     pinned = tmp_path / 'wt'
     pinned.mkdir()
@@ -592,9 +592,9 @@ def test_gate_names_each_gated_path_once_at_the_write_that_needs_it(
     b_path = str(root / 'src' / 'b.py')
     for path in (a_path, b_path):
         pathlib.Path(path).write_text('x = 1\n', encoding='utf-8')
-        hq._append_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS,
-                       _row(path, base='abs', kind='draft', read_before='edit'),
-                       _LEDGER_HEADER)
+        storage.append_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS,
+                           _row(path, base='abs', kind='draft', read_before='edit'),
+                           _LEDGER_HEADER)
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     tr = _transcript(tmp_path / 't.jsonl',
                      [_bash(f'python3 bin/hq.py open {_SLUG}')])
@@ -629,9 +629,9 @@ def test_gate_names_a_draft_in_the_folder_at_its_own_edit(monkeypatch, capsys,
     root, folder = _handoff_root(tmp_path)
     (folder / 'drafts').mkdir()
     (folder / 'drafts' / 'x.py').write_text('x = 1\n', encoding='utf-8')
-    hq._append_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS,
-                   _row('drafts/x.py', kind='draft', read_before='edit'),
-                   _LEDGER_HEADER)
+    storage.append_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS,
+                       _row('drafts/x.py', kind='draft', read_before='edit'),
+                       _LEDGER_HEADER)
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     tr = _transcript(tmp_path / 't.jsonl',
                      [_bash(f'python3 bin/hq.py open {_SLUG}')])
@@ -659,9 +659,9 @@ def test_gate_commit_with_no_target_names_always_rows_only(monkeypatch, capsys,
     """
     root, folder = _handoff_root(tmp_path)
     draft = str(root / 'src' / 'app.py')
-    hq._append_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS,
-                   _row(draft, base='abs', kind='draft', read_before='edit'),
-                   _LEDGER_HEADER)
+    storage.append_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS,
+                       _row(draft, base='abs', kind='draft', read_before='edit'),
+                       _LEDGER_HEADER)
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     tr = _transcript(tmp_path / 't.jsonl',
                      [_bash(f'python3 bin/hq.py open {_SLUG}')])

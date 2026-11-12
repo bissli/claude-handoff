@@ -1,4 +1,4 @@
-"""Contract tests that hold the handoff skill to bin/hq.py.
+"""Contract tests that hold the handoff skill to the hq program.
 
 The skill is prose an agent follows; the script is what it drives. The
 corpus the agent can reach is SKILL.md, the reference files beside it,
@@ -15,13 +15,12 @@ import re
 import shlex
 
 HERE = pathlib.Path(__file__).resolve().parent
-BIN = HERE.parent / 'bin'
 SKILL_DIR = HERE.parent / 'skills' / 'handoff'
 SKILL = SKILL_DIR / 'SKILL.md'
 REFERENCE_DIR = SKILL_DIR / 'reference'
 EXAMPLE = REFERENCE_DIR / 'example-handoff.md'
 
-from bin import hq
+from handoff import cli, help_text, markdown
 
 _HQ_CALL = 'hq'
 # Flags in the skill that belong to other tools, never to hq.py.
@@ -77,23 +76,23 @@ def _norm(text):
 
 def _parser_surface():
     """Return ({verb: {flags}}, {global flags}, help text) from argparse."""
-    parser = hq._build_parser()
+    parser = cli.build_parser()
     sub = next(
         a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
     verbs = {}
-    help_text = [parser.description or '', parser.epilog or '']
+    surface_text = [parser.description or '', parser.epilog or '']
     for name, sp in sub.choices.items():
         verbs[name] = {
             opt for act in sp._actions for opt in act.option_strings
             if opt.startswith('--') and opt != '--help'
             }
-        help_text += [sp.description or '', sp.epilog or '']
+        surface_text += [sp.description or '', sp.epilog or '']
     global_flags = {
         opt for act in parser._actions for opt in act.option_strings
         if opt.startswith('--') and opt != '--help'
         }
-    help_text += list(hq.HELP_TOPICS.values())
-    return verbs, global_flags, '\n'.join(help_text)
+    surface_text += list(help_text.HELP_TOPICS.values())
+    return verbs, global_flags, '\n'.join(surface_text)
 
 
 def _corpus():
@@ -131,8 +130,16 @@ def _fenced_commands(text):
             yield cmd.split('<<')[0].strip()
 
 
+def _package_trees():
+    """Return (file name, parsed tree) for each module of the handoff package.
+    """
+    return [
+        (path.name, ast.parse(path.read_text()))
+        for path in sorted((HERE.parent / 'src' / 'handoff').rglob('*.py'))]
+
+
 def _texts():
-    """Return (joined static text, pieces) for every string in hq.py.
+    """Return (joined static text, pieces) for every string in the package.
 
     Notes
     -----
@@ -141,13 +148,14 @@ def _texts():
       constants are not yielded again on their own.
     - A plain string yields itself as its one piece.
     """
-    tree = ast.parse((BIN / 'hq.py').read_text())
+    nodes = [
+        node for _, tree in _package_trees() for node in ast.walk(tree)]
     children = set()
-    for node in ast.walk(tree):
+    for node in nodes:
         if isinstance(node, ast.JoinedStr):
             children |= {id(v) for v in node.values}
     out = []
-    for node in ast.walk(tree):
+    for node in nodes:
         if isinstance(node, ast.JoinedStr):
             pieces = [
                 v.value for v in node.values
@@ -160,7 +168,7 @@ def _texts():
 
 
 def _print_calls():
-    """Return (lineno, full static text, longest piece) per hq.py print.
+    """Return (file:line, full static text, longest piece) per print.
 
     Notes
     -----
@@ -171,9 +179,10 @@ def _print_calls():
     - Pieces under eight characters after stripping are noise (a
       separator, a label) and are not candidates for the longest piece.
     """
-    tree = ast.parse((BIN / 'hq.py').read_text())
     calls = []
-    for node in ast.walk(tree):
+    for name, node in (
+            (name, node) for name, tree in _package_trees()
+            for node in ast.walk(tree)):
         is_print = (
             isinstance(node, ast.Call)
             and getattr(node.func, 'id', '') == 'print' and node.args)
@@ -194,7 +203,8 @@ def _print_calls():
             continue
         long_pieces = [p for p in pieces if len(p.strip()) >= 8]
         if long_pieces:
-            calls.append((node.lineno, full, max(long_pieces, key=len)))
+            calls.append(
+                (f'{name}:{node.lineno}', full, max(long_pieces, key=len)))
     return calls
 
 
@@ -219,7 +229,7 @@ def test_every_verb_but_help_carries_an_epilog():
     Oracle: the argparse subparser table, help alone exempt since it
     prints the topics itself.
     """
-    parser = hq._build_parser()
+    parser = cli.build_parser()
     sub = next(
         a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
     bare = [
@@ -258,7 +268,7 @@ def test_every_command_example_in_the_skill_parses():
     placeholder is filled; the only leftover is a note body main() has an
     empty slot for.
     """
-    parser = hq._build_parser()
+    parser = cli.build_parser()
     texts = [SKILL.read_text()] + [
         p.read_text() for p in sorted(REFERENCE_DIR.glob('*.md'))]
     commands = [c for t in texts for c in _fenced_commands(t)]
@@ -291,7 +301,7 @@ def test_every_message_carries_its_move_or_is_named_in_the_corpus():
     line in the skill, a reference file, or the help text; or an
     allowlist entry left behind after its print was reworded or its text
     reached the corpus, which would hide the next such print.
-    Oracle: the longest static piece of every print in hq.py's source,
+    Oracle: the longest static piece of every print in the package source,
     eight characters or more, against the corpus; the joined static text
     against the tail pattern; the allowlists against both.
     """
@@ -325,7 +335,7 @@ def test_every_message_prefix_the_skill_quotes_is_still_printed():
     the old text, so the agent waits for a line that never comes.
     Oracle: every backticked span in the skill opening `hq <verb>:`, its
     static prefix before the first placeholder, against the joined static
-    text of hq.py's strings.
+    text of the package's strings.
     """
     constants = [full for full, _ in _texts()]
     quoted = re.findall(r'`(hq \w+: [^`]+)`', _norm(SKILL.read_text()))
@@ -344,7 +354,7 @@ def test_every_pointer_line_the_script_renders_is_named_in_the_skill():
     work list, with the skill still showing the old word, so the agent is
     told to type a verb the file never names; or a pointer built from a
     word that is no parser verb at all.
-    Oracle: every string constant in hq.py holding `- hq <word>`, checked
+    Oracle: every string constant in the package holding `- hq <word>`, checked
     against the argparse verb table and the whitespace-normalized skill.
     """
     verbs, _, _ = _parser_surface()
@@ -397,7 +407,7 @@ def test_the_lock_stop_stays_in_the_skill():
     no condition, so an agent acting on the line alone takes over a live
     session's cycle; the restraint has to precede the line, and these
     prints pass a name, so the print test never sees them.
-    Oracle: every hq.py string piece holding `--force`, against the
+    Oracle: every package string piece holding `--force`, against the
     whitespace-normalized skill.
     """
     skill_text = _norm(SKILL.read_text())
@@ -433,7 +443,7 @@ def test_every_help_topic_named_anywhere_exists_and_the_skill_names_each():
 
     Mutation: a pointer at a topic that does not exist, or a topic added
     to HELP_TOPICS that no skill line sends the agent to.
-    Oracle: the keys of hq.HELP_TOPICS.
+    Oracle: the keys of help_text.HELP_TOPICS.
     """
     texts = [SKILL.read_text()] + [
         p.read_text() for p in sorted(REFERENCE_DIR.glob('*.md'))]
@@ -441,11 +451,11 @@ def test_every_help_topic_named_anywhere_exists_and_the_skill_names_each():
     named = set()
     for text in texts:
         named |= set(re.findall(r'hq help ([a-z][a-z-]*)', text))
-    topics = set(hq.HELP_TOPICS)
+    topics = set(help_text.HELP_TOPICS)
     assert named <= topics, named - topics
     in_skill = set(re.findall(r'hq help ([a-z][a-z-]*)', SKILL.read_text()))
     assert topics <= in_skill, topics - in_skill
-    for topic, body in hq.HELP_TOPICS.items():
+    for topic, body in help_text.HELP_TOPICS.items():
         assert body.startswith(f'hq help {topic} - '), topic
 
 
@@ -457,7 +467,7 @@ def test_every_reference_file_is_named_by_the_skill_and_exists():
     pointer left behind after its file was renamed, or the adopt message
     naming a file that is not shipped.
     Oracle: the directory listing against the names in the skill and in
-    hq.py's strings.
+    the package's strings.
     """
     on_disk = {p.name for p in REFERENCE_DIR.glob('*.md')}
     assert on_disk, REFERENCE_DIR
@@ -479,9 +489,9 @@ def test_the_anchor_topic_matches_the_resolver():
     dotted sub-heading, the `s<n>` prefix - while the topic still
     advertises it, so the agent types an anchor that lands on `?`.
     Oracle: resolve_where run on a one-heading fixture built from each
-    table row of hq.HELP_TOPICS['anchors'].
+    table row of help_text.HELP_TOPICS['anchors'].
     """
-    body = hq.HELP_TOPICS['anchors']
+    body = help_text.HELP_TOPICS['anchors']
     rows = []
     in_table = False
     for line in body.splitlines():
@@ -502,7 +512,7 @@ def test_the_anchor_topic_matches_the_resolver():
         fixture = f'{heading}\n\nbody\n'
         for form in forms.split('|'):
             form = re.sub(r'\s*\(.*?\)\s*', '', form).strip()
-            spans, unresolved = hq.resolve_where(fixture, [form])
+            spans, unresolved = markdown.resolve_where(fixture, [form])
             assert spans and not unresolved, (heading, form, unresolved)
             assert spans[0][0] == 1, (heading, form, spans)
 

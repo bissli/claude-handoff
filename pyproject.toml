@@ -12,11 +12,11 @@ pytest-xdist = "^3.8.0"
 
 [tool.mutmut]
 source_paths = [
-    "bin/hq.py",
+    "src/handoff",
     "scripts/handoff_gate.py",
     "scripts/handoff_stop.py",
 ]
-also_copy = ["skills", "pytest.ini", "hooks"]
+also_copy = ["skills", "pytest.ini", "hooks", "bin"]
 pytest_add_cli_args_test_selection = [
     "tests/test_hq_rules.py",
     "tests/test_hq_verbs.py",

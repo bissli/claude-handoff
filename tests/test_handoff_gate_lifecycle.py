@@ -12,9 +12,8 @@ import json
 import sys
 
 import pytest
+from handoff import cli
 from scripts import handoff_gate
-
-from bin import hq
 
 _SLUG = 'gate-lifecycle'
 _SESSION = 'session-lifecycle'
@@ -23,10 +22,10 @@ _SPEC = '# Spec\n\n## Scope\n\nKeep the retry bounded.\n\n## Risks\n\nCheck expi
 
 
 def _run(argv):
-    """Call hq.main and return its exit code and captured stdout."""
+    """Call cli.main and return its exit code and captured stdout."""
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        rc = hq.main(argv)
+        rc = cli.main(argv)
     return rc, out.getvalue()
 
 

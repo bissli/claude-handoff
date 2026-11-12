@@ -2,7 +2,7 @@
 the rendered standing block.
 """
 
-from bin import hq
+from handoff import markdown, render
 
 # Numbered headings, one with a letter suffix, and two headings whose
 # first word merely starts with a digit.
@@ -38,7 +38,7 @@ def test_s11_resolves_to_plain_section_not_letter_suffixed():
     lands on 11b (the first heading whose number starts with '11').
     Oracle: hand-computed span (1, 4) for '# 11. Implementation plan'.
     """
-    spans, unresolved = hq.resolve_where(_TEXT, ['s11'])
+    spans, unresolved = markdown.resolve_where(_TEXT, ['s11'])
     assert not unresolved
     assert spans == [(1, 4)]
 
@@ -50,7 +50,7 @@ def test_s11b_resolves_to_letter_suffixed_heading():
     becomes 11 and both s11 and s11b resolve to the same section 11 heading.
     Oracle: hand-computed span (5, 8) for '# 11b. Proof'.
     """
-    spans, unresolved = hq.resolve_where(_TEXT, ['s11b'])
+    spans, unresolved = markdown.resolve_where(_TEXT, ['s11b'])
     assert not unresolved
     assert spans == [(5, 8)]
 
@@ -69,9 +69,9 @@ def test_a_hash_led_body_line_does_not_end_a_section():
         'Body one.\n'
         '####### seven hashes is body text\n'
         'Body two.\n')
-    assert hq.resolve_where(text, ['s1']) == ([(1, 5)], [])
+    assert markdown.resolve_where(text, ['s1']) == ([(1, 5)], [])
     seven = 'seven hashes is body text'
-    assert hq.resolve_where(text, [seven]) == ([], [seven])
+    assert markdown.resolve_where(text, [seven]) == ([], [seven])
 
 
 def test_a_tab_after_the_hashes_opens_a_heading():
@@ -82,7 +82,7 @@ def test_a_tab_after_the_hashes_opens_a_heading():
     Oracle: hand-counted span (1, 2) of the two-line section.
     """
     text = '#\tTabbed title\nBody.\n'
-    assert hq.resolve_where(text, ['Tabbed title']) == ([(1, 2)], [])
+    assert markdown.resolve_where(text, ['Tabbed title']) == ([(1, 2)], [])
 
 
 def test_s0_resolves_a_dotted_s_prefixed_heading():
@@ -103,10 +103,10 @@ def test_s0_resolves_a_dotted_s_prefixed_heading():
         '## S1. Pool selection\n'
         'more\n'
     )
-    assert hq.resolve_where(text, ['s0']) == ([(3, 5)], [])
-    assert hq.resolve_where(
+    assert markdown.resolve_where(text, ['s0']) == ([(3, 5)], [])
+    assert markdown.resolve_where(
         text, ['Warmup checks (before rollout)']) == ([(3, 5)], [])
-    assert hq.resolve_where(text, ['s1']) == ([(6, 7)], [])
+    assert markdown.resolve_where(text, ['s1']) == ([(6, 7)], [])
 
 
 def test_dash_separated_number_is_a_section_token():
@@ -131,17 +131,17 @@ def test_dash_separated_number_is_a_section_token():
         '### 3 - Next\n'
         'body\n'
     )
-    assert hq.resolve_where(
+    assert markdown.resolve_where(
         text, ['The backoff basis']) == ([(5, 6)], [])
-    assert hq.resolve_where(text, ['s2a']) == ([(5, 6)], [])
-    assert hq.resolve_where(
+    assert markdown.resolve_where(text, ['s2a']) == ([(5, 6)], [])
+    assert markdown.resolve_where(
         text, ['The retry window']) == ([(3, 8)], [])
-    assert hq.resolve_where(text, ['s2']) == ([(3, 8)], [])
-    assert hq._norm_heading('## 3D printing') == 'd printing'
-    assert hq._norm_heading('## S4 notes') == 's4 notes'
-    assert hq._norm_heading('## 2a-b range') == 'a-b range'
-    assert hq._norm_heading('# 11b. Proof') == 'proof'
-    assert hq._norm_heading('## s11b: Proof') == 'proof'
+    assert markdown.resolve_where(text, ['s2']) == ([(3, 8)], [])
+    assert markdown._norm_heading('## 3D printing') == 'd printing'
+    assert markdown._norm_heading('## S4 notes') == 's4 notes'
+    assert markdown._norm_heading('## 2a-b range') == 'a-b range'
+    assert markdown._norm_heading('# 11b. Proof') == 'proof'
+    assert markdown._norm_heading('## s11b: Proof') == 'proof'
 
 
 def test_letter_led_section_id_resolves_by_its_id():
@@ -166,12 +166,12 @@ def test_letter_led_section_id_resolves_by_its_id():
         'body\n'
     )
     for anchor in ('F7', 'f7', 'sF7'):
-        assert hq.resolve_where(text, [anchor]) == ([(5, 6)], []), anchor
-    assert hq.resolve_where(
+        assert markdown.resolve_where(text, [anchor]) == ([(5, 6)], []), anchor
+    assert markdown.resolve_where(
         text, ['Cache hit ratio holds (n>=2)']) == ([(5, 6)], [])
-    assert hq.resolve_where(text, ['q3']) == ([(7, 8)], [])
-    assert hq.resolve_where(text, ['s7']) == ([(3, 4)], [])
-    assert hq._norm_heading(
+    assert markdown.resolve_where(text, ['q3']) == ([(7, 8)], [])
+    assert markdown.resolve_where(text, ['s7']) == ([(3, 4)], [])
+    assert markdown._norm_heading(
         '## F7. Cache hit ratio holds (n>=2)') == 'cache hit ratio holds (n>=2)'
 
 
@@ -198,13 +198,13 @@ def test_a_digit_bearing_first_word_and_a_dotted_number_keep_the_title_whole():
         '## 3.2. Retry budget\n'
         'body\n'
     )
-    assert hq.resolve_where(text, ['Log4j: notes']) == ([(3, 4)], [])
-    assert hq.resolve_where(text, ['Notes']) == ([(1, 2)], [])
-    assert hq.resolve_where(text, ['Cache warmup']) == ([(6, 7)], [])
-    assert hq.resolve_where(text, ['Retry budget']) == ([(8, 9)], [])
-    assert hq._norm_heading('## OAuth2: token flow') == 'oauth2: token flow'
-    assert hq._norm_heading('## v2.0 release') == 'v2.0 release'
-    assert hq._norm_heading('## Q3: Open') == 'open'
+    assert markdown.resolve_where(text, ['Log4j: notes']) == ([(3, 4)], [])
+    assert markdown.resolve_where(text, ['Notes']) == ([(1, 2)], [])
+    assert markdown.resolve_where(text, ['Cache warmup']) == ([(6, 7)], [])
+    assert markdown.resolve_where(text, ['Retry budget']) == ([(8, 9)], [])
+    assert markdown._norm_heading('## OAuth2: token flow') == 'oauth2: token flow'
+    assert markdown._norm_heading('## v2.0 release') == 'v2.0 release'
+    assert markdown._norm_heading('## Q3: Open') == 'open'
 
 
 def test_literal_proof_resolves_to_11b_heading_by_text_match():
@@ -215,7 +215,7 @@ def test_literal_proof_resolves_to_11b_heading_by_text_match():
     literal match fails.
     Oracle: hand-computed span (5, 8) for '# 11b. Proof'.
     """
-    spans, unresolved = hq.resolve_where(_TEXT, ['Proof'])
+    spans, unresolved = markdown.resolve_where(_TEXT, ['Proof'])
     assert not unresolved
     assert spans == [(5, 8)]
 
@@ -227,7 +227,7 @@ def test_anchor_with_section_number_and_title_resolves_by_normalization():
     so the normalized anchor is '11b. proof' and the equality check fails.
     Oracle: hand-computed span (5, 8).
     """
-    spans, unresolved = hq.resolve_where(_TEXT, ['11b. Proof'])
+    spans, unresolved = markdown.resolve_where(_TEXT, ['11b. Proof'])
     assert not unresolved
     assert spans == [(5, 8)]
 
@@ -239,7 +239,7 @@ def test_s11b_anchor_is_case_insensitive():
     does not enter the section-fallback path and goes unresolved.
     Oracle: hand-computed span (5, 8) for '# 11b. Proof'.
     """
-    spans, unresolved = hq.resolve_where(_TEXT, ['S11B'])
+    spans, unresolved = markdown.resolve_where(_TEXT, ['S11B'])
     assert not unresolved
     assert spans == [(5, 8)]
 
@@ -252,7 +252,7 @@ def test_s3d_stays_unresolved_because_3d_heading_has_no_section_number():
     Oracle: unresolved=['s3d'] since '## 3D printing' has no dot or colon
     after the digit, so no section number is extracted.
     """
-    spans, unresolved = hq.resolve_where(_TEXT, ['s3d'])
+    spans, unresolved = markdown.resolve_where(_TEXT, ['s3d'])
     assert spans == []
     assert unresolved == ['s3d']
 
@@ -267,7 +267,7 @@ def test_norm_heading_strips_letter_suffixed_section_token():
     instead of stripping the whole token.
     Oracle: _norm_heading('# 11b. Proof') == 'proof'.
     """
-    assert hq._norm_heading('# 11b. Proof') == 'proof'
+    assert markdown._norm_heading('# 11b. Proof') == 'proof'
 
 
 def test_norm_heading_s3_bucket_stays_as_word():
@@ -277,7 +277,7 @@ def test_norm_heading_s3_bucket_stays_as_word():
     by a digit, dropping the leading word of the heading.
     Oracle: _norm_heading('## S3 bucket layout') == 's3 bucket layout'.
     """
-    assert hq._norm_heading('## S3 bucket layout') == 's3 bucket layout'
+    assert markdown._norm_heading('## S3 bucket layout') == 's3 bucket layout'
 
 
 def test_norm_heading_3d_printing_pins_current_output():
@@ -289,7 +289,7 @@ def test_norm_heading_3d_printing_pins_current_output():
     Oracle: the pinned output 'd printing' - the plain-digit fallback cuts
     the `3` alone and leaves the `d`.
     """
-    assert hq._norm_heading('## 3D printing') == 'd printing'
+    assert markdown._norm_heading('## 3D printing') == 'd printing'
 
 
 # --- render_standing joiner ---
@@ -309,7 +309,7 @@ def test_render_standing_body_opening_with_comma_joins_without_space():
         'headline': 'X',
         'body': ', and keep it',
         }]
-    lines = hq.render_standing(items, set(), 'slug', whole_ids={'c01'}).splitlines()
+    lines = render.render_standing(items, set(), 'slug', whole_ids={'c01'}).splitlines()
     assert '[c01] (c8) **X**, and keep it' in lines
 
 
@@ -326,7 +326,7 @@ def test_render_standing_body_opening_with_word_joins_with_space():
         'headline': 'X',
         'body': 'Not even at debug.',
         }]
-    lines = hq.render_standing(items, set(), 'slug', whole_ids={'c01'}).splitlines()
+    lines = render.render_standing(items, set(), 'slug', whole_ids={'c01'}).splitlines()
     assert '[c01] (c8) **X** Not even at debug.' in lines
 
 
@@ -344,7 +344,7 @@ def test_render_standing_empty_body_renders_headline_only():
         'headline': 'X',
         'body': '',
         }]
-    lines = hq.render_standing(items, set(), 'slug', whole_ids={'c01'}).splitlines()
+    lines = render.render_standing(items, set(), 'slug', whole_ids={'c01'}).splitlines()
     assert '[c01] (c8) **X**' in lines
     target = next(ln for ln in lines if '**X**' in ln)
     assert target == '[c01] (c8) **X**'

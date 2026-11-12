@@ -11,8 +11,7 @@ import time
 from typing import Any
 
 import pytest
-
-from bin import hq
+from handoff import cli
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 COMPLETION = ROOT / 'bin' / 'hq-completion.bash'
@@ -66,9 +65,9 @@ def test_run_execs_claude_on_the_resolved_slug_at_the_root(
         calls.append((file, args, os.getcwd()))
         raise _Execed
 
-    monkeypatch.setattr(hq.os, 'execvp', fake_execvp)
+    monkeypatch.setattr(os, 'execvp', fake_execvp)
     with pytest.raises(_Execed):
-        hq.main(['run', 'auth-refresh'])
+        cli.main(['run', 'auth-refresh'])
     assert calls == [
         ('claude', ['claude', '/handoff auth-refresh'], str(root))]
 
@@ -90,9 +89,9 @@ def test_run_execs_hq_claude_cmd_with_the_prompt_last(tmp_path, monkeypatch):
         calls.append((file, args))
         raise _Execed
 
-    monkeypatch.setattr(hq.os, 'execvp', fake_execvp)
+    monkeypatch.setattr(os, 'execvp', fake_execvp)
     with pytest.raises(_Execed):
-        hq.main(['run', 'auth-refresh'])
+        cli.main(['run', 'auth-refresh'])
     assert calls == [
         ('bash',
          ['bash', '-ic', 'claude "$@"', 'bash', '/handoff auth-refresh'])]
@@ -108,7 +107,7 @@ def test_run_with_unsplittable_hq_claude_cmd_exits_2(
     """
     _root_with_threads(tmp_path, monkeypatch)
     monkeypatch.setenv('HQ_CLAUDE_CMD', "claude 'oops")
-    assert hq.main(['run', 'auth-refresh']) == 2
+    assert cli.main(['run', 'auth-refresh']) == 2
     assert capsys.readouterr().out == (
         'hq run: HQ_CLAUDE_CMD: No closing quotation\n')
 
@@ -126,8 +125,8 @@ def test_run_without_claude_on_path_exits_1(tmp_path, monkeypatch, capsys):
     def fake_execvp(file, args):
         raise FileNotFoundError(2, 'No such file or directory', '/x/claude')
 
-    monkeypatch.setattr(hq.os, 'execvp', fake_execvp)
-    assert hq.main(['run', 'billing-ledger']) == 1
+    monkeypatch.setattr(os, 'execvp', fake_execvp)
+    assert cli.main(['run', 'billing-ledger']) == 1
     assert capsys.readouterr().out == 'hq run: no claude on PATH\n'
 
 
@@ -172,8 +171,8 @@ def test_run_refuses_a_prefix(tmp_path, monkeypatch, capsys):
     _root_with_threads(tmp_path, monkeypatch)
     monkeypatch.chdir(tmp_path)
     calls = []
-    monkeypatch.setattr(hq.os, 'execvp', lambda *args: calls.append(args))
-    assert hq.main(['run', 'auth-r']) == 2
+    monkeypatch.setattr(os, 'execvp', lambda *args: calls.append(args))
+    assert cli.main(['run', 'auth-r']) == 2
     assert calls == []
     assert capsys.readouterr().out.startswith(
         "hq run: no folder named 'auth-r' under ")
@@ -206,7 +205,7 @@ def test_completion_verbs_match_the_parser():
     completion list left as it was.
     Oracle: the argparse subcommand table.
     """
-    parser = hq._build_parser()
+    parser = cli.build_parser()
     verbs = next(
         action for action in parser._subparsers._group_actions
         ).choices
@@ -232,7 +231,7 @@ def _record_execv(monkeypatch: Any) -> list[tuple[str, list[str], str]]:
         calls.append((file, args, os.getcwd()))
         raise _Execed
 
-    monkeypatch.setattr(hq.os, 'execv', fake_execv)
+    monkeypatch.setattr(os, 'execv', fake_execv)
     return calls
 
 
@@ -253,7 +252,7 @@ def test_loop_execs_launch_and_stop_at_the_root(tmp_path, monkeypatch):
             ['loop', 'stop', 'billing-ledger'],
             ['loop', 'stop']):
         with pytest.raises(_Execed):
-            hq.main(argv)
+            cli.main(argv)
     assert calls == [
         (script, [script, 'launch', '10', 'auth-refresh', 'claude'], str(root)),
         (script, [script, 'launch', '3', 'auth-refresh', 'claude'], str(root)),
@@ -274,7 +273,7 @@ def test_loop_launches_hq_claude_cmd_split_by_shell_rules(
     monkeypatch.setenv('HQ_CLAUDE_CMD', """bash -ic 'claude "$@"' bash""")
     calls = _record_execv(monkeypatch)
     with pytest.raises(_Execed):
-        hq.main(['loop', 'auth-refresh'])
+        cli.main(['loop', 'auth-refresh'])
     assert calls[0][1][1:] == [
         'launch', '10', 'auth-refresh', 'bash', '-ic', 'claude "$@"', 'bash']
 
@@ -300,7 +299,7 @@ def test_loop_refuses_extra_words_and_an_unsplittable_command(
     if claude_cmd is not None:
         monkeypatch.setenv('HQ_CLAUDE_CMD', claude_cmd)
     calls = _record_execv(monkeypatch)
-    assert hq.main(argv) == 2
+    assert cli.main(argv) == 2
     assert calls == []
     assert capsys.readouterr().out == expected
 

@@ -9,7 +9,7 @@ earlier ruling.
 
 import pathlib
 
-from bin import hq
+from handoff import cli, help_text, paths
 
 _SLUG = 'wd-slug'
 _SESSION = 'session-wd'
@@ -39,7 +39,7 @@ def _root(tmp_path, monkeypatch):
 
 def _strip_read(out: str) -> str:
     """Remove the appended read topic from open output before comparing."""
-    return out.replace(hq.HELP_TOPICS['read'] + '\n', '')
+    return out.replace(help_text.HELP_TOPICS['read'] + '\n', '')
 
 
 def _pin(root, slug=_SLUG):
@@ -68,19 +68,19 @@ def test_no_pin_is_the_default_and_only_the_first_begin_names_the_pin_verb(
     """
     root = _root(tmp_path, monkeypatch)
     folder = root / '.handoff' / _SLUG
-    assert hq.main(['begin', _SLUG]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
     assert (
         f'work dir: .handoff/{_SLUG}/ (default) - made files go under specs/,'
         ' drafts/, notes/, or outputs/; when the spec and experiments already'
         f' live in a project directory, hq work-dir {_SLUG} <dir> pins it\n'
         f'cycle 1 begun by {_SESSION} on {_HOST}\n') in capsys.readouterr().out
-    assert hq.main(['work-dir', _SLUG]) == 0
+    assert cli.main(['work-dir', _SLUG]) == 0
     assert capsys.readouterr().out == f'work dir: .handoff/{_SLUG}/{_DEFAULT_TAIL}\n'
     _cursor(folder)
-    assert hq.main(['finish', _SLUG, '--log', 'c1']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'c1']) == 0
     monkeypatch.setenv('HQ_CYCLE', '2')
     capsys.readouterr()
-    assert hq.main(['begin', _SLUG]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
     assert f'work dir: .handoff/{_SLUG}/{_DEFAULT_TAIL}\n' in capsys.readouterr().out
     assert _pin(root) is None
 
@@ -102,25 +102,25 @@ def test_a_pin_is_the_threads_own_and_no_global_source_is_read(
     (root / 'docs').mkdir()
     (root / 'lab').mkdir()
     other = 'other-slug'
-    assert hq.main(['begin', _SLUG]) == 0
-    assert hq.main(['begin', other]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
+    assert cli.main(['begin', other]) == 0
     capsys.readouterr()
-    assert hq.main(['work-dir', _SLUG, str(root / 'docs')]) == 0
+    assert cli.main(['work-dir', _SLUG, str(root / 'docs')]) == 0
     assert capsys.readouterr().out == (
         f'work dir: docs - pinned in .handoff/{_SLUG}/work-dir\n')
     assert _pin(root) == 'docs\n'
     assert _pin(root, other) is None
     monkeypatch.setenv('HQ_WORK_DIR', 'lab')
     (root / '.handoff' / 'work-dir').write_text('lab\n')
-    assert hq.main(['work-dir', other]) == 0
+    assert cli.main(['work-dir', other]) == 0
     assert capsys.readouterr().out == f'work dir: .handoff/{other}/{_DEFAULT_TAIL}\n'
-    assert hq.main(['work-dir', _SLUG]) == 0
+    assert cli.main(['work-dir', _SLUG]) == 0
     assert capsys.readouterr().out == f'work dir: docs{_PIN_TAIL}\n'
     _cursor(root / '.handoff' / _SLUG)
-    assert hq.main(['finish', _SLUG, '--log', 'c1']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'c1']) == 0
     monkeypatch.setenv('HQ_CYCLE', '2')
     capsys.readouterr()
-    assert hq.main(['begin', _SLUG]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
     out = capsys.readouterr().out
     assert f'work dir: docs{_PIN_TAIL}\n' in out
     assert 'unstamped' not in out
@@ -139,37 +139,37 @@ def test_an_outside_directory_pins_by_its_tilde_or_absolute_spelling(
     for the ~ pin, and 'does not exist' once HOME points elsewhere.
     """
     root = _root(tmp_path, monkeypatch)
-    monkeypatch.setattr(hq, '_TEMP_DIRS', ())
+    monkeypatch.setattr(paths, '_TEMP_DIRS', ())
     home = pathlib.Path(tmp_path) / 'home'
     (home / 'notes').mkdir(parents=True)
     elsewhere = pathlib.Path(tmp_path) / 'elsewhere'
     elsewhere.mkdir()
     monkeypatch.setenv('HOME', str(home))
-    assert hq.main(['begin', _SLUG]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
 
-    assert hq.main(['work-dir', _SLUG, str(home / 'notes')]) == 0
+    assert cli.main(['work-dir', _SLUG, str(home / 'notes')]) == 0
     assert _pin(root) == '~/notes\n'
-    assert hq.main(['work-dir', _SLUG, '~/notes/']) == 0
+    assert cli.main(['work-dir', _SLUG, '~/notes/']) == 0
     assert _pin(root) == '~/notes\n'
     capsys.readouterr()
-    assert hq.main(['work-dir', _SLUG]) == 0
+    assert cli.main(['work-dir', _SLUG]) == 0
     assert capsys.readouterr().out == f'work dir: ~/notes{_PIN_TAIL}\n'
     monkeypatch.setenv('HOME', str(elsewhere))
-    assert hq.main(['work-dir', _SLUG]) == 1
+    assert cli.main(['work-dir', _SLUG]) == 1
     assert capsys.readouterr().out.startswith(
         f".handoff/{_SLUG}/work-dir names '~/notes': does not exist - ")
     monkeypatch.setenv('HOME', str(home))
-    assert hq.main(['work-dir', _SLUG, '~']) == 0
+    assert cli.main(['work-dir', _SLUG, '~']) == 0
     assert _pin(root) == '~\n'
-    assert hq.main(['work-dir', _SLUG, str(elsewhere)]) == 0
+    assert cli.main(['work-dir', _SLUG, str(elsewhere)]) == 0
     assert _pin(root) == f'{elsewhere}\n'
     (root / 'docs' / 'design').mkdir(parents=True)
-    assert hq.main(['work-dir', _SLUG, str(root / 'docs' / 'design')]) == 0
+    assert cli.main(['work-dir', _SLUG, str(root / 'docs' / 'design')]) == 0
     assert _pin(root) == 'docs/design\n'
-    assert hq.main(['work-dir', _SLUG, 'docs/design/']) == 0
+    assert cli.main(['work-dir', _SLUG, 'docs/design/']) == 0
     assert _pin(root) == 'docs/design\n'
     capsys.readouterr()
-    assert hq.main(['work-dir', _SLUG]) == 0
+    assert cli.main(['work-dir', _SLUG]) == 0
     assert capsys.readouterr().out == f'work dir: docs/design{_PIN_TAIL}\n'
 
 
@@ -187,22 +187,22 @@ def test_a_root_reached_through_a_symlink_is_itself_and_owns_its_directories(
     the link spelling.
     """
     real_root = _root(tmp_path, monkeypatch)
-    monkeypatch.setattr(hq, '_TEMP_DIRS', ())
+    monkeypatch.setattr(paths, '_TEMP_DIRS', ())
     link = pathlib.Path(tmp_path) / 'link'
     link.symlink_to(real_root, target_is_directory=True)
     (real_root / 'docs').mkdir()
-    assert hq.main(['begin', _SLUG]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
     capsys.readouterr()
-    assert hq.main(['work-dir', _SLUG, str(link)]) == 1
+    assert cli.main(['work-dir', _SLUG, str(link)]) == 1
     assert capsys.readouterr().out.startswith(f'hq work-dir: {link} is the root itself')
     monkeypatch.setenv('HQ_ROOT', str(link))
-    assert hq.main(['work-dir', _SLUG, str(real_root)]) == 1
+    assert cli.main(['work-dir', _SLUG, str(real_root)]) == 1
     assert capsys.readouterr().out.startswith(
         f'hq work-dir: {real_root} is the root itself')
-    assert hq.main(['work-dir', _SLUG, str(real_root / 'docs')]) == 0
+    assert cli.main(['work-dir', _SLUG, str(real_root / 'docs')]) == 0
     assert _pin(real_root) == 'docs\n'
     monkeypatch.setenv('HQ_ROOT', str(real_root))
-    assert hq.main(['work-dir', _SLUG, str(link / 'docs')]) == 0
+    assert cli.main(['work-dir', _SLUG, str(link / 'docs')]) == 0
     assert _pin(real_root) == 'docs\n'
 
 
@@ -222,7 +222,7 @@ def test_refused_tokens_write_no_pin_and_each_names_its_reason(
     root = _root(tmp_path, monkeypatch)
     (root / '.handoff' / 'other').mkdir(parents=True)
     (root / 'afile').write_text('x\n')
-    assert hq.main(['begin', _SLUG]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
     cases = {
         '.': 'is the root itself',
         '': 'is the root itself',
@@ -235,11 +235,11 @@ def test_refused_tokens_write_no_pin_and_each_names_its_reason(
         }
     for token, reason in cases.items():
         capsys.readouterr()
-        assert hq.main(['work-dir', _SLUG, token]) == 1, token
+        assert cli.main(['work-dir', _SLUG, token]) == 1, token
         out = capsys.readouterr().out
         assert out.startswith(f'hq work-dir: {token} {reason} - name a directory'), out
-    assert hq.main(['work-dir', _SLUG, 'afile', '--clear']) == 2
-    assert hq.main(['work-dir', _SLUG, '', '--clear']) == 2
+    assert cli.main(['work-dir', _SLUG, 'afile', '--clear']) == 2
+    assert cli.main(['work-dir', _SLUG, '', '--clear']) == 2
     assert _pin(root) is None
     assert not (root / 'missing').exists()
 
@@ -260,40 +260,40 @@ def test_clear_removes_the_pin_and_a_bad_pin_is_reported_never_fatal(
     root = _root(tmp_path, monkeypatch)
     folder = root / '.handoff' / _SLUG
     (root / 'lab').mkdir()
-    assert hq.main(['begin', _SLUG]) == 0
-    assert hq.main(['work-dir', _SLUG, 'lab']) == 0
+    assert cli.main(['begin', _SLUG]) == 0
+    assert cli.main(['work-dir', _SLUG, 'lab']) == 0
     (root / 'lab').rmdir()
     bad_line = (
         f".handoff/{_SLUG}/work-dir names 'lab': does not exist - repin it with"
         f' hq work-dir {_SLUG} <dir>, or --clear to fall back to the folder')
     capsys.readouterr()
-    assert hq.main(['work-dir', _SLUG]) == 1
+    assert cli.main(['work-dir', _SLUG]) == 1
     assert capsys.readouterr().out.splitlines() == [
         bad_line, f'work dir: .handoff/{_SLUG}/{_DEFAULT_TAIL}']
     _cursor(folder)
-    assert hq.main(['finish', _SLUG, '--log', 'c1']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'c1']) == 0
     assert bad_line in capsys.readouterr().out
     monkeypatch.setenv('HQ_CYCLE', '2')
-    assert hq.main(['begin', _SLUG]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
     out = capsys.readouterr().out
     assert bad_line in out
     assert f'work dir: .handoff/{_SLUG}/{_DEFAULT_TAIL}' in out
     assert not (root / 'lab').exists()
 
-    assert hq.main(['work-dir', _SLUG, '--clear']) == 0
+    assert cli.main(['work-dir', _SLUG, '--clear']) == 0
     assert capsys.readouterr().out == f'work dir: .handoff/{_SLUG}/{_DEFAULT_TAIL}\n'
     assert _pin(root) is None
-    assert hq.main(['work-dir', _SLUG, '--clear']) == 0
+    assert cli.main(['work-dir', _SLUG, '--clear']) == 0
     (folder / 'work-dir').write_text('\n')
     capsys.readouterr()
-    assert hq.main(['work-dir', _SLUG]) == 1
+    assert cli.main(['work-dir', _SLUG]) == 1
     assert capsys.readouterr().out.startswith(
         f".handoff/{_SLUG}/work-dir names '': is empty - repin it")
     (root / 'lab').mkdir()
     (folder / 'work-dir').write_text('lab\n')
     (folder / 'work-dir').chmod(0)
     try:
-        assert hq.main(['work-dir', _SLUG]) == 1
+        assert cli.main(['work-dir', _SLUG]) == 1
         assert capsys.readouterr().out.startswith(
             f".handoff/{_SLUG}/work-dir names '': cannot be read - repin it")
     finally:
@@ -316,25 +316,25 @@ def test_a_directory_under_the_pins_name_is_named_by_every_surface(
     root = _root(tmp_path, monkeypatch)
     folder = root / '.handoff' / _SLUG
     (root / 'lab').mkdir()
-    assert hq.main(['begin', _SLUG]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
     (folder / 'work-dir').mkdir()
     (folder / 'work-dir' / 'SPEC.md').write_text('# Spec\n')
     dir_line = (
         f'.handoff/{_SLUG}/work-dir is a directory - the pin is a one-line file;'
         ' move the folder under specs/, drafts/, notes/, or outputs/')
     capsys.readouterr()
-    assert hq.main(['work-dir', _SLUG]) == 1
+    assert cli.main(['work-dir', _SLUG]) == 1
     assert capsys.readouterr().out.splitlines() == [
         dir_line, f'work dir: .handoff/{_SLUG}/{_DEFAULT_TAIL}']
-    assert hq.main(['work-dir', _SLUG, 'lab']) == 1
+    assert cli.main(['work-dir', _SLUG, 'lab']) == 1
     assert capsys.readouterr().out == dir_line + '\n'
-    assert hq.main(['work-dir', _SLUG, '--clear']) == 1
+    assert cli.main(['work-dir', _SLUG, '--clear']) == 1
     assert capsys.readouterr().out == dir_line + '\n'
     _cursor(folder)
-    assert hq.main(['finish', _SLUG, '--log', 'c1']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'c1']) == 0
     assert dir_line in capsys.readouterr().out
     monkeypatch.setenv('HQ_CYCLE', '2')
-    assert hq.main(['begin', _SLUG]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
     assert dir_line in capsys.readouterr().out
     assert (folder / 'work-dir' / 'SPEC.md').is_file()
 
@@ -367,7 +367,7 @@ def test_a_kind_folder_sets_the_kind_and_the_walk_lists_its_files(
     (folder / 'probes' / 'p.py').write_text('y = 2\n')
     (folder / 'drafts' / 'deep').mkdir()
     (folder / 'drafts' / 'deep' / 'z.py').write_text('z = 3\n')
-    assert hq.main(['begin', _SLUG]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
     work_list = capsys.readouterr().out
     assert '\n  unstamped spec x2: specs/HANDOFF-old.md, specs/auth.md' in work_list
     assert '\n  unstamped snapshot x1: specs/old.bak' in work_list
@@ -378,9 +378,9 @@ def test_a_kind_folder_sets_the_kind_and_the_walk_lists_its_files(
     for token in ('specs/auth.md', 'specs/HANDOFF-old.md', 'drafts/x.py',
                   'notes/quirks.md', 'outputs/SPEC-chart.md', 'specs/old.bak',
                   'probes/p.py', 'drafts/deep/z.py'):
-        assert hq.main(['stamp', _SLUG, token] + anchors.get(token, [])) == 0, token
+        assert cli.main(['stamp', _SLUG, token] + anchors.get(token, [])) == 0, token
     capsys.readouterr()
-    assert hq.main(['stamp', _SLUG, 'specs']) == 2
+    assert cli.main(['stamp', _SLUG, 'specs']) == 2
     assert capsys.readouterr().out.startswith('hq stamp: specs is a kind folder - ')
 
     rows = (folder / 'ledger.tsv').read_text().splitlines()[1:]
@@ -411,14 +411,14 @@ def test_a_file_stamped_inside_a_folder_records_the_folder(
     folder = root / '.handoff' / _SLUG
     (folder / 'experiments').mkdir(parents=True)
     (folder / 'experiments' / 'e1.py').write_text('e = 1\n')
-    assert hq.main(['begin', _SLUG]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
     assert 'unstamped probe-dir x1: experiments' in capsys.readouterr().out
-    assert hq.main(['stamp', _SLUG, 'experiments/e1.py', '--label', 'first run']) == 0
+    assert cli.main(['stamp', _SLUG, 'experiments/e1.py', '--label', 'first run']) == 0
     _cursor(folder)
     capsys.readouterr()
-    assert hq.main(['finish', _SLUG, '--log', 'c1']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'c1']) == 0
     assert 'probe-dir' not in capsys.readouterr().out
-    assert hq.main(['artifacts', _SLUG]) == 0
+    assert cli.main(['artifacts', _SLUG]) == 0
     assert 'unstamped' not in capsys.readouterr().out
 
 
@@ -456,18 +456,18 @@ def test_finish_names_a_made_file_first_stamped_this_cycle_against_the_work_dir(
     (folder / 'drafts' / 'd.py').write_text('d = 1\n')
     (root / 'working').mkdir()
     (root / 'working' / 'w.py').write_text('w = 1\n')
-    assert hq.main(['begin', _SLUG]) == 0
-    assert hq.main(['work-dir', _SLUG, 'working']) == 0
+    assert cli.main(['begin', _SLUG]) == 0
+    assert cli.main(['work-dir', _SLUG, 'working']) == 0
     anchors = {'SPEC-old.md': ['--where', 'Spec'], 'specs/in.md': ['--where', 'In']}
     for token in ('SPEC-old.md', 'proto.py', 'notes-a.md', 'probes',
                   'outputs/table.csv', 'notes/quirks.md', 'reviews/skeptic.md',
                   'specs/in.md', 'drafts/d.py'):
-        assert hq.main(['stamp', _SLUG, token] + anchors.get(token, [])) == 0, token
-    assert hq.main([
+        assert cli.main(['stamp', _SLUG, token] + anchors.get(token, [])) == 0, token
+    assert cli.main([
         'stamp', _SLUG, str(root / 'working' / 'w.py'), '--kind', 'draft']) == 0
     _cursor(folder)
     capsys.readouterr()
-    assert hq.main(['finish', _SLUG, '--log', 'c1']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'c1']) == 0
     out = capsys.readouterr().out
     assert ('advisory: made in the folder x5: SPEC-old.md, proto.py,'
             ' outputs/table.csv, specs/in.md, drafts/d.py'
@@ -478,17 +478,17 @@ def test_finish_names_a_made_file_first_stamped_this_cycle_against_the_work_dir(
     assert '\nworking/w.py  draft  edit  c1  -\n' in rendered
 
     monkeypatch.setenv('HQ_CYCLE', '2')
-    assert hq.main(['work-dir', _SLUG, '--clear']) == 0
+    assert cli.main(['work-dir', _SLUG, '--clear']) == 0
     (folder / 'SPEC-new.md').write_text('# Spec\n\nNew.\n')
     (folder / 'specs' / 'inside.md').write_text('# Inside\n')
     (folder / 'experiments').mkdir()
-    assert hq.main(['begin', _SLUG]) == 0
-    assert hq.main(['stamp', _SLUG, 'SPEC-old.md', '--label', 'old, re-stamped']) == 0
-    assert hq.main(['stamp', _SLUG, 'SPEC-new.md', '--where', 'Spec']) == 0
-    assert hq.main(['stamp', _SLUG, 'specs/inside.md', '--where', 'Inside']) == 0
-    assert hq.main(['stamp', _SLUG, 'experiments']) == 0
+    assert cli.main(['begin', _SLUG]) == 0
+    assert cli.main(['stamp', _SLUG, 'SPEC-old.md', '--label', 'old, re-stamped']) == 0
+    assert cli.main(['stamp', _SLUG, 'SPEC-new.md', '--where', 'Spec']) == 0
+    assert cli.main(['stamp', _SLUG, 'specs/inside.md', '--where', 'Inside']) == 0
+    assert cli.main(['stamp', _SLUG, 'experiments']) == 0
     capsys.readouterr()
-    assert hq.main(['finish', _SLUG, '--log', 'c2']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'c2']) == 0
     out = capsys.readouterr().out
     assert ('advisory: made at the top level x1: SPEC-new.md'
             ' - move each under specs/, drafts/, notes/, or outputs/'
@@ -512,17 +512,17 @@ def test_a_work_dir_under_a_former_handoff_name_is_not_a_stale_path(
     """
     root = _root(tmp_path, monkeypatch)
     folder = root / '.handoff' / _SLUG
-    assert hq.main(['begin', _SLUG]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
     handoff = folder / 'HANDOFF.md'
     handoff.write_text(handoff.read_text().replace(
         '## Task\n', '## Task\nT.\n').replace(
         '## Now\n', f'## Now\nRun working/{_SLUG}/proto.py again.\n'))
-    assert hq.main(['finish', _SLUG, '--log', 'c1']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'c1']) == 0
     capsys.readouterr()
-    assert hq.main(['open', _SLUG]) == 0
+    assert cli.main(['open', _SLUG]) == 0
     assert f'stale folder path in HANDOFF.md: working/{_SLUG}/ x1' in (
         _strip_read(capsys.readouterr().out))
     (root / 'working' / _SLUG).mkdir(parents=True)
-    assert hq.main(['work-dir', _SLUG, f'working/{_SLUG}']) == 0
-    assert hq.main(['open', _SLUG]) == 0
+    assert cli.main(['work-dir', _SLUG, f'working/{_SLUG}']) == 0
+    assert cli.main(['open', _SLUG]) == 0
     assert 'stale folder path' not in _strip_read(capsys.readouterr().out)

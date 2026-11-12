@@ -7,7 +7,7 @@ import decimal
 import io
 import pathlib
 
-from bin import hq
+from handoff import cli, progress, storage
 
 _SLUG = 'stall-slug'
 _SESSION = 'session-st'
@@ -37,7 +37,7 @@ def _run(argv):
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         try:
-            rc = hq.main(argv)
+            rc = cli.main(argv)
         except SystemExit as exc:
             rc = exc.code
     return rc, out.getvalue(), err.getvalue()
@@ -53,7 +53,7 @@ def _cycles(logs):
 
 
 def _manifest(folder):
-    return hq._read_tsv(folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS)
+    return storage.read_tsv(folder / 'cycles' / 'manifest.tsv', storage.MANIFEST_FIELDS)
 
 
 def _stalls(logs):
@@ -64,7 +64,7 @@ def _stalls(logs):
     rows = [
         {'cycle': str(i + 1), 'log': log if ' | ' in log else f'{log} | -'}
         for i, log in enumerate(logs)]
-    return [hq.stall_count(rows[:i + 1])['stall'] for i in range(len(rows))]
+    return [progress.stall_count(rows[:i + 1])['stall'] for i in range(len(rows))]
 
 
 def _counting(series, name='a', goal='0'):
@@ -105,7 +105,7 @@ def test_each_of_the_four_forms_parses():
     left in.
     Oracle: hand-written token map for a line holding all four forms.
     """
-    tokens, free_text, error = hq.parse_summary(
+    tokens, free_text, error = progress.parse_summary(
         'summary: a=31->0 s=72->80@1 t=+45 u=+45@5 | fixed x')
     assert error is None
     assert free_text == 'fixed x'
@@ -116,7 +116,7 @@ def test_each_of_the_four_forms_parses():
         'u': ('tally', (D(45), None)),
         }
     for gone in ('g=MET', 'h=OPEN', 's=40/300'):
-        assert hq.parse_summary(f'summary: a=1->0 {gone} | x')[0] is None
+        assert progress.parse_summary(f'summary: a=1->0 {gone} | x')[0] is None
 
 
 def test_a_failing_token_voids_the_row():
@@ -127,9 +127,9 @@ def test_a_failing_token_voids_the_row():
     Oracle: a failed row with its cause, and a bare count beside a good
     token.
     """
-    assert hq.parse_summary('summary: probe-failed: exited 2: boom | x') == (
+    assert progress.parse_summary('summary: probe-failed: exited 2: boom | x') == (
         None, 'x', 'probe-failed: exited 2: boom')
-    tokens, _, error = hq.parse_summary('summary: a=1->0 open_sites=12 | done')
+    tokens, _, error = progress.parse_summary('summary: a=1->0 open_sites=12 | done')
     assert tokens is None
     assert error == 'token open_sites=12 matches no summary form'
 
@@ -140,10 +140,10 @@ def test_the_prefix_matches_any_case_after_leading_space():
     Mutation: a case-sensitive match, or no leading space allowed.
     Oracle: the capitalized prefix after two spaces.
     """
-    tokens, _, error = hq.parse_summary('  Summary: a=1->0')
+    tokens, _, error = progress.parse_summary('  Summary: a=1->0')
     assert error is None
     assert set(tokens) == {'a'}
-    assert hq.parse_summary('a=1->0')[2] == 'the row does not start with summary:'
+    assert progress.parse_summary('a=1->0')[2] == 'the row does not start with summary:'
 
 
 def test_spend_and_tally_alone_do_not_parse():
@@ -152,10 +152,10 @@ def test_spend_and_tally_alone_do_not_parse():
     Mutation: a tally counted toward the one counting token a row needs.
     Oracle: two tallies, one stepped, then the same tally beside a=1->0.
     """
-    tokens, _, error = hq.parse_summary('summary: t=+4 u=+2@1 | x')
+    tokens, _, error = progress.parse_summary('summary: t=+4 u=+2@1 | x')
     assert tokens is None
     assert error == 'the summary holds no counting token'
-    assert hq.parse_summary('summary: t=+4 a=1->0 | x')[2] is None
+    assert progress.parse_summary('summary: t=+4 a=1->0 | x')[2] is None
 
 
 def test_the_last_occurrence_of_a_name_wins():
@@ -164,9 +164,9 @@ def test_the_last_occurrence_of_a_name_wins():
     Mutation: the first occurrence wins.
     Oracle: a=5->0 then a=3->0, and a=5->0 then a=3->0@1.
     """
-    assert hq.parse_summary('summary: a=5->0 a=3->0')[0] == {
+    assert progress.parse_summary('summary: a=5->0 a=3->0')[0] == {
         'a': ('counting', (D(3), D(0), None))}
-    assert hq.parse_summary('summary: a=5->0 a=3->0@1')[0] == {
+    assert progress.parse_summary('summary: a=5->0 a=3->0@1')[0] == {
         'a': ('counting', (D(3), D(0), D(1)))}
 
 
@@ -178,10 +178,10 @@ def test_the_counting_check_reads_the_tokens_last_wins_leaves():
     Oracle: a=5->0 a=+3 leaves the tally alone; a=+3 a=5->0 leaves the
     counting token.
     """
-    tokens, _, error = hq.parse_summary('summary: a=5->0 a=+3')
+    tokens, _, error = progress.parse_summary('summary: a=5->0 a=+3')
     assert tokens is None
     assert error == 'the summary holds no counting token'
-    assert hq.parse_summary('summary: a=+3 a=5->0')[0] == {
+    assert progress.parse_summary('summary: a=+3 a=5->0')[0] == {
         'a': ('counting', (D(5), D(0), None))}
 
 
@@ -201,7 +201,7 @@ def test_pre_grammar_rows():
     Mutation: a bare number accepted as counting.
     Oracle: the pre-grammar shape beside a good token.
     """
-    assert hq.parse_summary('summary: open_sites=12 a=1->0')[0] is None
+    assert progress.parse_summary('summary: open_sites=12 a=1->0')[0] is None
 
 
 def test_tokens_end_at_the_first_bar():
@@ -210,7 +210,7 @@ def test_tokens_end_at_the_first_bar():
     Mutation: tokens read past the bar.
     Oracle: b=9->0 sits after the bar.
     """
-    tokens, free_text, _ = hq.parse_summary('summary: a=1->0 | b=9->0')
+    tokens, free_text, _ = progress.parse_summary('summary: a=1->0 | b=9->0')
     assert set(tokens) == {'a'}
     assert free_text == 'b=9->0'
 
@@ -248,7 +248,7 @@ def test_a_value_crossing_the_goal_is_progress():
         {'cycle': '1', 'log': 'summary: a=94.9->95 | -'},
         {'cycle': '2', 'log': 'summary: a=95.2->95 | -'},
         ]
-    assert hq.stall_count(rows)['stall'] == 0
+    assert progress.stall_count(rows)['stall'] == 0
 
 
 def test_stepped_gains_add_up_to_a_credit():
@@ -383,7 +383,7 @@ def test_rows_without_a_bar_are_history():
     """
     rows = [{'cycle': str(i), 'log': 'summary: a=5->0'} for i in (1, 2, 3)]
     rows.append({'cycle': '4', 'log': 'summary: a=5->0 | x'})
-    result = hq.stall_count(rows)
+    result = progress.stall_count(rows)
     assert (result['stall'], result['measured']) == (0, 4)
 
 
@@ -406,7 +406,7 @@ def test_an_unparsed_row_stores_nothing_and_leaves_the_streak():
     """
     logs = _counting([5, 5]) + ['summary: open_sites=12 | wrote', 'summary: a=5->0']
     assert _stalls(logs) == [0, 1, None, 2]
-    result = hq.stall_count([
+    result = progress.stall_count([
         {'cycle': str(i + 1), 'log': log} for i, log in enumerate(logs[:3])])
     assert result['reported'] == 1
 
@@ -555,8 +555,8 @@ def test_old_manifests_take_the_new_columns_by_position(tmp_path, monkeypatch):
     adopt_fields = manifest_path.read_text().splitlines()[1].split('\t')
     assert len(adopt_fields) == 15
     assert adopt_fields[14:] == ['-']
-    assert hq.live_sha(_manifest(folder)[0]) == adopt_fields[13]
-    assert hq._sha12((folder / 'HANDOFF.md').read_bytes()) == adopt_fields[13]
+    assert storage.live_sha(_manifest(folder)[0]) == adopt_fields[13]
+    assert storage.sha12((folder / 'HANDOFF.md').read_bytes()) == adopt_fields[13]
     _probe(folder, "echo 'a=5->0'")
     for width, stall in ((13, '0'), (14, '1'), (16, '2')):
         rows = manifest_path.read_text().splitlines()
@@ -583,8 +583,8 @@ def test_unmeasured_parses_with_no_tokens():
     match made case-sensitive.
     Oracle: hand-written parse of two unmeasured lines.
     """
-    assert hq.parse_summary('summary: unmeasured') == ({}, '', None)
-    assert hq.parse_summary('Summary: UNMEASURED | stall review: x') == (
+    assert progress.parse_summary('summary: unmeasured') == ({}, '', None)
+    assert progress.parse_summary('Summary: UNMEASURED | stall review: x') == (
         {}, 'stall review: x', None)
 
 
@@ -614,7 +614,7 @@ def test_a_row_with_no_numeric_cycle_counts_toward_nothing():
     """
     stuck = 'summary: a=5->0 | -'
     skipped = [{'cycle': '-', 'log': stuck}, {'cycle': '', 'log': stuck}]
-    after = hq.stall_count([{'cycle': '1', 'log': stuck}] + skipped)
+    after = progress.stall_count([{'cycle': '1', 'log': stuck}] + skipped)
     assert (after['stall'], after['measured']) == (0, 1)
-    before = hq.stall_count(skipped + [{'cycle': '7', 'log': stuck}])
+    before = progress.stall_count(skipped + [{'cycle': '7', 'log': stuck}])
     assert (before['measured'], before['stall']) == (7, 0)

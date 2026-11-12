@@ -12,8 +12,7 @@ import pathlib
 import signal
 
 import pytest
-
-from bin import hq
+from handoff import cli, ledger, markdown, render, standing, storage
 
 _SLUG = 'demo'
 _SESSION = 'session-abc'
@@ -77,12 +76,12 @@ def _handoff(folder, key_files='', cycle=3, extra=''):
 
 def _ledger(folder):
     """Return the ledger rows of the folder as a list of dicts."""
-    return hq._read_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS)
+    return storage.read_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS)
 
 
 def _row(**overrides):
     """Build a full thirteen-field ledger row with the given overrides."""
-    row = dict.fromkeys(hq.LEDGER_FIELDS, '-')
+    row = dict.fromkeys(ledger.LEDGER_FIELDS, '-')
     row.update({
         'cycle': '1', 'base': 'folder', 'kind': 'spec', 'status': 'live',
         'read_before': 'always', 'label': 'a label',
@@ -104,11 +103,11 @@ def test_note_takes_a_dash_batch_marker_and_a_body_positional(
     item, each with its own body.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     monkeypatch.setattr('sys.stdin', io.StringIO(
         'constraint --headline "Keep the floor" "Never below one."\n'))
-    assert hq.main(['note', _SLUG, '--batch', '-']) == 0
-    assert hq.main([
+    assert cli.main(['note', _SLUG, '--batch', '-']) == 0
+    assert cli.main([
         'note', _SLUG, 'decision', '--headline', 'Ship it', 'Body text.']) == 0
     standing = (folder / 'standing.md').read_text()
     assert '- [c01] (c1) **Keep the floor** Never below one.' in standing
@@ -126,14 +125,14 @@ def test_note_refuses_an_unknown_kind_and_a_missing_headline(
     standing.md.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     before = (folder / 'standing.md').read_text()
-    assert hq.main(['note', _SLUG, 'wish', '--headline', 'H', 'body']) == 2
+    assert cli.main(['note', _SLUG, 'wish', '--headline', 'H', 'body']) == 2
     assert (
         "hq note: kind must be decision, constraint, dead-end, or evidence;"
         " got 'wish'"
         in capsys.readouterr().out)
-    assert hq.main(['note', _SLUG, 'decision', 'body']) == 2
+    assert cli.main(['note', _SLUG, 'decision', 'body']) == 2
     assert 'hq note: --headline is required' in capsys.readouterr().out
     assert (folder / 'standing.md').read_text() == before
 
@@ -147,13 +146,13 @@ def test_note_folds_a_newline_in_the_headline_to_one_space(
     Oracle: standing.md has one item line and _parse_standing finds it.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    assert hq.main([
+    cli.main(['begin', _SLUG])
+    assert cli.main([
         'note', _SLUG, 'decision',
         '--headline', 'Two\nlines\there', 'Body.']) == 0
     text = (folder / 'standing.md').read_text()
     assert '- [d01] (c1) **Two lines here** Body.' in text
-    items, _ = hq._parse_standing(text)
+    items, _ = standing.parse_standing(text)
     assert [i['headline'] for i in items] == ['Two lines here']
 
 
@@ -166,8 +165,8 @@ def test_note_rejects_an_unknown_flag_instead_of_swallowing_it(
     Oracle: exit 2 and no item in standing.md.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    assert hq.main([
+    cli.main(['begin', _SLUG])
+    assert cli.main([
         'note', _SLUG, 'decision', '--headline', 'H', '--bogus', 'b']) == 2
     assert '[d01]' not in (folder / 'standing.md').read_text()
 
@@ -182,11 +181,11 @@ def test_note_batch_names_the_bad_line_and_runs_the_rest(
     item in standing.md.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     monkeypatch.setattr('sys.stdin', io.StringIO(
         'decision "no headline here"\n'
         'constraint --headline "Keep" "the floor"\n'))
-    assert hq.main(['note', _SLUG, '--batch', '-']) == 2
+    assert cli.main(['note', _SLUG, '--batch', '-']) == 2
     out = capsys.readouterr().out
     assert 'hq note: batch line 1 not parsed: decision "no headline here"' in out
     standing = (folder / 'standing.md').read_text()
@@ -204,11 +203,11 @@ def test_note_batch_names_a_line_refused_after_it_parsed(
     in standing.md.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     monkeypatch.setattr('sys.stdin', io.StringIO(
         'decision --headline "Fine" "ok"\n'
         'decision --headline "" "oops"\n'))
-    assert hq.main(['note', _SLUG, '--batch', '-']) == 2
+    assert cli.main(['note', _SLUG, '--batch', '-']) == 2
     out = capsys.readouterr().out
     assert 'hq note: batch line 2 refused' in out
     standing = (folder / 'standing.md').read_text()
@@ -240,7 +239,7 @@ def test_adopt_grades_nested_star_and_inline_labeled_pointers(
         '  - `SPEC.md` cache schema; s4 field-to-path mapping\n'
         '* `notes-algos.md` Reference only: diffing background\n'
         ))
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = {r['path']: r for r in _ledger(folder)}
     assert 'Read' not in rows
     assert rows['SPEC.md']['read_before'] == 'always'
@@ -272,7 +271,7 @@ def test_adopt_infers_a_nested_pointer_below_the_top_level(
     _handoff(folder, key_files=(
         '- `sub/deep.py` Reference only: nested helper\n'
         ))
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['sub/deep.py']['kind'] == 'other'
     assert rows['sub/deep.py']['read_before'] == 'never'
@@ -292,7 +291,7 @@ def test_adopt_renders_the_log_row_it_appends(tmp_path, monkeypatch):
     """
     folder = _root(tmp_path, monkeypatch)
     _handoff(folder)
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     text = (folder / 'HANDOFF.md').read_text()
     log_body = text.split('## Log\n', 1)[1]
     assert log_body.strip() == '- 2026-09-01: adopted'
@@ -315,9 +314,10 @@ def test_section_anchor_accepts_every_leading_token_form():
     for heading in ('## 4 Title', '## 4. Title', '## 4: Title', '## s4: Title',
                     '## S4. Title'):
         text = f'{heading}\nBody.\n'
-        assert hq.resolve_where(text, ['s4']) == ([(1, 2)], []), heading
-    assert hq.resolve_where('## S3 bucket layout\nBody.\n', ['s3']) == ([], ['s3'])
-    assert hq.resolve_where(
+        assert markdown.resolve_where(text, ['s4']) == ([(1, 2)], []), heading
+    assert markdown.resolve_where(
+        '## S3 bucket layout\nBody.\n', ['s3']) == ([], ['s3'])
+    assert markdown.resolve_where(
         '## S3 bucket layout\nBody.\n## Bucket layout\nOther.\n',
         ['Bucket layout']) == ([(3, 4)], [])
 
@@ -330,7 +330,7 @@ def test_literal_anchor_ignores_the_leading_section_token():
     Oracle: hand-computed - the heading is line 3 and the next same-level
     heading is line 8, so the span is 3-7.
     """
-    assert hq.resolve_where(_SPEC, ['Field-to-path mapping']) == ([(3, 7)], [])
+    assert markdown.resolve_where(_SPEC, ['Field-to-path mapping']) == ([(3, 7)], [])
 
 
 def test_literal_anchor_matches_a_whole_heading_not_a_prefix():
@@ -342,7 +342,7 @@ def test_literal_anchor_matches_a_whole_heading_not_a_prefix():
     line 4, so equality gives 4-5.
     """
     text = '## Retry budget\nBudget.\n\n## Retry\nRetry.\n'
-    assert hq.resolve_where(text, ['Retry']) == ([(4, 5)], [])
+    assert markdown.resolve_where(text, ['Retry']) == ([(4, 5)], [])
 
 
 def test_adopt_seeds_an_anchor_the_read_block_can_resolve(
@@ -357,7 +357,7 @@ def test_adopt_seeds_an_anchor_the_read_block_can_resolve(
     folder = _root(tmp_path, monkeypatch)
     (folder / 'SPEC.md').write_text(_SPEC, encoding='utf-8')
     _handoff(folder, key_files='- `SPEC.md` Read now: mapping, section 4\n')
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     assert 'SPEC.md:3-7' in (folder / 'HANDOFF.md').read_text()
 
 
@@ -376,7 +376,7 @@ def test_a_traversing_or_empty_slug_is_refused(tmp_path, monkeypatch, capsys):
     root = folder.parent.parent
     for bad in ('..', '../../victim', '', 'nested/slug', '.hidden'):
         with pytest.raises(SystemExit) as exc:
-            hq.main(['begin', bad])
+            cli.main(['begin', bad])
         assert exc.value.code == 2
         assert f'hq: invalid slug {bad!r}' in capsys.readouterr().out
     assert not (root / 'HANDOFF.md').exists()
@@ -395,7 +395,7 @@ def test_a_read_only_verb_creates_no_handoff_directory(tmp_path, monkeypatch):
     monkeypatch.setenv('HQ_ROOT', str(root))
     monkeypatch.setenv('HQ_GIT', '0')
     with pytest.raises(SystemExit) as exc:
-        hq.main(['open', 'ghost'])
+        cli.main(['open', 'ghost'])
     assert exc.value.code == 2
     assert not (root / '.handoff').exists()
 
@@ -413,7 +413,7 @@ def test_walk_skips_a_fifo_without_opening_it(tmp_path, monkeypatch):
     """
     folder = _root(tmp_path, monkeypatch)
     os.mkfifo(folder / 'pipe')
-    assert ('pipe', 'skip') in hq._walk_folder(folder)
+    assert ('pipe', 'skip') in ledger.walk_folder(folder)
 
 
 def test_walk_skips_a_name_no_ledger_row_can_hold(
@@ -427,10 +427,10 @@ def test_walk_skips_a_name_no_ledger_row_can_hold(
     """
     folder = _root(tmp_path, monkeypatch)
     (folder / 'bad\tname.md').write_text('# Notes\n')
-    assert ('bad\tname.md', 'skip') in hq._walk_folder(folder)
-    hq.main(['begin', _SLUG])
+    assert ('bad\tname.md', 'skip') in ledger.walk_folder(folder)
+    cli.main(['begin', _SLUG])
     capsys.readouterr()
-    assert hq.main(['artifacts', _SLUG]) == 0
+    assert cli.main(['artifacts', _SLUG]) == 0
     out = capsys.readouterr().out
     assert 'bad\tname.md  unstampable' in out
     assert 'conflicted copy' not in out
@@ -453,7 +453,7 @@ def test_a_root_that_is_a_file_is_named_not_raised(
     monkeypatch.setenv('HQ_ROOT', str(bogus))
     monkeypatch.setenv('HQ_GIT', '0')
     with pytest.raises(SystemExit) as exc:
-        hq.main(['open', _SLUG])
+        cli.main(['open', _SLUG])
     assert exc.value.code == 2
     assert f'hq: root is not a directory: {bogus}' in capsys.readouterr().out
 
@@ -468,9 +468,9 @@ def test_a_handoff_that_is_a_directory_is_named_not_raised(
     """
     folder = _root(tmp_path, monkeypatch)
     (folder / 'HANDOFF.md').mkdir()
-    assert hq.main(['adopt', _SLUG]) == 1
+    assert cli.main(['adopt', _SLUG]) == 1
     assert 'hq: HANDOFF.md is a directory' in capsys.readouterr().out
-    assert hq.main(['open', _SLUG]) == 1
+    assert cli.main(['open', _SLUG]) == 1
     assert 'hq: HANDOFF.md is a directory' in capsys.readouterr().out
 
 
@@ -483,14 +483,14 @@ def test_undecodable_bytes_do_not_stop_a_read_or_a_ledger(
     Oracle: when and read both exit 0 on a folder holding both.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_bytes(b'# Spec\n\n## Design\n\n\xff\xfe raw\n')
-    assert hq.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Design']) == 0
+    assert cli.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Design']) == 0
     with (folder / 'ledger.tsv').open('ab') as fh:
         fh.write(b'9\t2026-09-01\tSPEC.md\tfolder\tspec\tlive\tnever\t-\t-\t'
                  b'aa\t1\t-\t\xff bad label\n')
-    assert hq.main(['when', _SLUG, 'SPEC.md']) == 0
-    assert hq.main(['read', _SLUG, 'SPEC.md']) == 0
+    assert cli.main(['when', _SLUG, 'SPEC.md']) == 0
+    assert cli.main(['read', _SLUG, 'SPEC.md']) == 0
 
 
 def test_a_receipt_that_cannot_be_written_is_reported_after_the_spans(
@@ -506,18 +506,18 @@ def test_a_receipt_that_cannot_be_written_is_reported_after_the_spans(
     first, then the documented line, and exits 1.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\n## Design\n\nContent.\n')
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Design'])
+    cli.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Design'])
     monkeypatch.setenv('HQ_SESSION', 'a/b')
-    assert hq.main(['read', _SLUG, 'SPEC.md']) == 0
+    assert cli.main(['read', _SLUG, 'SPEC.md']) == 0
     assert (pathlib.Path(tmp_path) / 'hq-reads-a_b.txt').exists()
     blocked = pathlib.Path(tmp_path) / 'blocked-state'
     blocked.write_text('x\n')
     monkeypatch.setenv('HQ_STATE_DIR', str(blocked))
     (folder / '.hq.reads-a_b').mkdir()
     capsys.readouterr()
-    assert hq.main(['read', _SLUG, 'SPEC.md']) == 1
+    assert cli.main(['read', _SLUG, 'SPEC.md']) == 1
     lines = capsys.readouterr().out.splitlines()
     assert lines[0] == '## Design'
     assert lines[-1].startswith('hq read: receipt not written: ')
@@ -535,11 +535,11 @@ def test_a_read_only_state_dir_moves_the_receipt_into_the_folder(
     .hq.reads-<session>, and the read exits 0 with no failure line.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\n## Design\n\nContent.\n')
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Design'])
+    cli.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Design'])
     monkeypatch.setenv('HQ_SESSION', 's1')
-    assert hq.main(['read', _SLUG, 'SPEC.md']) == 0
+    assert cli.main(['read', _SLUG, 'SPEC.md']) == 0
     assert (pathlib.Path(tmp_path) / 'hq-reads-s1.txt').read_text().endswith(
         f' {_SLUG} SPEC.md\n')
     assert not (folder / '.hq.reads-s1').exists()
@@ -547,7 +547,7 @@ def test_a_read_only_state_dir_moves_the_receipt_into_the_folder(
     blocked.write_text('x\n')
     monkeypatch.setenv('HQ_STATE_DIR', str(blocked))
     capsys.readouterr()
-    assert hq.main(['read', _SLUG, 'SPEC.md']) == 0
+    assert cli.main(['read', _SLUG, 'SPEC.md']) == 0
     assert 'receipt not written' not in capsys.readouterr().out
     assert (folder / '.hq.reads-s1').read_text().endswith(
         f' {_SLUG} SPEC.md\n')
@@ -566,7 +566,7 @@ def test_adopt_strips_a_byte_order_mark_from_the_title(tmp_path, monkeypatch):
     folder = _root(tmp_path, monkeypatch)
     text = _handoff(folder)
     (folder / 'HANDOFF.md').write_text('\ufeff' + text, encoding='utf-8')
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     assert '## Unfiled' not in (folder / 'HANDOFF.md').read_text()
 
 
@@ -583,12 +583,12 @@ def test_read_prints_the_anchor_span_verbatim(tmp_path, monkeypatch, capsys):
     line 8, so lines 3-7 print verbatim.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text(
         '# Spec\n\n## Design\n\nAlpha.\nBeta.\n\n## Other\n\nMore.\n')
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Design'])
+    cli.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Design'])
     capsys.readouterr()
-    assert hq.main(['read', _SLUG, 'SPEC.md']) == 0
+    assert cli.main(['read', _SLUG, 'SPEC.md']) == 0
     assert capsys.readouterr().out == '## Design\n\nAlpha.\nBeta.\n\n'
 
 
@@ -607,7 +607,7 @@ def test_read_block_sorts_by_kind_then_path():
         _row(path='alpha.md', kind='spec', label='the spec'),
         _row(path='zeta.py', kind='draft', label='the draft'),
         ]
-    body = hq.render_read(rows, {}, {'alpha.md': 10, 'zeta.py': 20})
+    body = render.render_read(rows, {}, {'alpha.md': 10, 'zeta.py': 20})
     assert [ln.split(' ')[0] for ln in body.splitlines()] == [
         'zeta.py', 'alpha.md']
 
@@ -624,36 +624,36 @@ def test_standing_all_marks_the_superseded_item(tmp_path, monkeypatch, capsys):
     d02 does not; without it d01 is absent.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    hq.main(['note', _SLUG, 'decision', '--headline', 'Old way', 'First.'])
-    hq.main(['note', _SLUG, 'decision', '--headline', 'New way', 'Second.'])
-    hq.main(['supersede', _SLUG, 'd01', 'd02'])
+    cli.main(['begin', _SLUG])
+    cli.main(['note', _SLUG, 'decision', '--headline', 'Old way', 'First.'])
+    cli.main(['note', _SLUG, 'decision', '--headline', 'New way', 'Second.'])
+    cli.main(['supersede', _SLUG, 'd01', 'd02'])
     capsys.readouterr()
-    assert hq.main(['standing', _SLUG, '--all']) == 0
+    assert cli.main(['standing', _SLUG, '--all']) == 0
     lines = capsys.readouterr().out.splitlines()
     assert [ln for ln in lines if ln.startswith('[d01]')][0].endswith(
         ' [superseded by d02 in c1]')
     assert [ln for ln in lines if ln.startswith('[d02]')][0].endswith('Second.')
-    assert hq.main(['standing', _SLUG]) == 0
+    assert cli.main(['standing', _SLUG]) == 0
     assert '[d01]' not in capsys.readouterr().out
 
 
 def _chain_of_three(tmp_path, monkeypatch):
     """Build a d01 -> d02 -> d03 supersession chain and return the folder."""
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     for headline, body in (
         ('Store totals per region', 'First.'),
         ('Store totals per city', 'Second.'),
         ('Store totals per block', 'Third.'),
     ):
-        hq.main(['note', _SLUG, 'decision', '--headline', headline, body])
-    hq.main(['supersede', _SLUG, 'd01', 'd02'])
+        cli.main(['note', _SLUG, 'decision', '--headline', headline, body])
+    cli.main(['supersede', _SLUG, 'd01', 'd02'])
     # The second edge lands in a later cycle than the first, so an
     # assertion on the cycle number tells the edge that made d03
     # current from the edge that opened the chain.
     monkeypatch.setenv('HQ_CYCLE', '2')
-    hq.main(['supersede', _SLUG, 'd02', 'd03'])
+    cli.main(['supersede', _SLUG, 'd02', 'd03'])
     return folder
 
 
@@ -669,7 +669,7 @@ def test_standing_id_names_the_end_of_the_chain(tmp_path, monkeypatch, capsys):
     """
     _chain_of_three(tmp_path, monkeypatch)
     capsys.readouterr()
-    assert hq.main(['standing', _SLUG, 'd01']) == 0
+    assert cli.main(['standing', _SLUG, 'd01']) == 0
     line = capsys.readouterr().out.splitlines()[0]
     assert line.endswith(' [superseded by d03 in c2 - d01 -> d02 -> d03]')
 
@@ -684,9 +684,9 @@ def test_standing_id_leaves_the_end_of_the_chain_live(tmp_path, monkeypatch, cap
     """
     _chain_of_three(tmp_path, monkeypatch)
     capsys.readouterr()
-    assert hq.main(['standing', _SLUG, 'd03']) == 0
+    assert cli.main(['standing', _SLUG, 'd03']) == 0
     assert 'superseded' not in capsys.readouterr().out
-    assert hq.main(['standing', _SLUG]) == 0
+    assert cli.main(['standing', _SLUG]) == 0
     ids = [ln[:5] for ln in capsys.readouterr().out.splitlines()]
     assert ids == ['[d03]']
 
@@ -701,7 +701,7 @@ def test_standing_all_names_the_end_of_the_chain(tmp_path, monkeypatch, capsys):
     """
     _chain_of_three(tmp_path, monkeypatch)
     capsys.readouterr()
-    assert hq.main(['standing', _SLUG, '--all']) == 0
+    assert cli.main(['standing', _SLUG, '--all']) == 0
     marked = {
         ln[:5]: ln[ln.rindex(' ['):] for ln in capsys.readouterr().out.splitlines()
         if ln.endswith(']')
@@ -720,7 +720,7 @@ def test_standing_chain_that_loops_back_stops(tmp_path, monkeypatch, capsys):
     ends at d02 under a 2-second alarm.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'standing.md').write_text(
         '- [d01] (c1) **Store totals per region** First.\n'
         '- [d02] (c1) **Store totals per city** Second.\n'
@@ -735,7 +735,7 @@ def test_standing_chain_that_loops_back_stops(tmp_path, monkeypatch, capsys):
     signal.signal(signal.SIGALRM, _alarm)
     signal.alarm(2)
     try:
-        assert hq.main(['standing', _SLUG, 'd01']) == 0
+        assert cli.main(['standing', _SLUG, 'd01']) == 0
     finally:
         signal.alarm(0)
     line = capsys.readouterr().out.splitlines()[0]
@@ -758,21 +758,21 @@ def test_diff_summarizes_a_section_and_expands_it_without_a_cap(
     that line and 61 '- ' lines in file order.
     """
     folder = _root(tmp_path, monkeypatch, cycle='1')
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     body = '\n'.join(f'Line {i:02d}' for i in range(61))
     (folder / 'HANDOFF.md').write_text(
         f'# Handoff: {_SLUG}\n\nWritten: 2026-09-01 | Cycle: 1\n\n'
         f'## Task\n{body}\n')
-    hq.main(['finish', _SLUG, '--log', 'one'])
+    cli.main(['finish', _SLUG, '--log', 'one'])
     monkeypatch.setenv('HQ_CYCLE', '2')
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'HANDOFF.md').write_text(
         f'# Handoff: {_SLUG}\n\nWritten: 2026-09-01 | Cycle: 2\n\n## Task\n')
-    hq.main(['finish', _SLUG, '--log', 'two'])
+    cli.main(['finish', _SLUG, '--log', 'two'])
     capsys.readouterr()
-    assert hq.main(['diff', _SLUG, '1', '2']) == 0
+    assert cli.main(['diff', _SLUG, '1', '2']) == 0
     assert capsys.readouterr().out.splitlines() == ['## Task  -61']
-    assert hq.main(['diff', _SLUG, '1', '2', 'task']) == 0
+    assert cli.main(['diff', _SLUG, '1', '2', 'task']) == 0
     lines = capsys.readouterr().out.splitlines()
     assert lines[0] == '## Task  -61'
     assert lines[1:] == [f'- Line {i:02d}' for i in range(61)]
@@ -783,11 +783,11 @@ def test_diff_summarizes_a_section_and_expands_it_without_a_cap(
 
 def _seed_when(folder, count):
     """Write a ledger holding `count` rows for SPEC.md, cycle 1 upward."""
-    rows = ['\t'.join(hq.LEDGER_FIELDS)]
+    rows = ['\t'.join(ledger.LEDGER_FIELDS)]
     for i in range(1, count + 1):
         row = _row(cycle=str(i), ts='2026-09-01T12:00:00', path='SPEC.md',
                    label=f'label {i}')
-        rows.append('\t'.join(row[f] for f in hq.LEDGER_FIELDS))
+        rows.append('\t'.join(row[f] for f in ledger.LEDGER_FIELDS))
     (folder / 'ledger.tsv').write_text('\n'.join(rows) + '\n')
 
 
@@ -803,7 +803,7 @@ def test_when_prints_every_row_oldest_first(tmp_path, monkeypatch, capsys):
     folder = _root(tmp_path, monkeypatch)
     _seed_when(folder, 31)
     capsys.readouterr()
-    assert hq.main(['when', _SLUG, 'SPEC.md']) == 0
+    assert cli.main(['when', _SLUG, 'SPEC.md']) == 0
     lines = capsys.readouterr().out.splitlines()
     assert len(lines) == 31
     assert lines[0].split('\t')[1] == '1'
@@ -827,7 +827,7 @@ def test_artifacts_block_prints_every_full_row_with_no_cap():
         f'SPEC-{i:02d}.md': _row(path=f'SPEC-{i:02d}.md', cycle=str(i + 1))
         for i in range(43)
         }
-    body = hq.render_artifacts(walk, rows, 'demo', set(rows)).splitlines()
+    body = render.render_artifacts(walk, rows, 'demo', set(rows)).splitlines()
     assert len(body) == 43
     assert sum(1 for ln in body if '  spec  always  ' in ln) == 43
     assert not any(' - hq artifacts ' in ln for ln in body)
@@ -846,12 +846,12 @@ def test_walk_skips_dotfiles_and_infers_a_spec_from_its_heading(
     folder = _root(tmp_path, monkeypatch)
     (folder / '.hidden.md').write_text('# Spec\n')
     (folder / 'overview.md').write_text('# Spec\n\nBody.\n')
-    walk = hq._walk_folder(folder)
+    walk = ledger.walk_folder(folder)
     assert [n for n, _ in walk] == ['overview.md']
     assert walk == [('overview.md', 'spec')]
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     capsys.readouterr()
-    assert hq.main(['artifacts', _SLUG]) == 0
+    assert cli.main(['artifacts', _SLUG]) == 0
     assert 'overview.md  spec?  unstamped' in capsys.readouterr().out
 
 
@@ -865,7 +865,7 @@ def test_an_exact_folder_name_beats_a_longer_prefix_match(
     """
     folder = _root(tmp_path, monkeypatch)
     (folder.parent / 'demo-extra').mkdir()
-    assert hq._find_folder(folder.parent.parent, 'demo') == folder
+    assert storage.find_folder(folder.parent.parent, 'demo') == folder
 
 
 # --- addendum A: the conservation judgment line -----------------------
@@ -890,7 +890,7 @@ def test_adopt_reports_original_lines_the_rewrite_dropped(
         '## Summary\n\n'
         'Do the work.\n'
         'The pipeline drops empty rows.\n')
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     out = capsys.readouterr().out
     assert 'conservation: every original line carried' in out
     assert 'conservation vs HANDOFF.orig.md: 1 lines not carried' in out
@@ -900,7 +900,7 @@ def test_adopt_reports_original_lines_the_rewrite_dropped(
     text = _handoff(other)
     (other / 'HANDOFF.orig.md').write_text(text)
     capsys.readouterr()
-    assert hq.main(['adopt', 'faithful']) == 0
+    assert cli.main(['adopt', 'faithful']) == 0
     assert 'conservation: every original line carried' in capsys.readouterr().out
 
 
@@ -929,7 +929,7 @@ def test_orig_conservation_counts_content_rehomed_into_a_stamped_sibling(
         'The pipeline drops empty rows.\n'
         'Retries are capped at three.\n'
         'The cache is warmed at start.\n')
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     out = capsys.readouterr().out
     assert 'conservation vs HANDOFF.orig.md: 1 lines not carried' in out
     assert '  not carried: The cache is warmed at start.' in out
@@ -948,12 +948,12 @@ def test_slug_resolution_lines_print_on_stdout(tmp_path, monkeypatch, capsys):
     folder = _root(tmp_path, monkeypatch)
     (folder.parent / 'demo-extra').mkdir()
     with pytest.raises(SystemExit):
-        hq.main(['open', 'dem'])
+        cli.main(['open', 'dem'])
     captured = capsys.readouterr()
     assert "hq: ambiguous slug 'dem': " in captured.out
     assert captured.err == ''
     with pytest.raises(SystemExit):
-        hq.main(['open', 'zzz'])
+        cli.main(['open', 'zzz'])
     captured = capsys.readouterr()
     assert "hq: no folder matching 'zzz' under " in captured.out
     assert captured.err == ''
@@ -979,7 +979,7 @@ def test_adopt_resolves_a_repo_relative_pointer_against_the_root(
     (root / 'docs').mkdir()
     (root / 'docs' / 'guide.md').write_text('# Guide\n\none\ntwo\n')
     _handoff(folder, key_files='- `docs/guide.md` Read now: the field guide\n')
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = _ledger(folder)
     guide = [r for r in rows if r['path'].endswith('docs/guide.md')]
     assert len(guide) == 1
@@ -1002,14 +1002,14 @@ def test_the_root_flag_beats_the_environment(tmp_path, monkeypatch, capsys):
     """
     folder = _root(tmp_path, monkeypatch)
     _handoff(folder)
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     other = pathlib.Path(tmp_path) / 'other'
     (other / '.handoff').mkdir(parents=True)
     monkeypatch.setenv('HQ_ROOT', str(other))
     with pytest.raises(SystemExit) as exc:
-        hq.main(['open', _SLUG])
+        cli.main(['open', _SLUG])
     assert exc.value.code == 2
-    assert hq.main(['--root', str(folder.parent.parent), 'open', _SLUG]) == 0
+    assert cli.main(['--root', str(folder.parent.parent), 'open', _SLUG]) == 0
 
 
 # --- wording kept on adoption, and a label with a clause --------------------
@@ -1031,7 +1031,7 @@ def test_adopt_keeps_the_wording_of_an_item_whose_body_opens_with_a_comma(
         '\n## Decisions\n\n'
         '- **Keep the signature**, since every caller passes the literal\n'
         '  and no test changes.\n'))
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     standing = (folder / 'standing.md').read_text()
     assert ('**Keep the signature**, since every caller passes the literal '
             'and no test changes.') in standing
@@ -1054,7 +1054,7 @@ def test_a_key_files_label_with_a_trailing_clause_is_structure(
     _handoff(folder, key_files=(
         'Read now, under `.handoff/demo/` unless noted:\n\n'
         '- `notes-a.md` the facts\n'))
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['notes-a.md']['read_before'] == 'always'
     assert ('- unfiled: Read now, under `.handoff/demo/` unless noted:'
@@ -1080,7 +1080,7 @@ def test_adopt_conservation_reads_through_bold_and_the_moved_log(
         '\n## Log\n\n'
         '- 2026-08-01 (cycle 1): the taxonomy and the baseline;\n'
         '  the first measurement.\n'))
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     out = capsys.readouterr().out
     assert 'conservation: every original line carried' in out, out
 
@@ -1099,7 +1099,7 @@ def test_adopt_splits_a_line_range_off_a_pointer_path(tmp_path, monkeypatch):
     (root / 'docs').mkdir()
     (root / 'docs' / 'guide.md').write_text('# Guide\n\none\ntwo\n')
     _handoff(folder, key_files='- `docs/guide.md:3-4` - the field guide\n')
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     guide = [r for r in _ledger(folder) if r['path'].endswith('docs/guide.md')]
     assert len(guide) == 1
     assert guide[0]['status'] == 'live'

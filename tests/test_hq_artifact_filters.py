@@ -3,7 +3,7 @@
 import pathlib
 from typing import Any
 
-from bin import hq
+from handoff import cli, ledger, storage
 
 _SLUG = 'test-slug'
 _NOW = '2026-09-09T12:00:00'
@@ -45,9 +45,9 @@ def _new_folder(
 
 
 def _run(argv: list, capsys: Any) -> tuple:
-    """Call hq.main and return (rc, stdout).
+    """Call cli.main and return (rc, stdout).
     """
-    rc = hq.main(argv)
+    rc = cli.main(argv)
     out, _ = capsys.readouterr()
     return rc, out
 
@@ -64,7 +64,7 @@ def _write_row(folder: pathlib.Path, path: str, **kwargs: str) -> None:
     **kwargs : str
         Field overrides; anything not named keeps its default.
     """
-    row = dict.fromkeys(hq.LEDGER_FIELDS, '-')
+    row = dict.fromkeys(ledger.LEDGER_FIELDS, '-')
     row.update({
         'cycle': '1',
         'ts': _NOW,
@@ -76,7 +76,8 @@ def _write_row(folder: pathlib.Path, path: str, **kwargs: str) -> None:
         'path': path,
         })
     row.update(kwargs)
-    hq._append_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS, row, hq._LEDGER_HEADER)
+    storage.append_tsv(
+        folder / 'ledger.tsv', ledger.LEDGER_FIELDS, row, ledger.LEDGER_HEADER)
 
 
 def test_status_replaces_the_implicit_live_filter(tmp_path, monkeypatch, capsys):

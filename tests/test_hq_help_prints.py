@@ -9,7 +9,7 @@ import contextlib
 import io
 import pathlib
 
-from bin import hq
+from handoff import cli, help_text, progress
 
 _SLUG = 'help-slug'
 _SESSION = 'session-hp'
@@ -37,7 +37,7 @@ def _run(argv):
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         try:
-            rc = hq.main(argv)
+            rc = cli.main(argv)
         except SystemExit as exc:
             rc = exc.code
     return rc, out.getvalue(), err.getvalue()
@@ -55,7 +55,7 @@ def test_begin_prints_write_topic_after_worklist(tmp_path, monkeypatch):
     rc, out, _ = _run(['begin', _SLUG])
     assert rc == 0
     cycle_line = f'cycle 1 begun by {_SESSION} on {_HOST}'
-    topic = hq.HELP_TOPICS['write']
+    topic = help_text.HELP_TOPICS['write']
     assert cycle_line in out
     assert topic in out
     assert out.index(cycle_line) < out.index(topic)
@@ -80,7 +80,7 @@ def test_refused_begin_prints_no_write_topic(tmp_path, monkeypatch):
     rc, out, _ = _run(['begin', _SLUG])
     assert rc == 1
     assert 'lock held by' in out
-    assert hq.HELP_TOPICS['write'] not in out
+    assert help_text.HELP_TOPICS['write'] not in out
 
 
 def test_open_clean_folder_prints_only_read_topic(tmp_path, monkeypatch):
@@ -97,7 +97,7 @@ def test_open_clean_folder_prints_only_read_topic(tmp_path, monkeypatch):
     _run(['finish', _SLUG, '--log', 'c1'])
     rc, out, _ = _run(['open', _SLUG])
     assert rc == 0
-    assert out == hq.HELP_TOPICS['read'] + '\n'
+    assert out == help_text.HELP_TOPICS['read'] + '\n'
 
 
 def test_open_with_finding_prints_finding_before_read_topic(tmp_path, monkeypatch):
@@ -117,7 +117,7 @@ def test_open_with_finding_prints_finding_before_read_topic(tmp_path, monkeypatc
     (folder / 'SPEC.md').write_text('# Spec\n\n## 1. Scope\n\nchanged\n')
     rc, out, _ = _run(['open', _SLUG])
     assert rc == 0
-    topic = hq.HELP_TOPICS['read']
+    topic = help_text.HELP_TOPICS['read']
     assert out.index('sha moved since stamp: SPEC.md') < out.index(topic)
     assert out.endswith(topic + '\n')
 
@@ -136,7 +136,7 @@ def test_open_not_carried_prints_no_read_topic(tmp_path, monkeypatch):
     rc, out, _ = _run(['open', _SLUG, '--not-carried'])
     assert rc == 0
     assert 'not carried' in out
-    assert hq.HELP_TOPICS['read'] not in out
+    assert help_text.HELP_TOPICS['read'] not in out
 
 
 def test_open_no_handoff_prints_no_read_topic(tmp_path, monkeypatch):
@@ -153,7 +153,7 @@ def test_open_no_handoff_prints_no_read_topic(tmp_path, monkeypatch):
     folder.mkdir(parents=True)
     rc, out, _ = _run(['open', _SLUG])
     assert rc == 0
-    assert hq.HELP_TOPICS['read'] not in out
+    assert help_text.HELP_TOPICS['read'] not in out
 
 
 def test_open_marks_unattended_only_while_loop_dir_exists(tmp_path, monkeypatch):
@@ -175,10 +175,11 @@ def test_open_marks_unattended_only_while_loop_dir_exists(tmp_path, monkeypatch)
     loop_dir.mkdir()
     monkeypatch.setenv('HQ_LOOP', str(loop_dir))
     marker = 'hq loop: no one is watching this session'
-    assert f"'{marker}'" in hq.HELP_TOPICS['read']
+    assert f"'{marker}'" in help_text.HELP_TOPICS['read']
     _, out, _ = _run(['open', _SLUG])
     assert out == (
-        marker + '\n' + hq.LOOP_RULE + '\n' + hq.HELP_TOPICS['read'] + '\n')
+        marker + '\n' + progress.LOOP_RULE + '\n'
+        + help_text.HELP_TOPICS['read'] + '\n')
     loop_dir.rmdir()
     _, out, _ = _run(['open', _SLUG])
-    assert out == hq.HELP_TOPICS['read'] + '\n'
+    assert out == help_text.HELP_TOPICS['read'] + '\n'

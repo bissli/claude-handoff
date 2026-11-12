@@ -11,7 +11,7 @@ import io
 import os
 import pathlib
 
-from bin import hq
+from handoff import cli, ledger, storage
 
 _SLUG = 'stamp-slug'
 _SESSION = 'session-paths'
@@ -39,7 +39,7 @@ def _root(tmp_path, monkeypatch, slug=_SLUG):
 def _rows(folder):
     """Return the ledger's data rows as dicts, header dropped."""
     lines = (folder / 'ledger.tsv').read_text().splitlines()[1:]
-    return [dict(zip(hq.LEDGER_FIELDS, ln.split('\t'))) for ln in lines
+    return [dict(zip(ledger.LEDGER_FIELDS, ln.split('\t'))) for ln in lines
             if ln.strip()]
 
 
@@ -52,17 +52,17 @@ def test_every_spelling_of_one_in_folder_file_shares_one_ledger_key(
     Oracle: the four rows, each read back as ('SPEC.md', 'folder').
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n')
     (folder / 'sub').mkdir()
 
     for token in ('SPEC.md', './SPEC.md', 'sub/../SPEC.md',
                   str(folder / 'SPEC.md')):
-        assert hq.main(['stamp', _SLUG, token, '--where', 'Spec']) == 0, token
+        assert cli.main(['stamp', _SLUG, token, '--where', 'Spec']) == 0, token
 
     rows = _rows(folder)
     assert [(r['path'], r['base']) for r in rows] == [('SPEC.md', 'folder')] * 4
-    assert list(hq.latest_rows(rows)) == ['SPEC.md']
+    assert list(ledger.latest_rows(rows)) == ['SPEC.md']
 
 
 def test_a_backticked_and_dot_slash_successor_keys_on_the_stored_path(
@@ -74,18 +74,18 @@ def test_a_backticked_and_dot_slash_successor_keys_on_the_stored_path(
     Oracle: both spellings exit 1 and leave SPEC.md live at always.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\nOne.\n')
     (folder / 'SPEC2.md').write_text('# Spec\n\nTwo.\n')
-    assert hq.main([
+    assert cli.main([
         'stamp', _SLUG, 'SPEC2.md', '--archive', '--reason', 'parked']) == 0
 
-    assert hq.main(['stamp', _SLUG, 'SPEC.md', '--successor', 'SPEC2.md']) == 1
-    assert hq.main(['stamp', _SLUG, 'SPEC.md', '--successor', './SPEC2.md']) == 1
-    assert hq.main([
+    assert cli.main(['stamp', _SLUG, 'SPEC.md', '--successor', 'SPEC2.md']) == 1
+    assert cli.main(['stamp', _SLUG, 'SPEC.md', '--successor', './SPEC2.md']) == 1
+    assert cli.main([
         'stamp', _SLUG, 'SPEC.md', '--successor', '`SPEC2.md`']) == 1
 
-    current = hq.latest_rows(_rows(folder))['SPEC.md']
+    current = ledger.latest_rows(_rows(folder))['SPEC.md']
     assert (current['status'], current['read_before']) == ('live', 'always')
 
 
@@ -103,22 +103,22 @@ def test_a_root_relative_successor_resolves_as_the_path_does(
     tools = folder.parent.parent / 'tools'
     tools.mkdir()
     (tools / 'old_loader.ps1').write_text('$a = 1\n')
-    hq.main(['begin', _SLUG])
-    assert hq.main([
+    cli.main(['begin', _SLUG])
+    assert cli.main([
         'stamp', _SLUG, 'tools/old_loader.ps1', '--kind', 'draft']) == 0
     (tools / 'old_loader.ps1').rename(tools / 'new_loader.ps1')
-    assert hq.main([
+    assert cli.main([
         'stamp', _SLUG, 'tools/new_loader.ps1', '--kind', 'draft']) == 0
     old_key, new_key = (row['path'] for row in _rows(folder))
     capsys.readouterr()
 
-    assert hq.main([
+    assert cli.main([
         'stamp', _SLUG, 'tools/old_loader.ps1',
         '--successor', 'tools/new_loader.ps1']) == 0
 
     assert (f'hq stamp: tools/new_loader.ps1 -> {new_key} (root)'
             in capsys.readouterr().out)
-    current = hq.latest_rows(_rows(folder))[old_key]
+    current = ledger.latest_rows(_rows(folder))[old_key]
     assert (current['status'], current['read_before'], current['successor']) == (
         'superseded', 'never', new_key)
 
@@ -135,20 +135,20 @@ def test_a_successor_no_base_holds_is_refused_by_name(
     token './tools/absent.py', with the row still live at edit.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'drafts').mkdir()
     (folder / 'drafts' / 'x.py').write_text('x = 1\n')
-    assert hq.main(['stamp', _SLUG, 'drafts/x.py']) == 0
+    assert cli.main(['stamp', _SLUG, 'drafts/x.py']) == 0
     capsys.readouterr()
 
-    assert hq.main([
+    assert cli.main([
         'stamp', _SLUG, 'drafts/x.py', '--successor', './tools/absent.py']) == 1
 
     reason = 'refused: R1: successor tools/absent.py is not another file on disk'
     assert capsys.readouterr().out.strip() == (
         f'hq stamp: {reason}'
         ' - supply a live --successor or --archive --reason, or leave the row gated')
-    current = hq.latest_rows(_rows(folder))['drafts/x.py']
+    current = ledger.latest_rows(_rows(folder))['drafts/x.py']
     assert (current['status'], current['read_before'], current['reason']) == (
         'live', 'edit', reason)
 
@@ -166,12 +166,12 @@ def test_a_relative_token_is_never_searched_in_the_home_directory(
     home = pathlib.Path(tmp_path) / 'home'
     home.mkdir()
     monkeypatch.setenv('HOME', str(home))
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (home / 'SPEC2.md').write_text('# Spec\n\nOutside.\n')
     monkeypatch.chdir(tmp_path)
     capsys.readouterr()
 
-    assert hq.main(['stamp', _SLUG, 'SPEC2.md']) == 2
+    assert cli.main(['stamp', _SLUG, 'SPEC2.md']) == 2
 
     assert f'no such file under {folder}' in capsys.readouterr().out
     assert _rows(folder) == []
@@ -186,11 +186,11 @@ def test_a_path_carrying_a_tab_or_a_newline_is_a_usage_error(
     Oracle: exit 2, the documented line, and a ledger of header only.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     capsys.readouterr()
 
-    assert hq.main(['stamp', _SLUG, 'bad\tname.md']) == 2
-    assert hq.main(['stamp', _SLUG, 'bad\nname.md']) == 2
+    assert cli.main(['stamp', _SLUG, 'bad\tname.md']) == 2
+    assert cli.main(['stamp', _SLUG, 'bad\nname.md']) == 2
 
     out = capsys.readouterr().out
     refusal = 'hq stamp: path may not contain a tab or a line break'
@@ -208,18 +208,19 @@ def test_a_kind_once_declared_spec_keeps_gating_after_an_archive(
     Oracle: the third stamp exits 1 and the current row stays archived.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'plan.txt').write_text('# Plan\n\nBody.\n')
-    assert hq.main(['stamp', _SLUG, 'plan.txt', '--kind', 'spec', '--where', 'Plan']) == 0
-    assert hq.main([
+    assert cli.main(
+        ['stamp', _SLUG, 'plan.txt', '--kind', 'spec', '--where', 'Plan']) == 0
+    assert cli.main([
         'stamp', _SLUG, 'plan.txt', '--archive', '--reason', 'parked',
         '--kind', 'other']) == 0
 
-    assert hq.main([
+    assert cli.main([
         'stamp', _SLUG, 'plan.txt', '--status', 'live',
         '--read-before', 'never']) == 1
 
-    current = hq.latest_rows(_rows(folder))['plan.txt']
+    current = ledger.latest_rows(_rows(folder))['plan.txt']
     assert (current['status'], current['read_before']) == ('archived', 'never')
     assert current['reason'].startswith('refused: ')
 
@@ -235,18 +236,18 @@ def test_a_first_stamp_receipt_seeds_read_before_from_the_kind_table(
     file's own sha12 and line count.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC2.md').write_text('# Spec\n\nTwo.\n')
     (folder / 'notes-a.md').write_text('# A\n\nBody.\n')
-    assert hq.main([
+    assert cli.main([
         'stamp', _SLUG, 'SPEC2.md', '--archive', '--reason', 'parked']) == 0
 
-    assert hq.main([
+    assert cli.main([
         'stamp', _SLUG, 'notes-a.md', '--successor', 'SPEC2.md']) == 1
 
-    receipt = hq.latest_rows(_rows(folder))['notes-a.md']
+    receipt = ledger.latest_rows(_rows(folder))['notes-a.md']
     assert (receipt['kind'], receipt['read_before']) == ('notes', 'never')
-    assert receipt['sha12'] == hq._sha12((folder / 'notes-a.md').read_bytes())
+    assert receipt['sha12'] == storage.sha12((folder / 'notes-a.md').read_bytes())
     assert (receipt['lines'], receipt['label']) == ('3', '-')
 
 
@@ -260,16 +261,16 @@ def test_a_refused_first_stamp_still_puts_the_file_under_r3(
     the path.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\nOne.\n')
     (folder / 'SPEC2.md').write_text('# Spec\n\nTwo.\n')
-    assert hq.main([
+    assert cli.main([
         'stamp', _SLUG, 'SPEC2.md', '--archive', '--reason', 'parked']) == 0
-    assert hq.main(['stamp', _SLUG, 'SPEC.md', '--successor', 'SPEC2.md']) == 1
+    assert cli.main(['stamp', _SLUG, 'SPEC.md', '--successor', 'SPEC2.md']) == 1
     (folder / 'SPEC.md').write_text('# Spec\n\nEdited.\n')
     capsys.readouterr()
 
-    assert hq.main(['finish', _SLUG, '--log', 'c1']) == 1
+    assert cli.main(['finish', _SLUG, '--log', 'c1']) == 1
 
     assert 'R3: SPEC.md sha moved' in capsys.readouterr().out
 
@@ -283,12 +284,12 @@ def test_an_unknown_enum_value_is_a_usage_error_that_writes_nothing(
     Oracle: exit 2 on each of the three, and a ledger of header only.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\nOne.\n')
 
     for flag, value in (('--status', 'Live'), ('--read-before', 'mentions'),
                         ('--kind', 'spce')):
-        assert hq.main(['stamp', _SLUG, 'SPEC.md', flag, value]) == 2, flag
+        assert cli.main(['stamp', _SLUG, 'SPEC.md', flag, value]) == 2, flag
 
     assert _rows(folder) == []
 
@@ -304,14 +305,14 @@ def test_a_batch_line_with_a_bad_value_is_numbered_and_silent_on_stderr(
     row written.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\nOne.\n')
     (folder / 'notes-a.md').write_text('# A\n')
     monkeypatch.setattr(
         'sys.stdin', io.StringIO('SPEC.md --status Live\nnotes-a.md\n'))
     capsys.readouterr()
 
-    assert hq.main(['stamp', _SLUG, '--batch', '-']) == 2
+    assert cli.main(['stamp', _SLUG, '--batch', '-']) == 2
 
     captured = capsys.readouterr()
     assert 'hq stamp: batch line 1 not parsed: SPEC.md --status Live' in (
@@ -331,16 +332,16 @@ def test_a_stamp_with_no_path_is_a_usage_error_in_both_forms(
     whose second line still lands.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'notes-a.md').write_text('# A\n')
 
-    assert hq.main(['stamp', _SLUG]) == 2
+    assert cli.main(['stamp', _SLUG]) == 2
 
     monkeypatch.setattr(
         'sys.stdin', io.StringIO('--label "orphan"\nnotes-a.md\n'))
     capsys.readouterr()
 
-    assert hq.main(['stamp', _SLUG, '--batch', '-']) == 2
+    assert cli.main(['stamp', _SLUG, '--batch', '-']) == 2
 
     out = capsys.readouterr().out
     assert 'hq stamp: batch line 1 not parsed: --label "orphan"' in out
@@ -358,7 +359,7 @@ def test_lines_counts_newline_bytes_and_a_directory_counts_its_files(
     among three directory entries.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'notes-a.md').write_text('a\nb\nc')
     probes = folder / 'probes'
     probes.mkdir()
@@ -366,10 +367,10 @@ def test_lines_counts_newline_bytes_and_a_directory_counts_its_files(
     (probes / '.hidden').write_text('x\n')
     (probes / 'nested').mkdir()
 
-    assert hq.main(['stamp', _SLUG, 'notes-a.md']) == 0
-    assert hq.main(['stamp', _SLUG, 'probes']) == 0
+    assert cli.main(['stamp', _SLUG, 'notes-a.md']) == 0
+    assert cli.main(['stamp', _SLUG, 'probes']) == 0
 
-    live = hq.latest_rows(_rows(folder))
+    live = ledger.latest_rows(_rows(folder))
     assert live['notes-a.md']['lines'] == '2'
     assert live['probes']['lines'] == '1'
 
@@ -384,17 +385,17 @@ def test_both_archive_spellings_write_the_same_status_and_read_before(
     Oracle: the pair of rows, each read back as ('archived', 'never').
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\nOne.\n')
     (folder / 'DESIGN.md').write_text('# Design\n\nTwo.\n')
 
-    assert hq.main([
+    assert cli.main([
         'stamp', _SLUG, 'SPEC.md', '--archive', '--reason', 'obsolete']) == 0
-    assert hq.main([
+    assert cli.main([
         'stamp', _SLUG, 'DESIGN.md', '--status', 'archived',
         '--reason', 'obsolete']) == 0
 
-    live = hq.latest_rows(_rows(folder))
+    live = ledger.latest_rows(_rows(folder))
     assert (live['SPEC.md']['status'], live['SPEC.md']['read_before']) == (
         'archived', 'never')
     assert (live['DESIGN.md']['status'], live['DESIGN.md']['read_before']) == (
@@ -409,14 +410,14 @@ def test_an_uppercase_todo_name_infers_the_todo_kind(tmp_path, monkeypatch):
     Oracle: infer_kind on both spellings, and the stamped row's kind.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'TODO.md').write_text('- one\n')
 
-    assert hq.infer_kind('TODO.md', False, '') == ('todo', 'never')
-    assert hq.infer_kind('todo-list.md', False, '') == ('todo', 'never')
-    assert hq.main(['stamp', _SLUG, 'TODO.md']) == 0
+    assert ledger.infer_kind('TODO.md', False, '') == ('todo', 'never')
+    assert ledger.infer_kind('todo-list.md', False, '') == ('todo', 'never')
+    assert cli.main(['stamp', _SLUG, 'TODO.md']) == 0
 
-    assert hq.latest_rows(_rows(folder))['TODO.md']['kind'] == 'todo'
+    assert ledger.latest_rows(_rows(folder))['TODO.md']['kind'] == 'todo'
 
 
 def test_a_ledger_whose_last_newline_was_lost_does_not_glue_the_next_row(
@@ -428,13 +429,14 @@ def test_a_ledger_whose_last_newline_was_lost_does_not_glue_the_next_row(
     Oracle: three physical lines, each data line exactly thirteen fields.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\nOne.\n')
-    assert hq.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Spec', '--label', 'first']) == 0
+    assert cli.main(
+        ['stamp', _SLUG, 'SPEC.md', '--where', 'Spec', '--label', 'first']) == 0
     ledger = folder / 'ledger.tsv'
     ledger.write_text(ledger.read_text().rstrip('\n'))
 
-    assert hq.main(['stamp', _SLUG, 'SPEC.md', '--label', 'second']) == 0
+    assert cli.main(['stamp', _SLUG, 'SPEC.md', '--label', 'second']) == 0
 
     lines = ledger.read_text().splitlines()
     assert len(lines) == 3
@@ -452,12 +454,13 @@ def test_an_absolute_token_inside_the_folder_is_stored_relative(
     relative spelling, lands on the one 'folder' key.
     """
     folder = _root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'sub').mkdir()
     (folder / 'sub' / 'DESIGN.md').write_text('# Design\n\nOne.\n')
 
-    assert hq.main(['stamp', _SLUG, 'sub/DESIGN.md', '--where', 'Design', '--label', 'sub']) == 0
-    assert hq.main([
+    assert cli.main(
+        ['stamp', _SLUG, 'sub/DESIGN.md', '--where', 'Design', '--label', 'sub']) == 0
+    assert cli.main([
         'stamp', _SLUG, os.path.join(str(folder), 'sub', 'DESIGN.md')]) == 0
 
     rows = _rows(folder)
@@ -482,18 +485,18 @@ def test_read_and_when_find_a_row_by_any_spelling_of_its_path(
     (home / 'repo').mkdir(parents=True)
     monkeypatch.setenv('HOME', str(home))
     (home / 'repo' / 'auth.py').write_text('x = 1\n')
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n')
-    assert hq.main(['stamp', _SLUG, '~/repo/auth.py']) == 0
-    assert hq.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Spec']) == 0
+    assert cli.main(['stamp', _SLUG, '~/repo/auth.py']) == 0
+    assert cli.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Spec']) == 0
     expanded = str(home / 'repo' / 'auth.py')
     capsys.readouterr()
 
-    assert hq.main(['read', _SLUG, expanded]) == 0
+    assert cli.main(['read', _SLUG, expanded]) == 0
     assert capsys.readouterr().out == 'x = 1\n'
-    assert hq.main(['read', _SLUG, 'sub/../SPEC.md']) == 0
+    assert cli.main(['read', _SLUG, 'sub/../SPEC.md']) == 0
     assert capsys.readouterr().out == '# Spec\n\nContent.\n'
-    assert hq.main(['when', _SLUG, expanded]) == 0
+    assert cli.main(['when', _SLUG, expanded]) == 0
     when_lines = capsys.readouterr().out.splitlines()
     assert [ln.split('\t')[0] for ln in when_lines] == ['~/repo/auth.py']
 
@@ -522,31 +525,31 @@ def test_a_first_stamp_of_a_path_the_folder_lacks_is_a_usage_error(
     repo_file = pathlib.Path(tmp_path) / 'root' / 'docs' / 'SPEC-b.md'
     repo_file.parent.mkdir(parents=True)
     repo_file.write_text('# Spec\n\nOutside.\n')
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC2.md').write_text('# Spec\n\nTwo.\n')
     capsys.readouterr()
 
-    assert hq.main(['stamp', _SLUG, 'docs/SPEC-absent.md']) == 2
+    assert cli.main(['stamp', _SLUG, 'docs/SPEC-absent.md']) == 2
 
     out = capsys.readouterr().out
     assert out.startswith(
         f'hq stamp: docs/SPEC-absent.md: no such file under {folder}')
     assert 'not under the folder, the root, or the work dir' in out
     assert _rows(folder) == []
-    assert hq.main(['stamp', _SLUG, str(repo_file), '--where', 'Spec']) == 0
-    assert hq.main([
+    assert cli.main(['stamp', _SLUG, str(repo_file), '--where', 'Spec']) == 0
+    assert cli.main([
         'stamp', _SLUG, 'gone.md', '--status', 'missing', '--label', 'gone']) == 0
-    assert hq.main(['stamp', _SLUG, 'old-SPEC.md', '--successor', 'SPEC2.md']) == 0
-    assert hq.main([
+    assert cli.main(['stamp', _SLUG, 'old-SPEC.md', '--successor', 'SPEC2.md']) == 0
+    assert cli.main([
         'stamp', _SLUG, 'gone2.md', '--archive', '--reason', 'never written']) == 0
-    assert hq.main([
+    assert cli.main([
         'stamp', _SLUG, 'gone3.md', '--status', 'archived', '--reason', 'parked']) == 0
     (folder / 'notes-x.md').write_text('# X\n')
-    assert hq.main(['stamp', _SLUG, 'notes-x.md']) == 0
+    assert cli.main(['stamp', _SLUG, 'notes-x.md']) == 0
     (folder / 'notes-x.md').unlink()
-    assert hq.main(['stamp', _SLUG, 'notes-x.md', '--label', 'gone now']) == 0
+    assert cli.main(['stamp', _SLUG, 'notes-x.md', '--label', 'gone now']) == 0
     capsys.readouterr()
-    assert hq.main(['stamp', _SLUG, str(folder / 'inside-gone.md')]) == 2
+    assert cli.main(['stamp', _SLUG, str(folder / 'inside-gone.md')]) == 2
     assert ('create it first, or record it gone with --status missing'
             in capsys.readouterr().out)
     assert [(r['path'], r['base'], r['status']) for r in _rows(folder)] == [

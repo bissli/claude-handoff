@@ -30,16 +30,16 @@ import sys
 from typing import Any
 
 try:
-    # pytest and mutmut run from the repo root and import the package.
-    from bin import hq
+    # pytest and mutmut put src/ on sys.path (pytest.ini).
+    from handoff import storage, threads
 except ImportError:
-    # Script mode puts scripts/ on sys.path rather than the plugin root,
-    # so reach the program in bin/ by its own path. One branch or the
-    # other binds hq, never both, so a test patching bin.hq patches the
-    # module the hook holds.
-    sys.path.insert(
-        0, str(pathlib.Path(__file__).resolve().parent.parent / 'bin'))
-    import hq
+    # Notes:
+    # - Script mode puts scripts/ on sys.path rather than bin/, so reach
+    #   the package by its own path.
+    # - ../src comes first, since mutmut writes its mutated copy there.
+    plugin_root = pathlib.Path(__file__).resolve().parent.parent
+    sys.path[:0] = [str(plugin_root / 'src'), str(plugin_root / 'bin')]
+    from handoff import storage, threads
 
 STATE_DIR = os.path.expanduser('~/.claude/cache/claude-handoff')
 
@@ -71,12 +71,12 @@ def report(payload: dict[str, Any]) -> int:
         return 0
     session = str(payload.get('session_id') or 'unknown').replace('/', '_')
     try:
-        slug = hq._thread_record(session).read_text(encoding='utf-8').strip()
+        slug = threads.thread_record(session).read_text(encoding='utf-8').strip()
     except OSError:
         return 0
     if not slug:
         return 0
-    name = hq.HANDOFF_DIRNAME
+    name = storage.HANDOFF_DIRNAME
     start = pathlib.Path(str(payload.get('cwd') or '') or '.')
     folder = None
     for candidate in [start, *start.parents]:
@@ -90,13 +90,13 @@ def report(payload: dict[str, Any]) -> int:
     if not handoff.is_file() or (folder / '.hq.lock').exists():
         return 0
     # A thread hq done has closed is no longer anyone's to file.
-    if (folder / hq._DONE_NAME).exists():
+    if (folder / storage.DONE_NAME).exists():
         return 0
-    rows = hq._read_tsv(folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS)
+    rows = storage.read_tsv(folder / 'cycles' / 'manifest.tsv', storage.MANIFEST_FIELDS)
     if not rows:
         return 0
-    current = hq._sha12_path(handoff)
-    if current in {'-', hq.live_sha(rows[-1])}:
+    current = storage.sha12_path(handoff)
+    if current in {'-', storage.live_sha(rows[-1])}:
         return 0
 
     state_dir = pathlib.Path(os.environ.get('HQ_STATE_DIR', STATE_DIR))

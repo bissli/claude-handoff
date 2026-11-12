@@ -9,7 +9,7 @@ import io
 import pathlib
 import re
 
-from bin import hq
+from handoff import cli, ledger, markdown, paths, storage
 
 _SLUG = 'block-base-slug'
 _SESSION = 'session-blocks'
@@ -45,19 +45,19 @@ def _seeded(tmp_path, monkeypatch):
     (folder / 'specs').mkdir(parents=True)
     (folder / 'specs' / 'SPEC.md').write_text(
         '# Spec\n\n## Key scheme\n\nOne key per tenant.\n')
-    assert hq.main(['begin', _SLUG]) == 0
-    assert hq.main([
+    assert cli.main(['begin', _SLUG]) == 0
+    assert cli.main([
         'stamp', _SLUG, 'specs/SPEC.md', '--where', 'Key scheme',
         '--label', 'the cache contract']) == 0
     _cursor(folder)
-    assert hq.main(['finish', _SLUG, '--log', 'c1']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'c1']) == 0
     return root, folder
 
 
 def _block(folder, name):
     """Return the named block's lines below its heading, as rendered."""
     text = (folder / 'HANDOFF.md').read_text()
-    return hq.split_handoff(text)['blocks'][name].splitlines()[1:]
+    return markdown.split_handoff(text)['blocks'][name].splitlines()[1:]
 
 
 def _base_dir(line):
@@ -123,8 +123,8 @@ def test_an_unstamped_entry_resolves_from_the_same_base_as_a_stamped_row(
     (folder / 'probes').mkdir()
     (folder / 'probes' / 'try.py').write_text('x = 1\n')
     monkeypatch.setenv('HQ_CYCLE', '2')
-    assert hq.main(['begin', _SLUG]) == 0
-    assert hq.main(['finish', _SLUG, '--log', 'c2']) == 0
+    assert cli.main(['begin', _SLUG]) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'c2']) == 0
     lines = _block(folder, 'artifacts')
 
     base = lines[0]
@@ -148,12 +148,12 @@ def test_a_work_dir_under_the_root_adds_no_second_base(tmp_path, monkeypatch):
     (root / 'working').mkdir()
     (root / 'working' / 'w.py').write_text('w = 1\n')
     monkeypatch.setenv('HQ_CYCLE', '2')
-    assert hq.main(['begin', _SLUG]) == 0
-    assert hq.main(['work-dir', _SLUG, 'working']) == 0
-    assert hq.main([
+    assert cli.main(['begin', _SLUG]) == 0
+    assert cli.main(['work-dir', _SLUG, 'working']) == 0
+    assert cli.main([
         'stamp', _SLUG, str(root / 'working' / 'w.py'), '--kind', 'draft',
         '--label', 'the loader']) == 0
-    assert hq.main(['finish', _SLUG, '--log', 'c2']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'c2']) == 0
     lines = _block(folder, 'artifacts')
 
     base = lines[0]
@@ -177,17 +177,17 @@ def test_a_work_dir_outside_the_root_keeps_its_own_base(tmp_path, monkeypatch):
     root, folder = _seeded(tmp_path, monkeypatch)
     # The pin has to sit outside the root, and every path a test can make
     # is under the system temp directory the check otherwise refuses.
-    monkeypatch.setattr(hq, '_TEMP_DIRS', ())
+    monkeypatch.setattr(paths, '_TEMP_DIRS', ())
     pin = pathlib.Path(tmp_path) / 'worktree'
     pin.mkdir()
     (pin / 'w.py').write_text('w = 1\n')
     monkeypatch.setenv('HQ_CYCLE', '2')
-    assert hq.main(['begin', _SLUG]) == 0
-    assert hq.main(['work-dir', _SLUG, str(pin)]) == 0
-    assert hq.main([
+    assert cli.main(['begin', _SLUG]) == 0
+    assert cli.main(['work-dir', _SLUG, str(pin)]) == 0
+    assert cli.main([
         'stamp', _SLUG, str(pin / 'w.py'), '--kind', 'draft',
         '--label', 'the loader']) == 0
-    assert hq.main(['finish', _SLUG, '--log', 'c2']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'c2']) == 0
     lines = _block(folder, 'artifacts')
 
     assert lines[0] == f'root {root}; work dir {pin}'
@@ -210,9 +210,9 @@ def test_hq_read_takes_the_path_the_block_prints(tmp_path, monkeypatch, capsys):
     display = _block(folder, 'read')[1].split(':')[0]
     capsys.readouterr()
 
-    assert hq.main(['read', _SLUG, display]) == 0
+    assert cli.main(['read', _SLUG, display]) == 0
     shown = capsys.readouterr().out
-    assert hq.main(['read', _SLUG, 'specs/SPEC.md']) == 0
+    assert cli.main(['read', _SLUG, 'specs/SPEC.md']) == 0
     stored = capsys.readouterr().out
 
     assert display == f'.handoff/{_SLUG}/specs/SPEC.md'
@@ -237,22 +237,22 @@ def test_stamp_takes_the_path_the_block_prints(tmp_path, monkeypatch, capsys):
     (root / 'src' / 'app.py').write_text('x = 1\n')
     display = _block(folder, 'artifacts')[1].split('  ')[0]
     monkeypatch.setenv('HQ_CYCLE', '2')
-    assert hq.main(['begin', _SLUG]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
 
-    assert hq.main(['stamp', _SLUG, display, '--label', 'relabeled twice']) == 0
+    assert cli.main(['stamp', _SLUG, display, '--label', 'relabeled twice']) == 0
     capsys.readouterr()
-    accepted = hq.main(['stamp', _SLUG, 'src/app.py', '--label', 'a repo file'])
+    accepted = cli.main(['stamp', _SLUG, 'src/app.py', '--label', 'a repo file'])
 
-    rows = hq._read_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS)
+    rows = storage.read_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS)
     repo_key = str(root / 'src' / 'app.py')
     assert display == f'.handoff/{_SLUG}/specs/SPEC.md'
-    assert hq.latest_rows(rows)['specs/SPEC.md']['label'] == 'relabeled twice'
+    assert ledger.latest_rows(rows)['specs/SPEC.md']['label'] == 'relabeled twice'
     assert accepted == 0
     assert {row['path'] for row in rows} == {'specs/SPEC.md', repo_key}
     assert {
         row['path'] for row in rows if row['base'] == 'folder'
         } == {'specs/SPEC.md'}
-    assert hq.latest_rows(rows)[repo_key]['base'] == 'abs'
+    assert ledger.latest_rows(rows)[repo_key]['base'] == 'abs'
 
 
 def test_open_reads_a_block_an_older_version_rendered(tmp_path, monkeypatch, capsys):
@@ -270,21 +270,21 @@ def test_open_reads_a_block_an_older_version_rendered(tmp_path, monkeypatch, cap
     handoff = folder / 'HANDOFF.md'
     text = handoff.read_text().replace(f'.handoff/{_SLUG}/specs/', 'specs/')
     for name, heading in (('read', 'Read first'), ('artifacts', 'Artifacts')):
-        body = hq.split_handoff(text)['blocks'][name]
+        body = markdown.split_handoff(text)['blocks'][name]
         text = re.sub(
             f'<!-- hq:{name} [0-9a-f]{{12}} -->',
-            f'<!-- hq:{name} {hq.block_sha(body)} -->', text, count=1)
+            f'<!-- hq:{name} {markdown.block_sha(body)} -->', text, count=1)
     handoff.write_text(text)
     monkeypatch.setenv('HQ_CYCLE', '2')
-    assert hq.main(['begin', _SLUG]) == 0
-    assert hq.main([
+    assert cli.main(['begin', _SLUG]) == 0
+    assert cli.main([
         'stamp', _SLUG, 'specs/SPEC.md', '--label', 'a later label']) == 0
     (folder / 'specs' / 'SPEC.md').write_text(
         '# Spec\n\nPreamble.\n\n## Key scheme\n\nOne key per tenant.\n')
     (folder / '.hq.lock').unlink()
     capsys.readouterr()
 
-    assert hq.main(['open', _SLUG]) == 0
+    assert cli.main(['open', _SLUG]) == 0
 
     out = capsys.readouterr().out
     assert 'block sha mismatch' not in out
@@ -311,21 +311,21 @@ def test_a_batch_line_never_folder_bases_another_slugs_file(
     other.mkdir(parents=True)
     (other / 'x.md').write_text('# Other\n')
     monkeypatch.setenv('HQ_CYCLE', '2')
-    assert hq.main(['begin', _SLUG]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
     monkeypatch.setattr('sys.stdin', io.StringIO(
         f'.handoff/{_SLUG}/specs/SPEC.md --label "the cache contract again"\n'
         '.handoff/other-slug/notes/x.md --label "another thread"\n'))
     capsys.readouterr()
-    assert hq.main(['stamp', _SLUG, '--batch']) == 0
+    assert cli.main(['stamp', _SLUG, '--batch']) == 0
     out = capsys.readouterr().out
 
-    rows = hq._read_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS)
+    rows = storage.read_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS)
     other_key = str(other / 'x.md')
     assert {
         row['path'] for row in rows if row['base'] == 'folder'
         } == {'specs/SPEC.md'}
-    assert hq.latest_rows(rows)[other_key]['base'] == 'abs'
-    assert (hq.latest_rows(rows)['specs/SPEC.md']['label']
+    assert ledger.latest_rows(rows)[other_key]['base'] == 'abs'
+    assert (ledger.latest_rows(rows)['specs/SPEC.md']['label']
             == 'the cache contract again')
     assert f'.handoff/other-slug/notes/x.md -> {other_key} (root)' in out
 
@@ -348,31 +348,31 @@ def test_stamp_takes_the_repo_path_the_block_prints(
     repo_file = root / 'src' / 'app.py'
     repo_file.write_text('x = 1\n')
     monkeypatch.setenv('HQ_CYCLE', '2')
-    assert hq.main(['begin', _SLUG]) == 0
-    assert hq.main([
+    assert cli.main(['begin', _SLUG]) == 0
+    assert cli.main([
         'stamp', _SLUG, str(repo_file), '--read-before', 'never',
         '--label', 'the loader']) == 0
-    assert hq.main(['finish', _SLUG, '--log', 'c2']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'c2']) == 0
     display = next(
         ln.split('  ')[0] for ln in _block(folder, 'artifacts')
         if 'the loader' in ln)
     assert display == 'src/app.py'
 
     monkeypatch.setenv('HQ_CYCLE', '3')
-    assert hq.main(['begin', _SLUG]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
     capsys.readouterr()
-    assert hq.main([
+    assert cli.main([
         'stamp', _SLUG, display, '--label', 'the loader, relabeled']) == 0
 
-    rows = hq._read_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS)
+    rows = storage.read_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS)
     key = str(repo_file)
     assert {row['path'] for row in rows} == {'specs/SPEC.md', key}
-    assert hq.latest_rows(rows)[key]['label'] == 'the loader, relabeled'
+    assert ledger.latest_rows(rows)[key]['label'] == 'the loader, relabeled'
     capsys.readouterr()
-    assert hq.main(['when', _SLUG, display]) == 0
+    assert cli.main(['when', _SLUG, display]) == 0
     when_out = capsys.readouterr().out
     assert when_out.count(key) == 2
-    assert hq.main(['finish', _SLUG, '--log', 'c3']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'c3']) == 0
     assert display in [
         ln.split('  ')[0] for ln in _block(folder, 'artifacts')]
 
@@ -393,26 +393,26 @@ def test_a_repo_row_recorded_missing_by_the_printed_path_stays_one_row(
     repo_file = root / 'src' / 'app.py'
     repo_file.write_text('x = 1\n')
     monkeypatch.setenv('HQ_CYCLE', '2')
-    assert hq.main(['begin', _SLUG]) == 0
-    assert hq.main([
+    assert cli.main(['begin', _SLUG]) == 0
+    assert cli.main([
         'stamp', _SLUG, str(repo_file), '--read-before', 'never',
         '--label', 'the loader']) == 0
-    assert hq.main(['finish', _SLUG, '--log', 'c2']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'c2']) == 0
     display = next(
         ln.split('  ')[0] for ln in _block(folder, 'artifacts')
         if 'the loader' in ln)
     repo_file.unlink()
 
     monkeypatch.setenv('HQ_CYCLE', '3')
-    assert hq.main(['begin', _SLUG]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
     capsys.readouterr()
-    assert hq.main([
+    assert cli.main([
         'stamp', _SLUG, display, '--status', 'missing', '--label', 'gone']) == 0
 
-    rows = hq._read_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS)
+    rows = storage.read_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS)
     key = str(repo_file)
     assert {row['path'] for row in rows} == {'specs/SPEC.md', key}
-    assert hq.latest_rows(rows)[key]['status'] == 'missing'
+    assert ledger.latest_rows(rows)[key]['status'] == 'missing'
 
 
 def test_a_stamp_of_a_pinned_work_dir_path_keys_the_row_when_answers(
@@ -428,33 +428,32 @@ def test_a_stamp_of_a_pinned_work_dir_path_keys_the_row_when_answers(
     root, folder = _seeded(tmp_path, monkeypatch)
     # The pin has to sit outside the root, and every path a test can make
     # is under the system temp directory the check otherwise refuses.
-    monkeypatch.setattr(hq, '_TEMP_DIRS', ())
+    monkeypatch.setattr(paths, '_TEMP_DIRS', ())
     pin = pathlib.Path(tmp_path) / 'worktree'
     pin.mkdir()
     (pin / 'w.py').write_text('w = 1\n')
     monkeypatch.setenv('HQ_CYCLE', '2')
-    assert hq.main(['begin', _SLUG]) == 0
-    assert hq.main(['work-dir', _SLUG, str(pin)]) == 0
-    assert hq.main([
+    assert cli.main(['begin', _SLUG]) == 0
+    assert cli.main(['work-dir', _SLUG, str(pin)]) == 0
+    assert cli.main([
         'stamp', _SLUG, str(pin / 'w.py'), '--kind', 'draft',
         '--label', 'the loader']) == 0
-    assert hq.main(['finish', _SLUG, '--log', 'c2']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'c2']) == 0
     display = next(
         ln.split('  ')[0] for ln in _block(folder, 'artifacts')
         if 'the loader' in ln)
     assert display == 'w.py'
 
     monkeypatch.setenv('HQ_CYCLE', '3')
-    assert hq.main(['begin', _SLUG]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
     capsys.readouterr()
-    assert hq.main([
+    assert cli.main([
         'stamp', _SLUG, display, '--label', 'the loader, relabeled']) == 0
 
-    rows = hq._read_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS)
+    rows = storage.read_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS)
     key = str(pin / 'w.py')
     assert {row['path'] for row in rows} == {'specs/SPEC.md', key}
-    assert hq.latest_rows(rows)[key]['label'] == 'the loader, relabeled'
+    assert ledger.latest_rows(rows)[key]['label'] == 'the loader, relabeled'
     capsys.readouterr()
-    assert hq.main(['when', _SLUG, display]) == 0
+    assert cli.main(['when', _SLUG, display]) == 0
     assert capsys.readouterr().out.count(key) == 2
-

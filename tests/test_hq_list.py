@@ -4,10 +4,11 @@ import datetime
 import os
 import pathlib
 import shutil
+import sys
 import threading
 from typing import Any
 
-from bin import hq
+from handoff import cli, markdown
 
 _SLUG = 'test-slug'
 _SESSION = 'session-abc'
@@ -49,9 +50,9 @@ def _new_root(
 
 
 def _run(argv: list, capsys) -> 'tuple[int, str, str]':
-    """Call hq.main and return (rc, stdout, stderr).
+    """Call cli.main and return (rc, stdout, stderr).
     """
-    rc = hq.main(argv)
+    rc = cli.main(argv)
     out, err = capsys.readouterr()
     return rc, out, err
 
@@ -271,7 +272,7 @@ def test_begin_missing_live_shows_hq_when_hint(tmp_path, monkeypatch, capsys):
     gone_file.write_text('# Gone\n', encoding='utf-8')
     rc_stamp, _, _ = _run(['stamp', _SLUG, 'gone.md'], capsys)
     assert rc_stamp == 0
-    assert hq.main(['finish', _SLUG, '--log', 'c1']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'c1']) == 0
     capsys.readouterr()
     gone_file.unlink()
     monkeypatch.setenv('HQ_CYCLE', '2')
@@ -324,7 +325,7 @@ def test_list_skips_a_fifo_and_a_directory_named_handoff(
     (handoff_root / 'dir-slug' / 'HANDOFF.md').mkdir(parents=True)
     result: list = []
     worker = threading.Thread(
-        target=lambda: result.append(hq.main(['list'])), daemon=True)
+        target=lambda: result.append(cli.main(['list'])), daemon=True)
     worker.start()
     worker.join(5)
     assert not worker.is_alive(), 'list blocked on the FIFO'
@@ -422,7 +423,7 @@ def test_list_truncates_task_to_terminal_width(tmp_path, monkeypatch, capsys):
     _, out, _ = _run(['list'], capsys)
     assert out.splitlines()[2].endswith(task_line.strip())
 
-    monkeypatch.setattr(hq.sys.stdout, 'isatty', lambda: True)
+    monkeypatch.setattr(sys.stdout, 'isatty', lambda: True)
     _, out, _ = _run(['list'], capsys)
     data_line = out.splitlines()[2]
     assert len(data_line) == 60
@@ -531,10 +532,10 @@ def _cycle(root, day: str, session: str, monkeypatch) -> str:
     """
     monkeypatch.setenv('HQ_NOW', f'2026-10-{day}T12:00:00')
     monkeypatch.setenv('HQ_SESSION', session)
-    assert hq.main(['begin', _SLUG]) == 0
-    assert hq.main(['finish', _SLUG, '--log', day]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
+    assert cli.main(['finish', _SLUG, '--log', day]) == 0
     text = (root / '.handoff' / _SLUG / 'HANDOFF.md').read_text()
-    return hq.split_handoff(text)['header']
+    return markdown.split_handoff(text)['header']
 
 
 def test_finish_moves_last_worked_only_for_the_worked_thread(
@@ -551,14 +552,14 @@ def test_finish_moves_last_worked_only_for_the_worked_thread(
     root = _new_root(tmp_path, monkeypatch)
     monkeypatch.setenv('HQ_NOW', '2026-10-01T12:00:00')
     monkeypatch.setenv('HQ_SESSION', 'creator')
-    assert hq.main(['begin', _SLUG]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
     headers = [_cycle(root, '02', 'creator', monkeypatch)]
     monkeypatch.setenv('HQ_CYCLE', '2')
     headers.append(_cycle(root, '03', 'filer', monkeypatch))
     monkeypatch.setenv('HQ_CYCLE', '3')
-    assert hq.main(['open', _SLUG, '--not-carried']) == 0
+    assert cli.main(['open', _SLUG, '--not-carried']) == 0
     headers.append(_cycle(root, '04', 'filer', monkeypatch))
-    assert hq.main(['open', _SLUG]) == 0
+    assert cli.main(['open', _SLUG]) == 0
     monkeypatch.setenv('HQ_CYCLE', '4')
     headers.append(_cycle(root, '05', 'filer', monkeypatch))
     capsys.readouterr()
@@ -603,9 +604,9 @@ def test_begin_rebuild_seeds_last_worked_from_the_manifest(
     (folder / 'HANDOFF.md').unlink()
     (folder / 'ledger.tsv').unlink()
     monkeypatch.setenv('HQ_NOW', '2026-10-09T12:00:00')
-    assert hq.main(['begin', _SLUG]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
     capsys.readouterr()
-    header = hq.split_handoff((folder / 'HANDOFF.md').read_text())['header']
+    header = markdown.split_handoff((folder / 'HANDOFF.md').read_text())['header']
     assert header == 'Written: 2026-10-09 | Cycle: 1 | Last worked: 2026-10-01'
 
 
@@ -621,7 +622,7 @@ def test_the_unknown_session_never_counts_as_worked(
     root = _new_root(tmp_path, monkeypatch)
     monkeypatch.setenv('HQ_NOW', '2026-10-01T12:00:00')
     monkeypatch.setenv('HQ_SESSION', 'unknown')
-    assert hq.main(['begin', _SLUG]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
     header = _cycle(root, '02', 'unknown', monkeypatch)
     capsys.readouterr()
     assert header == 'Written: 2026-10-02 | Cycle: 1 | Last worked: 2026-10-01'
@@ -638,7 +639,7 @@ def test_finish_survives_a_corrupt_worked_record(
     root = _new_root(tmp_path, monkeypatch)
     monkeypatch.setenv('HQ_NOW', '2026-10-01T12:00:00')
     monkeypatch.setenv('HQ_SESSION', 'creator')
-    assert hq.main(['begin', _SLUG]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
     (root / '.handoff' / _SLUG / '.hq.worked').write_bytes(b'\xff\n')
     header = _cycle(root, '02', 'creator', monkeypatch)
     capsys.readouterr()
@@ -657,7 +658,7 @@ def test_an_empty_session_id_never_counts_as_worked(
     monkeypatch.setenv('CLAUDE_CODE_SESSION_ID', '')
     monkeypatch.setenv('HQ_NOW', '2026-10-01T12:00:00')
     monkeypatch.setenv('HQ_SESSION', '')
-    assert hq.main(['begin', _SLUG]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
     header = _cycle(root, '02', '', monkeypatch)
     capsys.readouterr()
     assert header == 'Written: 2026-10-02 | Cycle: 1 | Last worked: 2026-10-01'
@@ -676,18 +677,18 @@ def test_a_housekeeping_open_keeps_the_worked_thread(
     root = _new_root(tmp_path, monkeypatch)
     _cycle(root, '01', 'creator', monkeypatch)
     monkeypatch.setenv('HQ_SESSION', 'other-creator')
-    assert hq.main(['begin', 'other']) == 0
-    assert hq.main(['finish', 'other', '--log', 'made']) == 0
+    assert cli.main(['begin', 'other']) == 0
+    assert cli.main(['finish', 'other', '--log', 'made']) == 0
     monkeypatch.setenv('HQ_SESSION', 'worker')
-    assert hq.main(['open', _SLUG]) == 0
-    assert hq.main(['open', 'other', '--housekeeping']) == 0
+    assert cli.main(['open', _SLUG]) == 0
+    assert cli.main(['open', 'other', '--housekeeping']) == 0
     monkeypatch.setenv('HQ_CYCLE', '2')
     monkeypatch.setenv('HQ_NOW', '2026-10-05T12:00:00')
-    assert hq.main(['begin', 'other']) == 0
-    assert hq.main(['finish', 'other', '--log', 'check: 0 findings applied']) == 0
+    assert cli.main(['begin', 'other']) == 0
+    assert cli.main(['finish', 'other', '--log', 'check: 0 findings applied']) == 0
     header = _cycle(root, '05', 'worker', monkeypatch)
     capsys.readouterr()
-    other = hq.split_handoff(
+    other = markdown.split_handoff(
         (root / '.handoff' / 'other' / 'HANDOFF.md').read_text())['header']
     assert other == 'Written: 2026-10-05 | Cycle: 2 | Last worked: 2026-10-01'
     assert header == 'Written: 2026-10-05 | Cycle: 2 | Last worked: 2026-10-05'
@@ -705,16 +706,16 @@ def test_spin_off_handoffs_keep_their_creation_date(
     root = _new_root(tmp_path, monkeypatch)
     _cycle(root, '01', 'creator', monkeypatch)
     monkeypatch.setenv('HQ_SESSION', 'worker')
-    assert hq.main(['open', _SLUG]) == 0
+    assert cli.main(['open', _SLUG]) == 0
     monkeypatch.setenv('HQ_NOW', '2026-10-03T12:00:00')
     for spin_off in ('spin-a', 'spin-b'):
-        assert hq.main(['begin', spin_off]) == 0
-        assert hq.main(['finish', spin_off, '--log', 'spun off']) == 0
+        assert cli.main(['begin', spin_off]) == 0
+        assert cli.main(['finish', spin_off, '--log', 'spun off']) == 0
     monkeypatch.setenv('HQ_CYCLE', '2')
     header = _cycle(root, '05', 'worker', monkeypatch)
     capsys.readouterr()
     spin_headers = [
-        hq.split_handoff(
+        markdown.split_handoff(
             (root / '.handoff' / slug / 'HANDOFF.md').read_text())['header']
         for slug in ('spin-a', 'spin-b')
         ]
@@ -736,15 +737,15 @@ def test_opening_another_handoff_unseats_the_first(
     _cycle(root, '01', 'creator', monkeypatch)
     monkeypatch.setenv('HQ_SESSION', 'worker')
     monkeypatch.setenv('HQ_NOW', '2026-10-02T12:00:00')
-    assert hq.main(['begin', 'other']) == 0
-    assert hq.main(['finish', 'other', '--log', 'made']) == 0
-    assert hq.main(['open', _SLUG]) == 0
+    assert cli.main(['begin', 'other']) == 0
+    assert cli.main(['finish', 'other', '--log', 'made']) == 0
+    assert cli.main(['open', _SLUG]) == 0
     monkeypatch.setenv('HQ_CYCLE', '2')
     monkeypatch.setenv('HQ_NOW', '2026-10-05T12:00:00')
-    assert hq.main(['begin', 'other']) == 0
-    assert hq.main(['finish', 'other', '--log', 'filed']) == 0
+    assert cli.main(['begin', 'other']) == 0
+    assert cli.main(['finish', 'other', '--log', 'filed']) == 0
     capsys.readouterr()
-    header = hq.split_handoff(
+    header = markdown.split_handoff(
         (root / '.handoff' / 'other' / 'HANDOFF.md').read_text())['header']
     assert header == 'Written: 2026-10-05 | Cycle: 2 | Last worked: 2026-10-02'
 
@@ -761,14 +762,14 @@ def test_done_frees_the_session_for_new_work(tmp_path, monkeypatch, capsys):
     root = _new_root(tmp_path, monkeypatch)
     _cycle(root, '01', 'creator', monkeypatch)
     monkeypatch.setenv('HQ_SESSION', 'worker')
-    assert hq.main(['open', _SLUG]) == 0
-    assert hq.main(['done', _SLUG]) == 0
+    assert cli.main(['open', _SLUG]) == 0
+    assert cli.main(['done', _SLUG]) == 0
     monkeypatch.setenv('HQ_NOW', '2026-10-05T12:00:00')
-    assert hq.main(['begin', 'other']) == 0
+    assert cli.main(['begin', 'other']) == 0
     monkeypatch.setenv('HQ_NOW', '2026-10-06T12:00:00')
-    assert hq.main(['finish', 'other', '--log', 'new work']) == 0
+    assert cli.main(['finish', 'other', '--log', 'new work']) == 0
     capsys.readouterr()
-    header = hq.split_handoff(
+    header = markdown.split_handoff(
         (root / '.handoff' / 'other' / 'HANDOFF.md').read_text())['header']
     assert header == 'Written: 2026-10-06 | Cycle: 1 | Last worked: 2026-10-06'
 
@@ -786,16 +787,16 @@ def test_begin_worked_claims_a_thread_the_session_never_opened(
     root = _new_root(tmp_path, monkeypatch)
     _cycle(root, '01', 'creator', monkeypatch)
     monkeypatch.setenv('HQ_SESSION', 'other-creator')
-    assert hq.main(['begin', 'other']) == 0
-    assert hq.main(['finish', 'other', '--log', 'made']) == 0
+    assert cli.main(['begin', 'other']) == 0
+    assert cli.main(['finish', 'other', '--log', 'made']) == 0
     monkeypatch.setenv('HQ_SESSION', 'worker')
-    assert hq.main(['open', 'other']) == 0
+    assert cli.main(['open', 'other']) == 0
     monkeypatch.setenv('HQ_CYCLE', '2')
     monkeypatch.setenv('HQ_NOW', '2026-10-05T12:00:00')
-    assert hq.main(['begin', _SLUG, '--worked']) == 0
-    assert hq.main(['finish', _SLUG, '--log', 'matched work']) == 0
+    assert cli.main(['begin', _SLUG, '--worked']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'matched work']) == 0
     capsys.readouterr()
-    header = hq.split_handoff(
+    header = markdown.split_handoff(
         (root / '.handoff' / _SLUG / 'HANDOFF.md').read_text())['header']
     assert header == 'Written: 2026-10-05 | Cycle: 2 | Last worked: 2026-10-05'
 
@@ -810,16 +811,16 @@ def test_a_filing_finish_with_no_date_anywhere_writes_today(
     """
     root = _new_root(tmp_path, monkeypatch)
     monkeypatch.setenv('HQ_SESSION', 'creator')
-    assert hq.main(['begin', _SLUG]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
     handoff = root / '.handoff' / _SLUG / 'HANDOFF.md'
     handoff.write_text(''.join(
         'Written: someday | Cycle: 1\n' if ln.startswith('Written:') else ln
         for ln in handoff.read_text().splitlines(keepends=True)))
     monkeypatch.setenv('HQ_SESSION', 'filer')
-    assert hq.main(['begin', _SLUG, '--force']) == 0
-    assert hq.main(['finish', _SLUG, '--log', 'filed']) == 0
+    assert cli.main(['begin', _SLUG, '--force']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'filed']) == 0
     capsys.readouterr()
-    header = hq.split_handoff(handoff.read_text())['header']
+    header = markdown.split_handoff(handoff.read_text())['header']
     written = header.split(' | ')[0].removeprefix('Written: ')
     assert header.endswith(f'| Last worked: {written}')
 
@@ -842,7 +843,7 @@ def test_same_slug_in_another_project_is_not_the_worked_thread(
     _cycle(root_b, '01', 'creator-b', monkeypatch)
     monkeypatch.setenv('HQ_ROOT', str(root_a))
     monkeypatch.setenv('HQ_SESSION', 'worker')
-    assert hq.main(['open', _SLUG]) == 0
+    assert cli.main(['open', _SLUG]) == 0
     monkeypatch.setenv('HQ_ROOT', str(root_b))
     monkeypatch.setenv('HQ_CYCLE', '2')
     header = _cycle(root_b, '05', 'worker', monkeypatch)
@@ -864,7 +865,7 @@ def test_open_succeeds_when_the_state_dir_is_unwritable(
     blocker.write_text('')
     monkeypatch.setenv('HQ_STATE_DIR', str(blocker / 'state'))
     monkeypatch.setenv('HQ_SESSION', 'worker')
-    assert hq.main(['open', _SLUG]) == 0
+    assert cli.main(['open', _SLUG]) == 0
 
 
 def test_an_unwritable_state_dir_still_moves_last_worked(
@@ -882,7 +883,7 @@ def test_an_unwritable_state_dir_still_moves_last_worked(
     blocker.write_text('')
     monkeypatch.setenv('HQ_STATE_DIR', str(blocker / 'state'))
     monkeypatch.setenv('HQ_SESSION', 'worker')
-    assert hq.main(['open', _SLUG]) == 0
+    assert cli.main(['open', _SLUG]) == 0
     monkeypatch.setenv('HQ_CYCLE', '2')
     header = _cycle(root, '05', 'worker', monkeypatch)
     capsys.readouterr()
@@ -901,10 +902,10 @@ def test_a_repeat_claim_leaves_the_worked_record_untouched(
     root = _new_root(tmp_path, monkeypatch)
     _cycle(root, '01', 'creator', monkeypatch)
     monkeypatch.setenv('HQ_SESSION', 'worker')
-    assert hq.main(['open', _SLUG]) == 0
+    assert cli.main(['open', _SLUG]) == 0
     record = root / '.handoff' / _SLUG / '.hq.worked'
     os.utime(record, (0, 0))
-    assert hq.main(['open', _SLUG]) == 0
+    assert cli.main(['open', _SLUG]) == 0
     capsys.readouterr()
     assert record.stat().st_mtime == 0
 
@@ -940,17 +941,17 @@ def test_begin_after_a_lost_ledger_keeps_last_worked(
     """
     root = _new_root(tmp_path, monkeypatch)
     _cycle(root, '01', 'creator', monkeypatch)
-    assert hq.main(['begin', 'other']) == 0
-    assert hq.main(['finish', 'other', '--log', 'spun off']) == 0
+    assert cli.main(['begin', 'other']) == 0
+    assert cli.main(['finish', 'other', '--log', 'spun off']) == 0
     monkeypatch.setenv('HQ_SESSION', 'adopter')
     monkeypatch.setenv('HQ_NOW', '2026-10-07T12:00:00')
     headers = []
     for slug in (_SLUG, 'other'):
         folder = root / '.handoff' / slug
         (folder / 'ledger.tsv').unlink()
-        assert hq.main(['begin', slug]) == 0
+        assert cli.main(['begin', slug]) == 0
         headers.append(
-            hq.split_handoff((folder / 'HANDOFF.md').read_text())['header'])
+            markdown.split_handoff((folder / 'HANDOFF.md').read_text())['header'])
     capsys.readouterr()
     assert [h.split(' | Last worked: ')[1] for h in headers] == ['2026-10-01', '2026-10-01']
 
@@ -968,13 +969,13 @@ def test_begin_worked_overrides_the_spin_off_seed(
     root = _new_root(tmp_path, monkeypatch)
     _cycle(root, '01', 'creator', monkeypatch)
     monkeypatch.setenv('HQ_SESSION', 'worker')
-    assert hq.main(['open', _SLUG]) == 0
+    assert cli.main(['open', _SLUG]) == 0
     monkeypatch.setenv('HQ_NOW', '2026-10-05T12:00:00')
-    assert hq.main(['begin', 'other', '--worked']) == 0
+    assert cli.main(['begin', 'other', '--worked']) == 0
     monkeypatch.setenv('HQ_NOW', '2026-10-06T12:00:00')
-    assert hq.main(['finish', 'other', '--log', 'new work']) == 0
+    assert cli.main(['finish', 'other', '--log', 'new work']) == 0
     capsys.readouterr()
-    header = hq.split_handoff(
+    header = markdown.split_handoff(
         (root / '.handoff' / 'other' / 'HANDOFF.md').read_text())['header']
     assert header == 'Written: 2026-10-06 | Cycle: 1 | Last worked: 2026-10-06'
 
@@ -990,13 +991,13 @@ def test_a_deleted_worked_thread_is_not_live(tmp_path, monkeypatch, capsys):
     root = _new_root(tmp_path, monkeypatch)
     _cycle(root, '01', 'creator', monkeypatch)
     monkeypatch.setenv('HQ_SESSION', 'worker')
-    assert hq.main(['open', _SLUG]) == 0
+    assert cli.main(['open', _SLUG]) == 0
     shutil.rmtree(root / '.handoff' / _SLUG)
     monkeypatch.setenv('HQ_NOW', '2026-10-05T12:00:00')
-    assert hq.main(['begin', 'other']) == 0
+    assert cli.main(['begin', 'other']) == 0
     monkeypatch.setenv('HQ_NOW', '2026-10-06T12:00:00')
-    assert hq.main(['finish', 'other', '--log', 'new work']) == 0
+    assert cli.main(['finish', 'other', '--log', 'new work']) == 0
     capsys.readouterr()
-    header = hq.split_handoff(
+    header = markdown.split_handoff(
         (root / '.handoff' / 'other' / 'HANDOFF.md').read_text())['header']
     assert header == 'Written: 2026-10-06 | Cycle: 1 | Last worked: 2026-10-06'

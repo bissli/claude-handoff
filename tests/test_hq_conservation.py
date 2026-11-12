@@ -5,8 +5,7 @@ labels.
 import pathlib
 
 import pytest
-
-from bin import hq
+from handoff import cli, ledger, storage
 
 _SLUG = 'cons-test'
 _NOW = '2026-09-10T09:00:00'
@@ -77,7 +76,7 @@ def test_conservation_numbered_decisions_carried(tmp_path, monkeypatch, capsys):
             '2. NoSQL was too slow.\n'
         ),
     )
-    rc = hq.main(['adopt', _SLUG])
+    rc = cli.main(['adopt', _SLUG])
     out, _ = capsys.readouterr()
     assert rc == 0
     assert 'conservation: every original line carried' in out
@@ -103,7 +102,7 @@ def test_conservation_kf_label_heading_carried(tmp_path, monkeypatch, capsys):
             '- other-file.py secondary module\n'
         ),
     )
-    rc = hq.main(['adopt', _SLUG])
+    rc = cli.main(['adopt', _SLUG])
     out, _ = capsys.readouterr()
     assert rc == 0
     assert 'conservation: every original line carried' in out
@@ -122,7 +121,7 @@ def test_conservation_reports_a_label_heading_outside_key_files(
     _write_handoff(
         folder,
         extra_sections='\n## Reference only, until the audit clears the ledger:\n')
-    rc = hq.main(['adopt', _SLUG])
+    rc = cli.main(['adopt', _SLUG])
     out, _ = capsys.readouterr()
     assert rc == 0
     assert 'conservation: 1 original lines not carried' in out
@@ -146,14 +145,14 @@ def test_adopt_counts_the_bullets_it_left_unfiled(tmp_path, monkeypatch, capsys)
     _write_handoff(folder, '\n## Background context\n\n- One stray note.\n'
                    '- Another stray note.\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     out = capsys.readouterr().out
     assert '  unfiled: 2 bullets to rehome' in out.splitlines()
     assert out.index('unfiled: 2') < out.index('conservation:')
     clean = _setup(tmp_path, monkeypatch, slug='cons-clean')
     _write_handoff(clean)
-    assert hq.main(['adopt', 'cons-clean']) == 0
+    assert cli.main(['adopt', 'cons-clean']) == 0
     assert 'unfiled:' not in capsys.readouterr().out
 
 
@@ -185,36 +184,36 @@ def test_a_line_moved_into_a_file_stamped_this_cycle_is_carried(
     its grade not edit, so sibling_texts cannot be what passes it.
     """
     folder = _setup(tmp_path, monkeypatch, slug='cons-moved')
-    assert hq.main(['begin', 'cons-moved']) == 0
+    assert cli.main(['begin', 'cons-moved']) == 0
     _set_cursor(folder, _WITH_PARA)
-    assert hq.main(['finish', 'cons-moved', '--log', 'one']) == 0
-    assert hq.main(['begin', 'cons-moved']) == 0
+    assert cli.main(['finish', 'cons-moved', '--log', 'one']) == 0
+    assert cli.main(['begin', 'cons-moved']) == 0
     (folder / 'outputs').mkdir(exist_ok=True)
     (folder / 'outputs' / 'moved.md').write_text('# Moved\n\n' + _MOVED_PARA)
-    assert hq.main([
+    assert cli.main([
         'stamp', 'cons-moved', 'outputs/moved.md',
         '--label', 'the state line this cycle rehomed']) == 0
-    rows = hq._read_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS)
+    rows = storage.read_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS)
     row = {r['path']: r for r in rows}['outputs/moved.md']
     assert (row['kind'], row['read_before']) == ('other', 'never')
     _set_cursor(folder, _WITHOUT_PARA)
     capsys.readouterr()
-    rc = hq.main(['finish', 'cons-moved', '--log', 'two'])
+    rc = cli.main(['finish', 'cons-moved', '--log', 'two'])
     assert rc == 0
     assert 'not carried' not in capsys.readouterr().out
 
     earlier = _setup(tmp_path, monkeypatch, slug='cons-earlier')
-    assert hq.main(['begin', 'cons-earlier']) == 0
+    assert cli.main(['begin', 'cons-earlier']) == 0
     (earlier / 'outputs').mkdir(exist_ok=True)
     (earlier / 'outputs' / 'moved.md').write_text('# Moved\n\n' + _MOVED_PARA)
-    assert hq.main([
+    assert cli.main([
         'stamp', 'cons-earlier', 'outputs/moved.md',
         '--label', 'the state line, stamped a cycle early']) == 0
     _set_cursor(earlier, _WITH_PARA)
-    assert hq.main(['finish', 'cons-earlier', '--log', 'one']) == 0
-    assert hq.main(['begin', 'cons-earlier']) == 0
+    assert cli.main(['finish', 'cons-earlier', '--log', 'one']) == 0
+    assert cli.main(['begin', 'cons-earlier']) == 0
     _set_cursor(earlier, _WITHOUT_PARA)
     capsys.readouterr()
-    rc = hq.main(['finish', 'cons-earlier', '--log', 'two'])
+    rc = cli.main(['finish', 'cons-earlier', '--log', 'two'])
     assert rc == 0
     assert f'  not carried: {_MOVED_PARA.strip()}' in capsys.readouterr().out

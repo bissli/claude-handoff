@@ -9,8 +9,7 @@ import signal
 import threading
 
 import pytest
-
-from bin import hq
+from handoff import cli, help_text, ledger, storage
 
 _SLUG = 'rob-test'
 _NOW = '2026-09-10T09:00:00'
@@ -39,14 +38,14 @@ def _setup(
 def _begin(slug: str, folder: pathlib.Path) -> None:
     """Run begin and assert it created the folder.
     """
-    rc = hq.main(['begin', slug])
+    rc = cli.main(['begin', slug])
     assert rc == 0
     assert folder.is_dir()
 
 
 def _strip_read(out: str) -> str:
     """Remove the appended read topic from open output before comparing."""
-    return out.replace(hq.HELP_TOPICS['read'] + '\n', '')
+    return out.replace(help_text.HELP_TOPICS['read'] + '\n', '')
 
 
 # --- The OSError guard in main ---
@@ -67,7 +66,7 @@ def test_unreadable_ledger_artifacts(tmp_path, monkeypatch, capsys):
     ledger = folder / 'ledger.tsv'
     ledger.chmod(0o000)
     try:
-        rc = hq.main(['artifacts', _SLUG])
+        rc = cli.main(['artifacts', _SLUG])
     finally:
         ledger.chmod(0o644)
     out, err = capsys.readouterr()
@@ -88,7 +87,7 @@ def test_handoff_dir_is_file_begin(tmp_path, monkeypatch, capsys):
     root, folder = _setup(tmp_path, monkeypatch)
     handoff_dir = root / '.handoff'
     handoff_dir.write_text('not a directory')
-    rc = hq.main(['begin', _SLUG])
+    rc = cli.main(['begin', _SLUG])
     out, err = capsys.readouterr()
     assert rc == 1
     assert f'hq: cannot access {folder}: Not a directory' in out
@@ -117,10 +116,10 @@ def test_begin_unreadable_lock(tmp_path, monkeypatch, capsys):
         '## Environment\n\n## Open questions\n\n## Log\n',
         encoding='utf-8')
     (folder / 'ledger.tsv').write_text(
-        '\t'.join(hq.LEDGER_FIELDS) + '\n', encoding='utf-8')
+        '\t'.join(ledger.LEDGER_FIELDS) + '\n', encoding='utf-8')
     (folder / 'standing.md').write_text('', encoding='utf-8')
     (folder / 'cycles' / 'manifest.tsv').write_text(
-        '\t'.join(hq.MANIFEST_FIELDS) + '\n', encoding='utf-8')
+        '\t'.join(storage.MANIFEST_FIELDS) + '\n', encoding='utf-8')
     lock = folder / '.hq.lock'
     lock.write_text(
         f'slug={_SLUG}\nsession=foreign-session\nhost=other\n'
@@ -128,7 +127,7 @@ def test_begin_unreadable_lock(tmp_path, monkeypatch, capsys):
         encoding='utf-8')
     lock.chmod(0o000)
     try:
-        rc = hq.main(['begin', _SLUG])
+        rc = cli.main(['begin', _SLUG])
     finally:
         lock.chmod(0o644)
     out, _ = capsys.readouterr()
@@ -157,7 +156,7 @@ def test_stamp_fifo_prints_error_and_exits_2(tmp_path, monkeypatch, capsys):
     result = {'rc': None}
 
     def _run():
-        result['rc'] = hq.main(['stamp', _SLUG, 'my-pipe'])
+        result['rc'] = cli.main(['stamp', _SLUG, 'my-pipe'])
 
     def _alarm(signum, frame):
         raise TimeoutError('stamp on FIFO did not return - _do_stamp hung')
@@ -191,10 +190,10 @@ def test_diff_identical_cursors_no_output(tmp_path, monkeypatch, capsys):
     _begin(_SLUG, folder)
     capsys.readouterr()
     monkeypatch.setenv('HQ_CYCLE', '1')
-    rc_finish = hq.main(['finish', _SLUG, '--log', 'first cycle done'])
+    rc_finish = cli.main(['finish', _SLUG, '--log', 'first cycle done'])
     capsys.readouterr()
     assert (folder / 'cycles' / 'c01.md').exists()
-    rc = hq.main(['diff', _SLUG, '1', '1'])
+    rc = cli.main(['diff', _SLUG, '1', '1'])
     out, _ = capsys.readouterr()
     assert rc == 0
     assert out == ''
@@ -222,7 +221,7 @@ def test_resolve_root_expands_tilde(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv('HQ_GIT', '0')
     monkeypatch.setenv('HQ_CYCLE', '1')
     monkeypatch.chdir(tmp_path)
-    rc = hq.main(['begin', _SLUG])
+    rc = cli.main(['begin', _SLUG])
     capsys.readouterr()
     assert rc == 0
     expected_folder = fake_home / 'r' / '.handoff' / _SLUG
@@ -245,7 +244,7 @@ def test_slug_with_double_dot_exits_2(tmp_path, monkeypatch, capsys):
     root, folder = _setup(tmp_path, monkeypatch)
     bad_slug = 'has..dots'
     with pytest.raises(SystemExit) as exc:
-        hq.main(['begin', bad_slug])
+        cli.main(['begin', bad_slug])
     out, _ = capsys.readouterr()
     assert exc.value.code == 2
     assert 'hq: invalid slug' in out
@@ -260,7 +259,7 @@ def test_slug_single_dot_still_valid(tmp_path, monkeypatch, capsys):
     """
     root, _ = _setup(tmp_path, monkeypatch)
     good_slug = 'has.dots'
-    rc = hq.main(['begin', good_slug])
+    rc = cli.main(['begin', good_slug])
     capsys.readouterr()
     assert rc == 0
     assert (root / '.handoff' / good_slug).is_dir()
@@ -294,7 +293,7 @@ def test_begin_force_takes_over_an_unreadable_lock(tmp_path, monkeypatch, capsys
         encoding='utf-8')
     lock.chmod(0o000)
     try:
-        rc = hq.main(['begin', '--force', _SLUG])
+        rc = cli.main(['begin', '--force', _SLUG])
     finally:
         if lock.exists():
             lock.chmod(0o644)
@@ -317,7 +316,7 @@ def test_begin_refuses_a_foreign_lock_before_adopt(tmp_path, monkeypatch, capsys
         f'slug={_SLUG}\nsession=foreign-session\nhost=other\n'
         f'time={_NOW}\ncycle=1\n',
         encoding='utf-8')
-    rc = hq.main(['begin', _SLUG])
+    rc = cli.main(['begin', _SLUG])
     out, _ = capsys.readouterr()
     assert rc == 1
     assert 'hq begin: lock held by foreign-session' in out
@@ -336,7 +335,7 @@ def test_unknown_user_in_a_tilde_root_keeps_the_literal_path(
     monkeypatch.setenv('HQ_GIT', '0')
     monkeypatch.chdir(tmp_path)
     with pytest.raises(SystemExit) as exit_info:
-        hq.main(['--root', '~nosuchuser12345/x', 'open', 'nosuch'])
+        cli.main(['--root', '~nosuchuser12345/x', 'open', 'nosuch'])
     out, _ = capsys.readouterr()
     assert exit_info.value.code == 2
     assert "no folder matching 'nosuch' under ~nosuchuser12345/x/.handoff" in out
@@ -356,15 +355,15 @@ def test_unreadable_gated_artifact_is_not_a_moved_sha(
     _begin(_SLUG, folder)
     spec = folder / 'SPEC-x.md'
     spec.write_text('# Spec\n\nBody.\n', encoding='utf-8')
-    assert hq.main(['stamp', _SLUG, 'SPEC-x.md', '--where', 'Spec']) == 0
+    assert cli.main(['stamp', _SLUG, 'SPEC-x.md', '--where', 'Spec']) == 0
     spec.chmod(0o000)
     # Drain begin/stamp output so opened captures only what open prints.
     capsys.readouterr()
     try:
-        hq.main(['open', _SLUG])
+        cli.main(['open', _SLUG])
         opened, _ = capsys.readouterr()
         opened = _strip_read(opened)
-        hq.main(['finish', _SLUG, '--log', 'x'])
+        cli.main(['finish', _SLUG, '--log', 'x'])
         finished, _ = capsys.readouterr()
     finally:
         spec.chmod(0o644)
@@ -385,8 +384,8 @@ def test_access_error_without_a_path_prints_a_placeholder(
     def _raise(argv):
         raise OSError('boom')
 
-    monkeypatch.setattr(hq, '_resolve_root', _raise)
-    rc = hq.main(['open', _SLUG])
+    monkeypatch.setattr(storage, 'resolve_root', _raise)
+    rc = cli.main(['open', _SLUG])
     out, _ = capsys.readouterr()
     assert rc == 1
     assert out == 'hq: cannot access ?: OSError\n'
@@ -416,9 +415,9 @@ def test_root_resolves_to_the_ancestor_holding_the_handoff_dir(
     deep.mkdir(parents=True)
     for cwd in (folder, probes, deep):
         monkeypatch.chdir(cwd)
-        assert hq.main(['open', _SLUG]) == 0, f'open failed from {cwd}'
+        assert cli.main(['open', _SLUG]) == 0, f'open failed from {cwd}'
         capsys.readouterr()
-        assert hq.main(['list']) == 0
+        assert cli.main(['list']) == 0
         assert capsys.readouterr().out.splitlines()[2].startswith(f'{_SLUG}  ')
 
 
@@ -451,7 +450,7 @@ def test_finish_archives_before_it_truncates_the_handoff(
         return real_write_text(self, data, *args, **kwargs)
 
     monkeypatch.setattr(pathlib.Path, 'write_text', failing_write_text)
-    rc = hq.main(['finish', _SLUG, '--log', 'first cycle done'])
+    rc = cli.main(['finish', _SLUG, '--log', 'first cycle done'])
     out, _ = capsys.readouterr()
     assert rc == 1
     assert 'No space left on device' in out

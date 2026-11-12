@@ -18,7 +18,7 @@ import contextlib
 import io
 import pathlib
 
-from bin import hq
+from handoff import cli, ledger, markdown, storage
 
 _SLUG = 'anchor-slug'
 _SESSION = 'session-narrow'
@@ -91,12 +91,12 @@ def _env(tmp_path, monkeypatch):
 
 
 def _run(argv):
-    """Drive hq.main over one argument list and return its exit and stdout.
+    """Drive cli.main over one argument list and return its exit and stdout.
     """
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         try:
-            rc = hq.main(argv)
+            rc = cli.main(argv)
         except SystemExit as exc:
             rc = exc.code
     return rc, out.getvalue()
@@ -132,8 +132,8 @@ def _stamped_wide(tmp_path, monkeypatch):
 def _latest(folder, path):
     """Return the newest ledger row for one stored path.
     """
-    rows = hq._read_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS)
-    return hq.latest_rows(rows)[path]
+    rows = storage.read_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS)
+    return ledger.latest_rows(rows)[path]
 
 
 def test_narrowing_an_anchor_set_keeps_the_row_live_and_gated(
@@ -288,8 +288,8 @@ def test_a_sub_heading_anchors_without_its_parent_section(
     runs 29-51, through both sub-headings to the line before '## 5. CI',
     while Deferred alone runs 46-48 and Not planned 49-51.
     """
-    spans, unresolved = hq.resolve_where(_SPEC_TEXT, ['s4'])
+    spans, unresolved = markdown.resolve_where(_SPEC_TEXT, ['s4'])
     assert (spans, unresolved) == ([(29, 51)], [])
-    spans, unresolved = hq.resolve_where(
+    spans, unresolved = markdown.resolve_where(
         _SPEC_TEXT, ['Deferred', 'Not planned'])
     assert (spans, unresolved) == ([(46, 48), (49, 51)], [])

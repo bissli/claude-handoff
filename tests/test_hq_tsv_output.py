@@ -2,7 +2,7 @@
 
 import pathlib
 
-from bin import hq
+from handoff import ledger, storage
 
 
 def test_append_tsv_folds_control_chars_in_values(tmp_path: pathlib.Path) -> None:
@@ -14,12 +14,12 @@ def test_append_tsv_folds_control_chars_in_values(tmp_path: pathlib.Path) -> Non
     Oracle: _read_tsv returns exactly one data row; the label and reason
     fields read back with spaces, not the original control characters.
     """
-    ledger = tmp_path / 'ledger.tsv'
-    row = dict.fromkeys(hq.LEDGER_FIELDS, '-')
+    ledger_path = tmp_path / 'ledger.tsv'
+    row = dict.fromkeys(ledger.LEDGER_FIELDS, '-')
     row['label'] = 'line1\nline2'
     row['reason'] = 'tab\there'
-    hq._append_tsv(ledger, hq.LEDGER_FIELDS, row, hq._LEDGER_HEADER)
-    rows = hq._read_tsv(ledger, hq.LEDGER_FIELDS)
+    storage.append_tsv(ledger_path, ledger.LEDGER_FIELDS, row, ledger.LEDGER_HEADER)
+    rows = storage.read_tsv(ledger_path, ledger.LEDGER_FIELDS)
     assert len(rows) == 1
     assert rows[0]['label'] == 'line1 line2'
     assert rows[0]['reason'] == 'tab here'

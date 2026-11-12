@@ -9,7 +9,7 @@ import os
 import pathlib
 from typing import Any
 
-from bin import hq
+from handoff import cli, markdown
 
 _SLUG = 'reach-slug'
 _SESSION = 'session-reach'
@@ -67,12 +67,12 @@ def _new_root(
 
 
 def _run(argv: list[str]) -> tuple[int, str, str]:
-    """Invoke hq.main() and return (exit_code, stdout, stderr).
+    """Invoke cli.main() and return (exit_code, stdout, stderr).
 
     Parameters
     ----------
     argv : list[str]
-        Argument list passed to hq.main.
+        Argument list passed to cli.main.
 
     Returns
     -------
@@ -82,7 +82,7 @@ def _run(argv: list[str]) -> tuple[int, str, str]:
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         try:
-            rc = hq.main(argv)
+            rc = cli.main(argv)
         except SystemExit as exc:
             rc = exc.code
     return rc, out.getvalue(), err.getvalue()
@@ -97,9 +97,9 @@ def test_whole_prints_past_the_anchored_span(tmp_path, monkeypatch):
     equals (folder / 'SPEC.md').read_text().splitlines().
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text(_SPEC_TEXT)
-    assert hq.main(['stamp', _SLUG, 'SPEC.md', '--where', 's1']) == 0
+    assert cli.main(['stamp', _SLUG, 'SPEC.md', '--where', 's1']) == 0
 
     rc, out, _ = _run(['read', _SLUG, 'SPEC.md', '--whole'])
 
@@ -114,19 +114,19 @@ def test_section_resolves_an_anchor_the_row_does_not_carry(tmp_path, monkeypatch
     is called on s1 and s3 content never appears in stdout; or the
     section's own span counting as the row's required content, so reading
     one section discharges the obligation to read another.
-    Oracle: hq.resolve_where(text, ['s3']) computed in the test, compared
+    Oracle: markdown.resolve_where(text, ['s3']) computed in the test, compared
     with stdout; s1 heading absent from output confirms isolation, and
     the remedy line names the bare form that reads s1.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text(_SPEC_TEXT)
-    assert hq.main(['stamp', _SLUG, 'SPEC.md', '--where', 's1']) == 0
+    assert cli.main(['stamp', _SLUG, 'SPEC.md', '--where', 's1']) == 0
 
     rc, out, _ = _run(['read', _SLUG, 'SPEC.md', '--section', 's3'])
 
     assert rc == 0
-    spans, unresolved = hq.resolve_where(_SPEC_TEXT, ['s3'])
+    spans, unresolved = markdown.resolve_where(_SPEC_TEXT, ['s3'])
     assert not unresolved
     file_lines = _SPEC_TEXT.splitlines()
     expected = '\n'.join(
@@ -148,9 +148,9 @@ def test_section_takes_the_joined_anchor_grammar(tmp_path, monkeypatch):
     concatenated in anchor order (s2 first, Risks second).
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text(_SPEC_TEXT)
-    assert hq.main(['stamp', _SLUG, 'SPEC.md', '--where', 's1']) == 0
+    assert cli.main(['stamp', _SLUG, 'SPEC.md', '--where', 's1']) == 0
 
     rc, out, _ = _run(['read', _SLUG, 'SPEC.md', '--section', 's2;Risks'])
 
@@ -175,9 +175,9 @@ def test_an_unresolved_section_earns_no_receipt_and_exits_zero(tmp_path, monkeyp
     anchor answers, and no receipt file at all.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text(_SPEC_TEXT)
-    assert hq.main(['stamp', _SLUG, 'SPEC.md', '--where', 's1']) == 0
+    assert cli.main(['stamp', _SLUG, 'SPEC.md', '--where', 's1']) == 0
 
     rc, out, _ = _run(['read', _SLUG, 'SPEC.md', '--section', 'Ghost'])
 
@@ -201,9 +201,9 @@ def test_the_receipt_follows_the_content_the_row_requires(
     holds it twice after --whole and still twice after --section s3.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text(_SPEC_TEXT)
-    assert hq.main(['stamp', _SLUG, 'SPEC.md', '--where', 's1']) == 0
+    assert cli.main(['stamp', _SLUG, 'SPEC.md', '--where', 's1']) == 0
 
     assert _run(['read', _SLUG, 'SPEC.md'])[0] == 0
     assert _run(['read', _SLUG, 'SPEC.md', '--whole'])[0] == 0
@@ -225,9 +225,9 @@ def test_whole_with_section_is_refused_and_writes_nothing(tmp_path, monkeypatch)
     path in HQ_STATE_DIR.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text(_SPEC_TEXT)
-    assert hq.main(['stamp', _SLUG, 'SPEC.md', '--where', 's1']) == 0
+    assert cli.main(['stamp', _SLUG, 'SPEC.md', '--where', 's1']) == 0
 
     rc, out, _ = _run(['read', _SLUG, 'SPEC.md', '--whole', '--section', 's1'])
 

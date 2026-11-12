@@ -6,8 +6,7 @@ import pathlib
 import re
 
 import pytest
-
-from bin import hq
+from handoff import cli, render
 
 _SLUG = 'acme'
 
@@ -27,16 +26,16 @@ def _root(tmp_path, monkeypatch):
 
 
 def _run(argv, stdin=None):
-    """Call hq.main, returning (rc, stdout) with SystemExit caught."""
+    """Call cli.main, returning (rc, stdout) with SystemExit caught."""
     out = io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
         try:
             if stdin is not None:
                 with pytest.MonkeyPatch.context() as patch:
                     patch.setattr('sys.stdin', io.StringIO(stdin))
-                    rc = hq.main(argv)
+                    rc = cli.main(argv)
             else:
-                rc = hq.main(argv)
+                rc = cli.main(argv)
         except SystemExit as exc:
             rc = exc.code
     return rc, out.getvalue()
@@ -279,7 +278,7 @@ def test_uncited_evidence_is_counted_and_cited_evidence_prints_whole():
         _item('e01', 'measured: Cap is 3', 'source: docs'),
         _item('e02', 'measured: Cap holds', 'source: run-07'),
         ]
-    block = hq.render_standing(items, set(), _SLUG, whole_ids={'e01'})
+    block = render.render_standing(items, set(), _SLUG, whole_ids={'e01'})
     assert block.splitlines() == [
         '### Evidence',
         '[e01] (c1) **measured: Cap is 3**  +12c - hq standing acme e01',
@@ -294,12 +293,12 @@ def test_the_count_line_is_plural_and_absent_when_all_are_cited():
     Oracle: two uncited items, then both cited.
     """
     items = [_item('e01', 'measured: A'), _item('e02', 'measured: B')]
-    block = hq.render_standing(items, set(), _SLUG, whole_ids=set())
+    block = render.render_standing(items, set(), _SLUG, whole_ids=set())
     assert block.splitlines() == [
         '### Evidence',
         '+2 live evidence items - hq standing acme --kind evidence --grep <word>',
         ]
-    block = hq.render_standing(items, set(), _SLUG, whole_ids={'e01', 'e02'})
+    block = render.render_standing(items, set(), _SLUG, whole_ids={'e01', 'e02'})
     assert '+' not in ''.join(ln for ln in block.splitlines() if 'live evidence' in ln)
     assert not [ln for ln in block.splitlines() if 'live evidence' in ln]
 
@@ -315,11 +314,11 @@ def test_contradicted_by_marks_a_cited_item_until_the_contradictor_retires():
         _item('e01', 'asserted: Cap is 3', 'source: docs'),
         _item('e03', 'inferred: Cap is 5', 'source: x; contradicts [e01]'),
         ]
-    block = hq.render_standing(items, set(), _SLUG, whole_ids={'e01'})
+    block = render.render_standing(items, set(), _SLUG, whole_ids={'e01'})
     assert (
         '[e01] (c1) **asserted: Cap is 3** contradicted by [e03]'
         '  +12c - hq standing acme e01') in block.splitlines()
-    block = hq.render_standing(items, {'e03'}, _SLUG, whole_ids={'e01'})
+    block = render.render_standing(items, {'e03'}, _SLUG, whole_ids={'e01'})
     assert 'contradicted by' not in block
 
 
@@ -336,7 +335,7 @@ def test_contradicted_by_lists_each_contradictor_once_in_id_order():
         _item('e99', 'measured: Cap is 4',
               'contradicts [e01] in run-09; contradicts [e01]'),
         ]
-    block = hq.render_standing(items, set(), _SLUG, whole_ids={'e01'})
+    block = render.render_standing(items, set(), _SLUG, whole_ids={'e01'})
     assert block.splitlines()[1].startswith(
         '[e01] (c1) **asserted: Cap is 3** contradicted by [e99, e100]  +')
 
@@ -349,9 +348,9 @@ def test_evidence_never_sets_the_general_closing_line():
     uncited decision, whose closing line stays last.
     """
     items = [_item('d01', 'Cap at 3', ''), _item('e01', 'measured: Cap is 3')]
-    block = hq.render_standing(items, set(), _SLUG, whole_ids={'d01'})
+    block = render.render_standing(items, set(), _SLUG, whole_ids={'d01'})
     assert 'prints any item above whole' not in block
-    block = hq.render_standing(items, set(), _SLUG, whole_ids=set())
+    block = render.render_standing(items, set(), _SLUG, whole_ids=set())
     assert block.splitlines()[-1] == 'hq standing acme <id> prints any item above whole'
 
 

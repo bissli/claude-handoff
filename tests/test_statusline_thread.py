@@ -10,8 +10,7 @@ SCRIPTS = os.path.join(HERE, '..', 'scripts')
 sys.path.insert(0, SCRIPTS)
 
 import statusline as sl  # noqa: E402  (path must be set before this resolves)
-
-from bin import hq  # noqa: E402  (same)
+from handoff import cli, threads  # noqa: E402  (same)
 
 _SESSION = 'session-abc'
 _HOST = 'test-host'
@@ -127,7 +126,7 @@ def test_open_records_the_resolved_folder_not_the_typed_prefix(
     auth-refresh must record auth-refresh.
     """
     _root(tmp_path, monkeypatch, 'auth-refresh')
-    assert hq.main(['open', 'auth']) == 0
+    assert cli.main(['open', 'auth']) == 0
     record = tmp_path / f'{_SESSION}.thread'
     assert record.read_text().strip() == 'auth-refresh'
 
@@ -144,8 +143,8 @@ def test_a_query_against_another_thread_does_not_move_the_session(
     """
     folder = _root(tmp_path, monkeypatch, 'auth-refresh')
     (folder.parent / 'rate-limits').mkdir(parents=True, exist_ok=True)
-    assert hq.main(['open', 'auth-refresh']) == 0
-    hq.main(['artifacts', 'rate-limits'])
+    assert cli.main(['open', 'auth-refresh']) == 0
+    cli.main(['artifacts', 'rate-limits'])
     record = tmp_path / f'{_SESSION}.thread'
     assert record.read_text().strip() == 'auth-refresh'
 
@@ -171,7 +170,7 @@ def test_a_write_that_dies_midway_leaves_the_last_whole_slug(
         raise OSError('disk full')
 
     monkeypatch.setattr(pathlib.Path, 'write_text', half_then_die)
-    hq._record_thread(_SESSION, 'rate-limits')
+    threads.record_thread(_SESSION, 'rate-limits')
     monkeypatch.undo()
     assert record.read_text().strip() == 'auth-refresh'
     assert not list(tmp_path.glob(f'{_SESSION}.thread.*'))
@@ -189,8 +188,8 @@ def test_done_takes_the_session_off_the_thread_it_finished(
     directory.
     """
     _root(tmp_path, monkeypatch, 'auth-refresh')
-    assert hq.main(['open', 'auth-refresh']) == 0
-    assert hq.main(['done', 'auth-refresh']) == 0
+    assert cli.main(['open', 'auth-refresh']) == 0
+    assert cli.main(['done', 'auth-refresh']) == 0
     assert not (tmp_path / f'{_SESSION}.thread').exists()
     line = _visible(_SESSION, '/x/myproject', tmp_path, monkeypatch)
     assert line.endswith('opus myproject')
@@ -208,8 +207,8 @@ def test_done_on_a_neighbor_leaves_the_session_where_it_is(
     """
     folder = _root(tmp_path, monkeypatch, 'auth-refresh')
     (folder.parent / 'rate-limits').mkdir(parents=True, exist_ok=True)
-    assert hq.main(['open', 'auth-refresh']) == 0
-    assert hq.main(['done', 'rate-limits']) == 0
+    assert cli.main(['open', 'auth-refresh']) == 0
+    assert cli.main(['done', 'rate-limits']) == 0
     record = tmp_path / f'{_SESSION}.thread'
     assert record.read_text().strip() == 'auth-refresh'
 
@@ -224,10 +223,10 @@ def test_undo_reopens_without_dropping_the_slug(tmp_path, monkeypatch):
     thread; the record must survive both.
     """
     _root(tmp_path, monkeypatch, 'auth-refresh')
-    assert hq.main(['open', 'auth-refresh']) == 0
-    assert hq.main(['done', 'auth-refresh']) == 0
-    assert hq.main(['open', 'auth-refresh']) == 0
-    assert hq.main(['done', 'auth-refresh', '--undo']) == 0
+    assert cli.main(['open', 'auth-refresh']) == 0
+    assert cli.main(['done', 'auth-refresh']) == 0
+    assert cli.main(['open', 'auth-refresh']) == 0
+    assert cli.main(['done', 'auth-refresh', '--undo']) == 0
     record = tmp_path / f'{_SESSION}.thread'
     assert record.read_text().strip() == 'auth-refresh'
 
@@ -246,5 +245,5 @@ def test_a_refused_begin_puts_the_session_on_no_thread(
     (folder / '.hq.lock').write_text(
         f'slug={folder.name}\nsession=other-session\nhost=other-host\n'
         'time=2026-09-09T11:30:00\ncycle=1\n')
-    assert hq.main(['begin', 'auth-refresh']) == 1
+    assert cli.main(['begin', 'auth-refresh']) == 1
     assert not (tmp_path / f'{_SESSION}.thread').exists()

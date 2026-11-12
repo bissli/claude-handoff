@@ -11,7 +11,7 @@ import os
 import pathlib
 import stat
 
-from bin import hq
+from handoff import carry, cli, ledger, standing, storage
 
 _SLUG = 'settle'
 _NOW = '2026-09-10T12:00:00'
@@ -32,11 +32,11 @@ def _root(tmp_path, monkeypatch, cycle='1'):
 
 
 def _run(argv):
-    """Call hq.main, returning (rc, stdout) with SystemExit caught."""
+    """Call cli.main, returning (rc, stdout) with SystemExit caught."""
     out = io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
         try:
-            rc = hq.main(argv)
+            rc = cli.main(argv)
         except SystemExit as exc:
             rc = exc.code
     return rc, out.getvalue()
@@ -132,7 +132,8 @@ def test_status_archived_without_a_reason_is_a_usage_error(
     assert (folder / 'ledger.tsv').read_bytes() == before
     assert _run(['stamp', _SLUG, 'notes-x.md', '--status', 'archived',
                  '--reason', 'done'])[0] == 0
-    rows = hq.latest_rows(hq._read_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS))
+    rows = ledger.latest_rows(
+        storage.read_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS))
     row = rows['notes-x.md']
     assert (row['status'], row['read_before']) == ('archived', 'never')
 
@@ -157,11 +158,11 @@ def test_adopt_and_stamp_count_a_directory_the_same_way(
         f'# Handoff: {_SLUG}\n\nWritten: 2026-09-01 | Cycle: 1\n\n'
         '## Task\nT.\n\n## Now\nN.\n')
     assert _run(['adopt', _SLUG])[0] == 0
-    rows = hq._read_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS)
+    rows = storage.read_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS)
     assert [r['lines'] for r in rows if r['path'] == 'probes'] == ['2']
     assert _run(['begin', _SLUG])[0] == 0
     assert _run(['stamp', _SLUG, 'probes', '--label', 'probes'])[0] == 0
-    rows = hq._read_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS)
+    rows = storage.read_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS)
     assert [r['lines'] for r in rows if r['path'] == 'probes'] == ['2', '2']
 
 
@@ -245,11 +246,11 @@ def test_collisions_ignore_stopwords_and_short_tokens():
     Now step starting with `The` collides with any heading holding `the`.
     Oracle: hand-computed - only `Warmup` survives as a term.
     """
-    terms = hq._extract_terms(
+    terms = carry.extract_terms(
         'Rework the Warmup path. The 2 steps, `2` arms, `ka` and Every case.')
     assert 'Warmup' in terms
     assert not {'The', 'Every', 'the', '2', 'ka'} & terms
-    assert hq._extract_terms('the `Warmup` bucket') == {'Warmup'}
+    assert carry.extract_terms('the `Warmup` bucket') == {'Warmup'}
 
 
 def test_extract_terms_drops_the_common_now_step_words():
@@ -261,10 +262,10 @@ def test_extract_terms_drops_the_common_now_step_words():
     Oracle: hand-computed - the bare words return no term, the backticked
     form still returns the token.
     """
-    assert hq._extract_terms('Then build it, Phase 0.') == set()
-    assert hq._extract_terms('Update the State machine.') == set()
-    assert hq._extract_terms('Run the Build step.') == set()
-    assert hq._extract_terms('Update the `State` machine.') == {'State'}
+    assert carry.extract_terms('Then build it, Phase 0.') == set()
+    assert carry.extract_terms('Update the State machine.') == set()
+    assert carry.extract_terms('Run the Build step.') == set()
+    assert carry.extract_terms('Update the `State` machine.') == {'State'}
 
 
 # --- final review round ------------------------------------------------------
@@ -289,7 +290,9 @@ def test_a_label_line_with_a_clause_grades_and_is_filed(tmp_path, monkeypatch):
         '- `notes-a.md` the facts\n')
     rc, out = _run(['adopt', _SLUG])
     assert rc == 0
-    rows = {r['path']: r for r in hq._read_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS)}
+    rows = {
+        r['path']: r
+        for r in storage.read_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS)}
     assert rows['notes-a.md']['read_before'] == 'always'
     text = (folder / 'HANDOFF.md').read_text()
     assert '- unfiled: Read now, and note the cache module is the tricky one:' in text
@@ -307,9 +310,9 @@ def test_conservation_never_passes_an_empty_line_vacuously():
     label is structure.
     """
     original = '## Key files\n\nRead now:\n- ****\n- SPEC.md\n'
-    missing = hq.conservation(original, '## Task\nT.\n', '', [])
+    missing = carry.conservation(original, '## Task\nT.\n', '', [])
     assert missing == ['## Key files', '- ****', '- SPEC.md']
-    carried = hq.conservation(original, '## Task\nT.\n', '', ['SPEC.md'])
+    carried = carry.conservation(original, '## Task\nT.\n', '', ['SPEC.md'])
     assert carried == ['- ****']
 
 
@@ -334,7 +337,9 @@ def test_a_loose_bullet_closes_the_open_pointer(tmp_path, monkeypatch):
         '- a loose word bullet\n'
         '  - the sub-bullet of the loose word bullet\n')
     assert _run(['adopt', _SLUG])[0] == 0
-    rows = {r['path']: r for r in hq._read_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS)}
+    rows = {
+        r['path']: r
+        for r in storage.read_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS)}
     assert rows['SPEC.md']['label'] == 'the spec label text'
     text = (folder / 'HANDOFF.md').read_text()
     # Parent and child are joined into one unfiled bullet.
@@ -368,7 +373,9 @@ def test_bare_range_and_extensionless_pointers_are_pointers(tmp_path, monkeypatc
         '- SPEC.md:3-6 the numbered span\n'
         '- Makefile the build entry points\n')
     assert _run(['adopt', _SLUG])[0] == 0
-    rows = {r['path']: r for r in hq._read_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS)}
+    rows = {
+        r['path']: r
+        for r in storage.read_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS)}
     assert rows['SPEC.md']['label'] == 'lines 3-6; the numbered span'
     assert rows['Makefile']['label'] == 'the build entry points'
     assert '- unfiled:' not in (folder / 'HANDOFF.md').read_text()
@@ -381,11 +388,11 @@ def test_note_line_joins_a_terminator_without_a_space():
     before the terminator and then reports the bullet not carried.
     Oracle: hand-computed lines for `!`, `?`, `,` and a plain word.
     """
-    assert hq._note_line('', 'decision', 'Ship it', '! Then go home.', 2) == (
+    assert standing.note_line('', 'decision', 'Ship it', '! Then go home.', 2) == (
         '- [d01] (c2) **Ship it**! Then go home.')
-    assert hq._note_line('', 'decision', 'Really', '? Yes.', 2) == (
+    assert standing.note_line('', 'decision', 'Really', '? Yes.', 2) == (
         '- [d01] (c2) **Really**? Yes.')
-    assert hq._note_line('', 'decision', 'Keep', 'the rest', 2) == (
+    assert standing.note_line('', 'decision', 'Keep', 'the rest', 2) == (
         '- [d01] (c2) **Keep** the rest')
 
 
@@ -410,7 +417,8 @@ def test_stamp_on_an_unreadable_directory_does_not_raise(tmp_path, monkeypatch):
     finally:
         locked.chmod(0o755)
     assert rc == 0
-    rows = hq.latest_rows(hq._read_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS))
+    rows = ledger.latest_rows(
+        storage.read_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS))
     row = rows['locked']
     assert row['lines'] == '0'
 

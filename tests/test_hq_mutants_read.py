@@ -11,7 +11,7 @@ import os
 import pathlib
 from typing import Any
 
-from bin import hq
+from handoff import cli, help_text, ledger, markdown, render, storage, threads
 
 _SLUG = 'test-slug'
 _SESSION = 'session-abc'
@@ -41,7 +41,7 @@ def _new_root(
 
 def _strip_read(out: str) -> str:
     """Remove the appended read topic from open output before comparing."""
-    return out.replace(hq.HELP_TOPICS['read'] + '\n', '')
+    return out.replace(help_text.HELP_TOPICS['read'] + '\n', '')
 
 
 def _handoff(folder: 'pathlib.Path', cycle: int = 1) -> None:
@@ -61,7 +61,7 @@ def _handoff(folder: 'pathlib.Path', cycle: int = 1) -> None:
 
 def _row(**overrides: Any) -> dict:
     """Build a full ledger row dict with the given overrides."""
-    row = dict.fromkeys(hq.LEDGER_FIELDS, '-')
+    row = dict.fromkeys(ledger.LEDGER_FIELDS, '-')
     row.update({
         'cycle': '1', 'base': 'folder', 'kind': 'spec', 'status': 'live',
         'read_before': 'always', 'label': 'a label',
@@ -84,7 +84,7 @@ def test_resolve_where_ignorecase_extracts_number_from_uppercase_heading():
     Oracle: spans is non-empty; the anchor resolves to the right line range.
     """
     text = '# Doc\n\n## S4: Field mapping\n\nContent.\n'
-    spans, unresolved = hq.resolve_where(text, ['s4'])
+    spans, unresolved = markdown.resolve_where(text, ['s4'])
     assert not unresolved, f'unexpected unresolved: {unresolved}'
     assert len(spans) == 1
     assert spans[0] == (3, 5)
@@ -99,7 +99,7 @@ def test_resolve_where_ignorecase_matches_uppercase_s_anchor():
     Oracle: with anchor 'S4' and heading '## s4: Title', spans is non-empty.
     """
     text = '# Doc\n\n## s4: Field mapping\n\nContent.\n'
-    spans, unresolved = hq.resolve_where(text, ['S4'])
+    spans, unresolved = markdown.resolve_where(text, ['S4'])
     assert not unresolved, f'unexpected unresolved: {unresolved}'
     assert len(spans) == 1
     assert spans[0] == (3, 5)
@@ -120,15 +120,15 @@ def test_block_sha_rstrips_not_lstrips_each_line():
     """
     indented = '## Title\n\n    indented content\n'
     stripped_leading = '## Title\n\nindented content\n'
-    sha_orig = hq.block_sha(indented)
-    sha_no_indent = hq.block_sha(stripped_leading)
+    sha_orig = markdown.block_sha(indented)
+    sha_no_indent = markdown.block_sha(stripped_leading)
     # The two inputs normalize differently, so their shas must differ.
     assert sha_orig != sha_no_indent, (
         'block_sha does not preserve leading spaces - lstrip mutant undetectable'
     )
     # Also verify: trailing-space normalization does not alter the hash.
     trailing = '## Title\n\n    indented content   \n'
-    assert hq.block_sha(trailing) == sha_orig
+    assert markdown.block_sha(trailing) == sha_orig
 
 
 # ------------------------------------------------------------------
@@ -145,7 +145,7 @@ def test_render_read_unsized_path_shows_a_dash():
     Oracle: hand-computed output for a path absent from the sizes dict.
     """
     rows = [_row(where='-', path='notes.md', label='the notes')]
-    result = hq.render_read(rows, spans={}, sizes={})
+    result = render.render_read(rows, spans={}, sizes={})
     assert result == 'notes.md  (-)  the notes'
 
 
@@ -157,7 +157,7 @@ def test_render_read_missing_span_path_uses_empty_list():
     Oracle: a path absent from spans dict renders as 'path:?  (size)  label'.
     """
     rows = [_row(where='SomeSection', path='spec.md', label='the spec')]
-    result = hq.render_read(rows, spans={}, sizes={'spec.md': '12 tok'})
+    result = render.render_read(rows, spans={}, sizes={'spec.md': '12 tok'})
     assert result == 'spec.md:?  (12 tok)  the spec'
 
 
@@ -176,7 +176,7 @@ def test_render_artifacts_prints_every_unstamped_entry_with_no_cap():
     """
     walk = [(f'file{i:02d}.md', 'spec') for i in range(41)]
     rows: dict = {}
-    lines = hq.render_artifacts(
+    lines = render.render_artifacts(
         walk, rows, slug='demo', whole_paths=set()).splitlines()
     assert len(lines) == 41
     assert all(ln.endswith('  spec?  unstamped') for ln in lines)
@@ -207,7 +207,7 @@ def test_render_standing_prints_every_live_item_and_no_superseded_line():
     items = _make_items(80, 'c')
     superseded_ids = {items[-1]['id']}
     whole_ids = {item['id'] for item in items}
-    lines = hq.render_standing(
+    lines = render.render_standing(
         items, superseded_ids, slug='demo', whole_ids=whole_ids).splitlines()
     assert len(lines) == 80
     assert lines[0] == '### Constraints'
@@ -233,7 +233,7 @@ def test_read_tsv_continues_past_empty_line(tmp_path):
         'v4\tv5\tv6\n',
         encoding='utf-8',
     )
-    rows = hq._read_tsv(tsv, fields)
+    rows = storage.read_tsv(tsv, fields)
     assert len(rows) == 2, f'Expected 2 data rows, got {len(rows)}'
     assert rows[0] == {'a': 'v1', 'b': 'v2', 'c': 'v3'}
     assert rows[1] == {'a': 'v4', 'b': 'v5', 'c': 'v6'}
@@ -252,7 +252,7 @@ def test_norm_heading_strips_uppercase_s_prefix_with_ignorecase():
     'title', breaking anchor lookup for such headings.
     Oracle: _norm_heading('## S4: Field mapping') == 'field mapping'.
     """
-    result = hq._norm_heading('## S4: Field mapping')
+    result = markdown._norm_heading('## S4: Field mapping')
     assert result == 'field mapping', (
         f'Expected "field mapping", got {result!r}'
     )
@@ -268,12 +268,12 @@ def test_open_no_handoff_returns_zero(tmp_path, monkeypatch):
 
     Mutation: x__verb_open__mutmut_35 changes return 0 to return 1 in the
     no-HANDOFF.md branch, so a fresh folder reports failure.
-    Oracle: hq.main(['open', slug]) == 0 when folder exists but has no
+    Oracle: cli.main(['open', slug]) == 0 when folder exists but has no
     HANDOFF.md (immediately after mkdir, before begin).
     """
     folder = _new_root(tmp_path, monkeypatch)
     folder.mkdir(parents=True)
-    assert hq.main(['open', _SLUG]) == 0
+    assert cli.main(['open', _SLUG]) == 0
 
 
 def test_open_reports_witness_warnings_when_manifest_exists(
@@ -286,10 +286,10 @@ def test_open_reports_witness_warnings_when_manifest_exists(
     prints a line starting 'WARNING: W1'.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'spec.md').write_text('# Spec\n\nContent.\n')
-    hq.main(['stamp', _SLUG, 'spec.md'])
-    hq.main(['finish', _SLUG, '--log', 'c1'])
+    cli.main(['stamp', _SLUG, 'spec.md'])
+    cli.main(['finish', _SLUG, '--log', 'c1'])
     # Corrupt the ledger to trigger W1.
     ledger_path = folder / 'ledger.tsv'
     original = ledger_path.read_bytes()
@@ -299,7 +299,7 @@ def test_open_reports_witness_warnings_when_manifest_exists(
     ledger_path.write_bytes(bytes(corrupted))
     capsys.readouterr()
 
-    hq.main(['open', _SLUG])
+    cli.main(['open', _SLUG])
 
     out = capsys.readouterr().out
     assert 'WARNING: W1' in out
@@ -321,7 +321,7 @@ def test_open_prints_lock_cycle_and_owner(tmp_path, monkeypatch, capsys):
     _handoff(folder)
     capsys.readouterr()
 
-    hq.main(['open', _SLUG])
+    cli.main(['open', _SLUG])
 
     out = capsys.readouterr().out
     assert 'cycle 7' in out, f'cycle value missing: {out!r}'
@@ -339,14 +339,14 @@ def test_open_reports_ledger_behind_when_file_cycle_ahead(
     Oracle: HANDOFF.md with cycle=2 and manifest at cycle=1 -> 'LEDGER BEHIND'.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    hq.main(['finish', _SLUG, '--log', 'c1'])
+    cli.main(['begin', _SLUG])
+    cli.main(['finish', _SLUG, '--log', 'c1'])
     # Rewrite HANDOFF.md header to claim cycle=2.
     hf = folder / 'HANDOFF.md'
     hf.write_text(hf.read_text().replace('Cycle: 1', 'Cycle: 2'))
     capsys.readouterr()
 
-    hq.main(['open', _SLUG])
+    cli.main(['open', _SLUG])
 
     assert 'LEDGER BEHIND' in capsys.readouterr().out
 
@@ -360,8 +360,8 @@ def test_open_skips_git_drift_when_header_has_wrong_key(
     Oracle: HANDOFF.md header with a specific branch@sha -> drift reported.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    hq.main(['finish', _SLUG, '--log', 'c1'])
+    cli.main(['begin', _SLUG])
+    cli.main(['finish', _SLUG, '--log', 'c1'])
     # Rewrite the header line to embed branch@sha.
     hf = folder / 'HANDOFF.md'
     hf.write_text(
@@ -400,8 +400,8 @@ def test_open_git_drift_uses_lowercase_pattern(tmp_path, monkeypatch, capsys):
          'commit', '-q', '--allow-empty', '-m', 'init'],
         cwd=root, check=True)
     monkeypatch.setenv('HQ_GIT', '1')
-    hq.main(['begin', _SLUG])
-    hq.main(['finish', _SLUG, '--log', 'c1'])
+    cli.main(['begin', _SLUG])
+    cli.main(['finish', _SLUG, '--log', 'c1'])
     # Overwrite the header sha with 'deadbeef0000' so it differs.
     hf = folder / 'HANDOFF.md'
     content = hf.read_text()
@@ -414,7 +414,7 @@ def test_open_git_drift_uses_lowercase_pattern(tmp_path, monkeypatch, capsys):
     hf.write_text(content)
     capsys.readouterr()
 
-    hq.main(['open', _SLUG])
+    cli.main(['open', _SLUG])
 
     assert 'git drift' in _strip_read(capsys.readouterr().out)
 
@@ -438,8 +438,8 @@ def test_open_git_drift_branch_and_sha_assigned_correctly(
          'commit', '-q', '--allow-empty', '-m', 'init'],
         cwd=root, check=True)
     monkeypatch.setenv('HQ_GIT', '1')
-    hq.main(['begin', _SLUG])
-    hq.main(['finish', _SLUG, '--log', 'c1'])
+    cli.main(['begin', _SLUG])
+    cli.main(['finish', _SLUG, '--log', 'c1'])
     hf = folder / 'HANDOFF.md'
     content = hf.read_text()
     import re
@@ -451,7 +451,7 @@ def test_open_git_drift_branch_and_sha_assigned_correctly(
     hf.write_text(content)
     capsys.readouterr()
 
-    hq.main(['open', _SLUG])
+    cli.main(['open', _SLUG])
 
     out = _strip_read(capsys.readouterr().out)
     assert 'git drift' in out
@@ -474,8 +474,8 @@ def test_open_git_drift_and_vs_or_in_condition(tmp_path, monkeypatch, capsys):
          'commit', '-q', '--allow-empty', '-m', 'init'],
         cwd=root, check=True)
     monkeypatch.setenv('HQ_GIT', '1')
-    hq.main(['begin', _SLUG])
-    hq.main(['finish', _SLUG, '--log', 'c1'])
+    cli.main(['begin', _SLUG])
+    cli.main(['finish', _SLUG, '--log', 'c1'])
     hf = folder / 'HANDOFF.md'
     content = hf.read_text()
     import re
@@ -492,7 +492,7 @@ def test_open_git_drift_and_vs_or_in_condition(tmp_path, monkeypatch, capsys):
     hf.write_text(content)
     capsys.readouterr()
 
-    hq.main(['open', _SLUG])
+    cli.main(['open', _SLUG])
 
     assert 'git drift' in _strip_read(capsys.readouterr().out)
 
@@ -507,8 +507,8 @@ def test_open_git_drift_not_fired_when_cur_branch_is_dash(
     Oracle: with HQ_GIT=0 (branch='-') and a mismatching header, no 'git drift'.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    hq.main(['finish', _SLUG, '--log', 'c1'])
+    cli.main(['begin', _SLUG])
+    cli.main(['finish', _SLUG, '--log', 'c1'])
     hf = folder / 'HANDOFF.md'
     content = hf.read_text()
     import re
@@ -521,7 +521,7 @@ def test_open_git_drift_not_fired_when_cur_branch_is_dash(
     capsys.readouterr()
 
     # HQ_GIT=0 -> anch['branch'] = '-' -> drift check skipped.
-    hq.main(['open', _SLUG])
+    cli.main(['open', _SLUG])
 
     assert 'git drift' not in _strip_read(capsys.readouterr().out)
 
@@ -536,8 +536,8 @@ def test_open_block_sha_pattern_matches_lowercase_hex(
     Oracle: after tampering with block body, open reports 'block sha mismatch'.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    hq.main(['finish', _SLUG, '--log', 'c1'])
+    cli.main(['begin', _SLUG])
+    cli.main(['finish', _SLUG, '--log', 'c1'])
     hf = folder / 'HANDOFF.md'
     # Tamper with a block body inside the markers.
     content = hf.read_text()
@@ -551,7 +551,7 @@ def test_open_block_sha_pattern_matches_lowercase_hex(
     hf.write_text(content)
     capsys.readouterr()
 
-    hq.main(['open', _SLUG])
+    cli.main(['open', _SLUG])
 
     assert 'block sha mismatch' in capsys.readouterr().out
 
@@ -567,14 +567,14 @@ def test_open_read_block_body_default_empty_string(
     read block written yet); open exits 0 with no AttributeError.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\n## Overview\n\nDetails.\n')
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Overview',
+    cli.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Overview',
              '--read-before', 'always'])
     # No finish - so no block tags in HANDOFF.md.
     capsys.readouterr()
 
-    ret = hq.main(['open', _SLUG])
+    ret = cli.main(['open', _SLUG])
 
     assert ret == 0
     out = capsys.readouterr().out
@@ -595,15 +595,15 @@ def test_open_filter_skips_non_live_rows_with_or_not_and(
     processed and its path is read; with 'or', it is skipped.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\n## Overview\n\nDetails.\n')
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Overview',
+    cli.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Overview',
              '--read-before', 'always'])
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--successor', 'SPEC2.md'])
-    hq.main(['finish', _SLUG, '--log', 'c1'])
+    cli.main(['stamp', _SLUG, 'SPEC.md', '--successor', 'SPEC2.md'])
+    cli.main(['finish', _SLUG, '--log', 'c1'])
     capsys.readouterr()
 
-    ret = hq.main(['open', _SLUG])
+    ret = cli.main(['open', _SLUG])
 
     assert ret == 0
 
@@ -618,19 +618,19 @@ def test_open_span_loop_continues_past_non_live_rows(
     the second row's unresolved anchor is still reported.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'NOTES.md').write_text('# Notes\n\nContent.\n')
     (folder / 'SPEC.md').write_text('# Spec\n\n## Overview\n\nDetails.\n')
     # Stamp NOTES first (will be superseded -> non-live), then SPEC.
-    hq.main(['stamp', _SLUG, 'NOTES.md', '--read-before', 'always',
+    cli.main(['stamp', _SLUG, 'NOTES.md', '--read-before', 'always',
              '--where', 'NoSuchHeading'])
-    hq.main(['stamp', _SLUG, 'NOTES.md', '--successor', 'NOTES2.md'])
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--read-before', 'always',
+    cli.main(['stamp', _SLUG, 'NOTES.md', '--successor', 'NOTES2.md'])
+    cli.main(['stamp', _SLUG, 'SPEC.md', '--read-before', 'always',
              '--where', 'MissingSection'])
-    hq.main(['finish', _SLUG, '--log', 'c1'])
+    cli.main(['finish', _SLUG, '--log', 'c1'])
     capsys.readouterr()
 
-    hq.main(['open', _SLUG])
+    cli.main(['open', _SLUG])
 
     out = capsys.readouterr().out
     # SPEC.md has 'MissingSection' which won't resolve -> 'unresolved anchor'.
@@ -647,18 +647,18 @@ def test_open_span_loop_continues_past_where_dash_rows(
     'MissingAnchor'; only the second triggers 'unresolved anchor'.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'NOTES.md').write_text('# Notes\n\nContent.\n')
     (folder / 'SPEC.md').write_text('# Spec\n\n## Overview\n\nDetails.\n')
-    hq.main(['stamp', _SLUG, 'NOTES.md', '--read-before', 'always'])
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--read-before', 'always',
+    cli.main(['stamp', _SLUG, 'NOTES.md', '--read-before', 'always'])
+    cli.main(['stamp', _SLUG, 'SPEC.md', '--read-before', 'always',
              '--where', 'MissingSection'])
-    hq.main(['finish', _SLUG, '--log', 'c1'])
+    cli.main(['finish', _SLUG, '--log', 'c1'])
     # In live dict, NOTES has where='-', SPEC has where='MissingSection'.
     # Dict iteration order is insertion order; NOTES inserted first.
     capsys.readouterr()
 
-    hq.main(['open', _SLUG])
+    cli.main(['open', _SLUG])
 
     out = capsys.readouterr().out
     assert 'unresolved anchor in SPEC.md' in out
@@ -674,18 +674,18 @@ def test_open_span_loop_continues_when_file_missing(
     anchor; 'unresolved anchor' for the second file is still reported.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'GONE.md').write_text('# Gone\n')
     (folder / 'SPEC.md').write_text('# Spec\n\n## Overview\n\nDetails.\n')
-    hq.main(['stamp', _SLUG, 'GONE.md', '--read-before', 'always',
+    cli.main(['stamp', _SLUG, 'GONE.md', '--read-before', 'always',
              '--where', 'SomeSection'])
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--read-before', 'always',
+    cli.main(['stamp', _SLUG, 'SPEC.md', '--read-before', 'always',
              '--where', 'MissingSection'])
-    hq.main(['finish', _SLUG, '--log', 'c1'])
+    cli.main(['finish', _SLUG, '--log', 'c1'])
     (folder / 'GONE.md').unlink()
     capsys.readouterr()
 
-    hq.main(['open', _SLUG])
+    cli.main(['open', _SLUG])
 
     out = capsys.readouterr().out
     assert 'unresolved anchor in SPEC.md' in out
@@ -702,12 +702,12 @@ def test_open_span_loop_continues_in_inner_line_scan(
     anchor must still trigger 'span moved'.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text(
         '# Spec\n\n## Alpha\n\na\n\n## Beta\n\nb\n')
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--read-before', 'always',
+    cli.main(['stamp', _SLUG, 'SPEC.md', '--read-before', 'always',
              '--where', 'Beta'])
-    hq.main(['finish', _SLUG, '--log', 'c1'])
+    cli.main(['finish', _SLUG, '--log', 'c1'])
     # The read block body in HANDOFF.md looks like:
     #   SPEC.md:7-9  a label
     # Insert a non-matching line before the data line by directly editing.
@@ -725,7 +725,7 @@ def test_open_span_loop_continues_in_inner_line_scan(
         '# Spec\n\n## Alpha\n\na\nb\nc\n\n## Beta\n\nb\n')
     capsys.readouterr()
 
-    hq.main(['open', _SLUG])
+    cli.main(['open', _SLUG])
 
     assert 'span moved' in capsys.readouterr().out
 
@@ -750,7 +750,7 @@ def test_open_span_comparison_uses_correct_parts_indices(
     reported. Trigger this.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     # Craft a SPEC.md with a heading at line 3 that spans to line 9 (7 lines).
     (folder / 'SPEC.md').write_text(
         '# Spec\n'
@@ -763,9 +763,9 @@ def test_open_span_comparison_uses_correct_parts_indices(
         'd\n'
         'e\n'
     )
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--read-before', 'always',
+    cli.main(['stamp', _SLUG, 'SPEC.md', '--read-before', 'always',
              '--where', 'Beta'])
-    hq.main(['finish', _SLUG, '--log', 'c1'])
+    cli.main(['finish', _SLUG, '--log', 'c1'])
     # Beta spans 3-9. Move it so new start is 9 and end is 9 by padding above.
     # Stored: 3-9. New: Beta at line 9, end=9 (only 1 line). old_spans=[(3,9)]
     # new_spans=[(9,9)]. Original: (3,9)!=(9,9) -> report.
@@ -784,7 +784,7 @@ def test_open_span_comparison_uses_correct_parts_indices(
     )
     capsys.readouterr()
 
-    hq.main(['open', _SLUG])
+    cli.main(['open', _SLUG])
 
     assert 'span moved: SPEC.md' in capsys.readouterr().out
 
@@ -799,7 +799,7 @@ def test_open_reports_no_span_move_once_an_anchor_stops_resolving(
     so the only true report is the unresolved Alpha anchor.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text(
         '# Spec\n'
         '\n'
@@ -808,9 +808,9 @@ def test_open_reports_no_span_move_once_an_anchor_stops_resolving(
         '\n'
         '## Beta\n'
         'b\n')
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--read-before', 'always',
+    cli.main(['stamp', _SLUG, 'SPEC.md', '--read-before', 'always',
              '--where', 'Alpha;Beta'])
-    hq.main(['finish', _SLUG, '--log', 'c1'])
+    cli.main(['finish', _SLUG, '--log', 'c1'])
     (folder / 'SPEC.md').write_text(
         '# Spec\n'
         '\n'
@@ -821,7 +821,7 @@ def test_open_reports_no_span_move_once_an_anchor_stops_resolving(
         'b\n')
     capsys.readouterr()
 
-    hq.main(['open', _SLUG])
+    cli.main(['open', _SLUG])
 
     out = capsys.readouterr().out
     assert "unresolved anchor in SPEC.md: 'Alpha'" in out
@@ -840,15 +840,15 @@ def test_open_span_moved_condition_requires_both_old_and_new(
     'span moved'. With mutant_251 the condition fires on empty old_spans.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\n## Alpha\n\na\n')
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--read-before', 'always',
+    cli.main(['stamp', _SLUG, 'SPEC.md', '--read-before', 'always',
              '--where', 'AlwaysMissing'])
-    hq.main(['finish', _SLUG, '--log', 'c1'])
+    cli.main(['finish', _SLUG, '--log', 'c1'])
     # Stored span is '?' (unresolved). Anchor still missing -> new_spans=[].
     capsys.readouterr()
 
-    hq.main(['open', _SLUG])
+    cli.main(['open', _SLUG])
 
     assert 'span moved' not in capsys.readouterr().out
 
@@ -863,15 +863,15 @@ def test_open_handles_invalid_bytes_in_stamped_file(
     raise UnicodeDecodeError.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     bad = folder / 'bad.md'
     bad.write_bytes(b'# Notes\n\xff\xfe bad bytes\n')
-    hq.main(['stamp', _SLUG, 'bad.md', '--read-before', 'always',
+    cli.main(['stamp', _SLUG, 'bad.md', '--read-before', 'always',
              '--where', 'Notes'])
-    hq.main(['finish', _SLUG, '--log', 'c1'])
+    cli.main(['finish', _SLUG, '--log', 'c1'])
     capsys.readouterr()
 
-    ret = hq.main(['open', _SLUG])
+    ret = cli.main(['open', _SLUG])
 
     assert ret == 0
 
@@ -886,17 +886,17 @@ def test_open_abs_row_uses_correct_base_key(tmp_path, monkeypatch, capsys):
     open returns 0 and does not crash on path resolution.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     target = tmp_path / 'global.md'
     target.write_text('# Global\n\n## Config\n\nSettings.\n')
     # Outside-folder path -> stored as abs automatically.
-    ret = hq.main(['stamp', _SLUG, str(target),
+    ret = cli.main(['stamp', _SLUG, str(target),
                    '--read-before', 'always', '--where', 'Config'])
     assert ret == 0
-    hq.main(['finish', _SLUG, '--log', 'c1'])
+    cli.main(['finish', _SLUG, '--log', 'c1'])
     capsys.readouterr()
 
-    ret = hq.main(['open', _SLUG])
+    ret = cli.main(['open', _SLUG])
 
     assert ret == 0
 
@@ -909,16 +909,16 @@ def test_open_abs_row_uses_path_key(tmp_path, monkeypatch, capsys):
     Oracle: same abs-stamped file; open returns 0.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     target = tmp_path / 'global2.md'
     target.write_text('# Global\n\n## Config\n\nSettings.\n')
-    ret = hq.main(['stamp', _SLUG, str(target),
+    ret = cli.main(['stamp', _SLUG, str(target),
                    '--read-before', 'always', '--where', 'Config'])
     assert ret == 0
-    hq.main(['finish', _SLUG, '--log', 'c1'])
+    cli.main(['finish', _SLUG, '--log', 'c1'])
     capsys.readouterr()
 
-    ret = hq.main(['open', _SLUG])
+    ret = cli.main(['open', _SLUG])
 
     assert ret == 0
 
@@ -932,14 +932,14 @@ def test_open_handles_invalid_bytes_in_handoff_md(tmp_path, monkeypatch):
     Oracle: HANDOFF.md with invalid bytes -> open returns 0 (no crash).
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    hq.main(['finish', _SLUG, '--log', 'c1'])
+    cli.main(['begin', _SLUG])
+    cli.main(['finish', _SLUG, '--log', 'c1'])
     hf = folder / 'HANDOFF.md'
     data = bytearray(hf.read_bytes())
     data[5] = 0xFF
     hf.write_bytes(bytes(data))
 
-    ret = hq.main(['open', _SLUG])
+    ret = cli.main(['open', _SLUG])
 
     assert ret == 0
 
@@ -954,14 +954,14 @@ def test_open_handles_bom_in_handoff_md(tmp_path, monkeypatch):
     the parsed cycle field.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    hq.main(['finish', _SLUG, '--log', 'c1'])
+    cli.main(['begin', _SLUG])
+    cli.main(['finish', _SLUG, '--log', 'c1'])
     hf = folder / 'HANDOFF.md'
     content = hf.read_text(encoding='utf-8')
     # Prepend a UTF-8 BOM.
     hf.write_bytes(b'\xef\xbb\xbf' + content.encode('utf-8'))
 
-    ret = hq.main(['open', _SLUG])
+    ret = cli.main(['open', _SLUG])
 
     # With correct utf-8-sig, the BOM is stripped and parsing succeeds.
     assert ret == 0
@@ -980,9 +980,9 @@ def test_verb_read_not_in_ledger_exits_one(tmp_path, monkeypatch, capsys):
     ledger row.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
 
-    ret = hq.main(['read', _SLUG, 'unknown.md'])
+    ret = cli.main(['read', _SLUG, 'unknown.md'])
 
     assert ret == 1
 
@@ -994,12 +994,12 @@ def test_verb_read_not_on_disk_exits_one(tmp_path, monkeypatch, capsys):
     Oracle: stamp a file, delete it, then 'hq read' returns exactly 1.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n')
-    hq.main(['stamp', _SLUG, 'SPEC.md'])
+    cli.main(['stamp', _SLUG, 'SPEC.md'])
     (folder / 'SPEC.md').unlink()
 
-    ret = hq.main(['read', _SLUG, 'SPEC.md'])
+    ret = cli.main(['read', _SLUG, 'SPEC.md'])
 
     assert ret == 1
 
@@ -1013,19 +1013,18 @@ def test_verb_read_abs_base_resolves_correctly(tmp_path, monkeypatch, capsys):
     Oracle: 'hq read' on an abs-stamped file returns 0 and prints content.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     # Path outside the folder - automatically stored as abs.
     target = tmp_path / 'global.md'
     target.write_text('# Global\n\nGlobal content.\n')
-    ret_stamp = hq.main(['stamp', _SLUG, str(target)])
+    ret_stamp = cli.main(['stamp', _SLUG, str(target)])
     assert ret_stamp == 0, 'stamp must succeed for this test to be meaningful'
     # Determine the stored path (may be absolute or ~/... form).
-    import bin.hq as _hq
-    rows = _hq._read_tsv(folder / 'ledger.tsv', _hq.LEDGER_FIELDS)
+    rows = storage.read_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS)
     stored = rows[-1]['path']
     capsys.readouterr()
 
-    ret = hq.main(['read', _SLUG, stored])
+    ret = cli.main(['read', _SLUG, stored])
 
     assert ret == 0
     assert 'Global content' in capsys.readouterr().out
@@ -1042,22 +1041,21 @@ def test_verb_read_state_dir_fallback_without_hq_state_dir(
     OSError from an unwritable default, but no TypeError).
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n')
-    hq.main(['stamp', _SLUG, 'SPEC.md'])
+    cli.main(['stamp', _SLUG, 'SPEC.md'])
     monkeypatch.delenv('HQ_STATE_DIR', raising=False)
     # Set state dir to a known writable temp location via default override.
     state_dir = tmp_path / 'state'
     state_dir.mkdir()
-    import bin.hq as _hq
-    orig_default = _hq._DEFAULT_STATE
-    _hq._DEFAULT_STATE = state_dir
+    orig_default = threads.DEFAULT_STATE
+    threads.DEFAULT_STATE = state_dir
     capsys.readouterr()
 
     try:
-        ret = hq.main(['read', _SLUG, 'SPEC.md'])
+        ret = cli.main(['read', _SLUG, 'SPEC.md'])
     finally:
-        _hq._DEFAULT_STATE = orig_default
+        threads.DEFAULT_STATE = orig_default
 
     assert ret == 0
 
@@ -1072,14 +1070,14 @@ def test_verb_read_mkdir_creates_parent_directories(tmp_path, monkeypatch):
     'hq read' must still return 0 (creating the full tree).
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n')
-    hq.main(['stamp', _SLUG, 'SPEC.md'])
+    cli.main(['stamp', _SLUG, 'SPEC.md'])
     # Nested path: parent 'nested' does not exist yet.
     nested_state = tmp_path / 'nested' / 'deep' / 'state'
     monkeypatch.setenv('HQ_STATE_DIR', str(nested_state))
 
-    ret = hq.main(['read', _SLUG, 'SPEC.md'])
+    ret = cli.main(['read', _SLUG, 'SPEC.md'])
 
     assert ret == 0
     assert nested_state.exists()
@@ -1097,10 +1095,10 @@ def test_verb_diff_missing_cycle_exits_one(tmp_path, monkeypatch, capsys):
     Oracle: 'hq diff slug 1 99' with c99.md missing returns exactly 1.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    hq.main(['finish', _SLUG, '--log', 'c1'])
+    cli.main(['begin', _SLUG])
+    cli.main(['finish', _SLUG, '--log', 'c1'])
 
-    ret = hq.main(['diff', _SLUG, '1', '99'])
+    ret = cli.main(['diff', _SLUG, '1', '99'])
 
     assert ret == 1
 
@@ -1117,10 +1115,10 @@ def test_verb_diff_counts_and_expands_sixty_one_lines_in_full(
     change lines.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    hq.main(['finish', _SLUG, '--log', 'c1'])
-    hq.main(['begin', _SLUG])
-    hq.main(['finish', _SLUG, '--log', 'c2'])
+    cli.main(['begin', _SLUG])
+    cli.main(['finish', _SLUG, '--log', 'c1'])
+    cli.main(['begin', _SLUG])
+    cli.main(['finish', _SLUG, '--log', 'c2'])
     cycles_dir = folder / 'cycles'
     preamble = '# Handoff: test-slug\n\nWritten: 2026-09-10 | Cycle: 1\n\n'
     c1_cursor = '## Now\n\n' + '\n'.join(f'only-c1-{i}' for i in range(30)) + '\n'
@@ -1129,9 +1127,9 @@ def test_verb_diff_counts_and_expands_sixty_one_lines_in_full(
     (cycles_dir / 'c02.md').write_text(preamble + c2_cursor)
     capsys.readouterr()
 
-    assert hq.main(['diff', _SLUG, '1', '2']) == 0
+    assert cli.main(['diff', _SLUG, '1', '2']) == 0
     assert capsys.readouterr().out.splitlines() == ['## Now  +31 -30']
-    assert hq.main(['diff', _SLUG, '1', '2', 'now']) == 0
+    assert cli.main(['diff', _SLUG, '1', '2', 'now']) == 0
     lines = capsys.readouterr().out.splitlines()
     assert lines[0] == '## Now  +31 -30'
     assert sum(ln.startswith('- ') for ln in lines) == 30
@@ -1154,12 +1152,12 @@ def test_verb_artifacts_detects_conflicted_copy_by_lowercase(
     contains 'conflicted copy', not 'unstampable'.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     conflict = folder / 'data (conflicted copy 2026-09-10).md'
     conflict.write_text('# Data\n')
     capsys.readouterr()
 
-    hq.main(['artifacts', _SLUG])
+    cli.main(['artifacts', _SLUG])
 
     out = capsys.readouterr().out
     assert 'conflicted copy' in out
@@ -1175,15 +1173,15 @@ def test_verb_artifacts_continues_past_skip_rows(tmp_path, monkeypatch, capsys):
     Oracle: conflict file followed by a normal file -> normal file is listed.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     conflict = folder / 'a (conflicted copy 2026-09-10).md'
     conflict.write_text('# Data\n')
     normal = folder / 'SPEC.md'
     normal.write_text('# Spec\n')
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--label', 'the spec'])
+    cli.main(['stamp', _SLUG, 'SPEC.md', '--label', 'the spec'])
     capsys.readouterr()
 
-    hq.main(['artifacts', _SLUG])
+    cli.main(['artifacts', _SLUG])
 
     out = capsys.readouterr().out
     assert 'SPEC.md' in out, 'SPEC.md should appear after the conflicted copy'
@@ -1199,20 +1197,19 @@ def test_verb_artifacts_abs_rows_not_in_walk_are_listed(
     Oracle: stamp an abs-path file; 'artifacts' lists it.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     # Path outside the folder -> stored as abs, never in the walk.
     target = tmp_path / 'global.md'
     target.write_text('# Global\n\nContent.\n')
-    ret = hq.main(['stamp', _SLUG, str(target), '--label', 'global doc'])
+    ret = cli.main(['stamp', _SLUG, str(target), '--label', 'global doc'])
     assert ret == 0, 'stamp must succeed'
     # Get the stored path from the ledger.
-    import bin.hq as _hq
-    rows = _hq._read_tsv(folder / 'ledger.tsv', _hq.LEDGER_FIELDS)
+    rows = storage.read_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS)
     stored = rows[-1]['path']
     assert rows[-1]['base'] == 'abs', 'Expected abs base for outside-folder file'
     capsys.readouterr()
 
-    hq.main(['artifacts', _SLUG])
+    cli.main(['artifacts', _SLUG])
 
     out = capsys.readouterr().out
     assert stored in out, f'Abs-path row not listed: {out!r}'
@@ -1227,17 +1224,16 @@ def test_verb_artifacts_live_filter_uses_lowercase_live(
     Oracle: a live stamped abs-path row should appear in the output.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     target = tmp_path / 'live.md'
     target.write_text('# Live\n\nContent.\n')
-    ret = hq.main(['stamp', _SLUG, str(target), '--label', 'live doc'])
+    ret = cli.main(['stamp', _SLUG, str(target), '--label', 'live doc'])
     assert ret == 0
-    import bin.hq as _hq
-    rows = _hq._read_tsv(folder / 'ledger.tsv', _hq.LEDGER_FIELDS)
+    rows = storage.read_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS)
     stored = rows[-1]['path']
     capsys.readouterr()
 
-    hq.main(['artifacts', _SLUG])
+    cli.main(['artifacts', _SLUG])
 
     out = capsys.readouterr().out
     assert stored in out, f'Live abs-path row missing: {out!r}'
@@ -1252,21 +1248,20 @@ def test_verb_artifacts_continues_past_non_live_abs_rows(
     Oracle: superseded abs row followed by live abs row -> live row appears.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     early = tmp_path / 'early.md'
     early.write_text('# Early\n')
     late = tmp_path / 'late.md'
     late.write_text('# Late\n\nContent.\n')
-    hq.main(['stamp', _SLUG, str(early)])
-    hq.main(['stamp', _SLUG, str(early), '--successor', str(late)])
-    hq.main(['stamp', _SLUG, str(late), '--label', 'live one'])
-    import bin.hq as _hq
-    rows = _hq._read_tsv(folder / 'ledger.tsv', _hq.LEDGER_FIELDS)
+    cli.main(['stamp', _SLUG, str(early)])
+    cli.main(['stamp', _SLUG, str(early), '--successor', str(late)])
+    cli.main(['stamp', _SLUG, str(late), '--label', 'live one'])
+    rows = storage.read_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS)
     live_row = next(r for r in reversed(rows) if r['path'].endswith('late.md'))
     stored_late = live_row['path']
     capsys.readouterr()
 
-    hq.main(['artifacts', _SLUG])
+    cli.main(['artifacts', _SLUG])
 
     out = capsys.readouterr().out
     assert stored_late in out, f'Live abs row not listed: {out!r}'
@@ -1283,14 +1278,14 @@ def test_verb_artifacts_row_uses_lowercase_field_keys(
     label; artifacts lists all four field values.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     # Use a notes-inferred filename so read_before can be set to 'edit'.
     (folder / 'notes.md').write_text('# Notes\n\nContent.\n')
-    hq.main(['stamp', _SLUG, 'notes.md', '--read-before', 'edit',
+    cli.main(['stamp', _SLUG, 'notes.md', '--read-before', 'edit',
              '--kind', 'notes', '--label', 'the notes'])
     capsys.readouterr()
 
-    hq.main(['artifacts', _SLUG])
+    cli.main(['artifacts', _SLUG])
 
     out = capsys.readouterr().out
     assert 'notes' in out, f'kind missing: {out!r}'
@@ -1319,7 +1314,7 @@ def test_render_artifacts_non_live_missing_before_custom_status():
     row_m = _row(status='missing', kind='notes', read_before='never')
     row_a = _row(status='aborted', kind='notes', read_before='never')
     rows = {'a.md': row_a, 'b.md': row_m}
-    result = hq.render_artifacts([], rows, 'slug', set())
+    result = render.render_artifacts([], rows, 'slug', set())
     counted = [
         ln.split()[0] for ln in result.splitlines()
         if ln.startswith(('missing', 'aborted'))]
@@ -1339,11 +1334,11 @@ def test_verb_artifacts_conflicted_copy_name_check_is_lowercase(
     copy' and does not have 'unstampable' for that filename.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'data (conflicted copy 2026-09-10).md').write_text('# Data\n')
     capsys.readouterr()
 
-    hq.main(['artifacts', _SLUG])
+    cli.main(['artifacts', _SLUG])
 
     out = capsys.readouterr().out
     assert 'conflicted copy' in out
@@ -1366,14 +1361,14 @@ def test_verb_artifacts_skip_loop_continues_not_breaks(
     unstamped normal file; both appear in output.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     # 'a...' sorts before 'z...' so conflict file comes first in walk.
     (folder / 'a (conflicted copy).md').write_text('# Data\n')
     (folder / 'z_notes.md').write_text('# Notes\n')
     # Leave z_notes.md unstamped so it can only appear via the walk loop.
     capsys.readouterr()
 
-    hq.main(['artifacts', _SLUG])
+    cli.main(['artifacts', _SLUG])
 
     out = capsys.readouterr().out
     assert 'z_notes.md' in out, (
@@ -1400,12 +1395,12 @@ def test_open_git_drift_not_fired_when_branch_and_sha_match(
          'commit', '-q', '--allow-empty', '-m', 'init'],
         cwd=root, check=True)
     monkeypatch.setenv('HQ_GIT', '1')
-    hq.main(['begin', _SLUG])
-    hq.main(['finish', _SLUG, '--log', 'c1'])
+    cli.main(['begin', _SLUG])
+    cli.main(['finish', _SLUG, '--log', 'c1'])
     capsys.readouterr()
 
     # No modification to HANDOFF.md: h_branch == cur_branch and h_sha == cur_sha.
-    hq.main(['open', _SLUG])
+    cli.main(['open', _SLUG])
 
     assert 'git drift' not in _strip_read(capsys.readouterr().out)
 
@@ -1420,8 +1415,8 @@ def test_open_git_drift_suppressed_when_cur_branch_is_dash(
     HQ_GIT=0 gives cur_branch='-'; drift must NOT be reported.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    hq.main(['finish', _SLUG, '--log', 'c1'])
+    cli.main(['begin', _SLUG])
+    cli.main(['finish', _SLUG, '--log', 'c1'])
     hf = folder / 'HANDOFF.md'
     # Inject branch@sha so header_m matches but cur_branch is '-'.
     hf.write_text(hf.read_text().replace(
@@ -1430,7 +1425,7 @@ def test_open_git_drift_suppressed_when_cur_branch_is_dash(
     ))
     capsys.readouterr()
 
-    hq.main(['open', _SLUG])
+    cli.main(['open', _SLUG])
 
     assert 'git drift' not in _strip_read(capsys.readouterr().out)
 
@@ -1446,14 +1441,14 @@ def test_open_filter_or_skips_read_before_edit_rows(
     no 'unresolved anchor' in open output.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'notes.md').write_text('# Notes\n\nContent.\n')
-    hq.main(['stamp', _SLUG, 'notes.md', '--read-before', 'edit',
+    cli.main(['stamp', _SLUG, 'notes.md', '--read-before', 'edit',
              '--where', 'MissingSection'])
-    hq.main(['finish', _SLUG, '--log', 'c1'])
+    cli.main(['finish', _SLUG, '--log', 'c1'])
     capsys.readouterr()
 
-    hq.main(['open', _SLUG])
+    cli.main(['open', _SLUG])
 
     out = _strip_read(capsys.readouterr().out)
     assert 'unresolved anchor' not in out, (
@@ -1473,16 +1468,16 @@ def test_open_span_not_moved_for_unchanged_anchor(
     open without changing SPEC.md -> old_spans == new_spans -> no 'span moved'.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text(
         '# Spec\n\n## Alpha\n\nContent.\n\n## Beta\n\nMore.\n'
     )
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--read-before', 'always',
+    cli.main(['stamp', _SLUG, 'SPEC.md', '--read-before', 'always',
              '--where', 'Alpha'])
-    hq.main(['finish', _SLUG, '--log', 'c1'])
+    cli.main(['finish', _SLUG, '--log', 'c1'])
     # SPEC.md is unchanged; re-open must not report any span movement.
     capsys.readouterr()
 
-    hq.main(['open', _SLUG])
+    cli.main(['open', _SLUG])
 
     assert 'span moved' not in capsys.readouterr().out

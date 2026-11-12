@@ -1,6 +1,6 @@
 """Tests for the cycle path: begin's lock and work list, finish's checks.
 
-Each test drives hq.main in-process with the HQ_* environment the other
+Each test drives cli.main in-process with the HQ_* environment the other
 verb tests use, so a failure names the printed line the agent reads.
 """
 
@@ -10,7 +10,7 @@ import os
 import pathlib
 import subprocess
 
-from bin import hq
+from handoff import carry, cli, ledger, standing, storage
 
 _SLUG = 'test-slug'
 _SESSION = 'session-abc'
@@ -36,11 +36,11 @@ def _new_root(tmp_path, monkeypatch, cycle='1', now=_NOW):
 
 
 def _run(argv):
-    """Call hq.main, returning (rc, stdout, stderr) with SystemExit caught."""
+    """Call cli.main, returning (rc, stdout, stderr) with SystemExit caught."""
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         try:
-            rc = hq.main(argv)
+            rc = cli.main(argv)
         except SystemExit as exc:
             rc = exc.code
     return rc, out.getvalue(), err.getvalue()
@@ -82,7 +82,7 @@ def test_a_wrapped_unfiled_bullet_keeps_its_continuation_line():
         '## Task\nDo.\n\n## Unfiled\n'
         '- decision: **Pin the tick size** The rounding step is fixed\n'
         '  and the remainder rides with it.\n')
-    items, cursor_out, refusal = hq.drain_unfiled(wrapped)
+    items, cursor_out, refusal = standing.drain_unfiled(wrapped)
     assert refusal is None
     assert items == [(
         'decision', 'Pin the tick size',
@@ -93,7 +93,7 @@ def test_a_wrapped_unfiled_bullet_keeps_its_continuation_line():
         '## Task\nDo.\n\n## Unfiled\n'
         '- decision: **Pin the tick size** Fixed.\n'
         'a loose line with no bullet\n')
-    _, _, refusal_loose = hq.drain_unfiled(loose)
+    _, _, refusal_loose = standing.drain_unfiled(loose)
     assert refusal_loose is not None
     assert 'a loose line with no bullet' in refusal_loose
 
@@ -123,7 +123,7 @@ def test_git_state_counts_staged_and_untracked_paths_as_dirty(tmp_path):
         check=True, capture_output=True)
     (repo / 'untracked.txt').write_text('u\n')
 
-    branch, sha, dirty = hq._git_state(repo)
+    branch, sha, dirty = storage._git_state(repo)
     assert branch == 'main'
     assert len(sha) == 7
     assert set(dirty) == {'tracked.txt', 'renamed_to.txt', 'untracked.txt'}
@@ -313,7 +313,7 @@ def test_acknowledge_names_the_broken_witness_and_records_it(
     assert printed[0].startswith('acknowledged: W1: ledger prefix changed')
     assert '(expected ' in printed[0]
     assert ', got ' in printed[0]
-    rows = hq._read_tsv(folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS)
+    rows = storage.read_tsv(folder / 'cycles' / 'manifest.tsv', storage.MANIFEST_FIELDS)
     assert rows[-1]['note'].startswith('acknowledged W1: ledger prefix changed')
     assert rows[-1]['note'].endswith('; formatter ran')
 
@@ -332,7 +332,7 @@ def test_acknowledge_with_no_break_is_an_advisory_and_records_nothing(
                        '--acknowledge', 'nothing broke'])
     assert rc == 0
     assert 'advisory: --acknowledge given, no witness broke' in out
-    rows = hq._read_tsv(folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS)
+    rows = storage.read_tsv(folder / 'cycles' / 'manifest.tsv', storage.MANIFEST_FIELDS)
     assert rows[-1]['note'] == '-'
 
 
@@ -381,7 +381,7 @@ def test_a_cycle_that_carries_every_line_records_no_count(
     rc, out, _ = _run(['finish', _SLUG, '--log', 'two'])
     assert rc == 0
     assert 'not carried' not in out
-    rows = hq._read_tsv(folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS)
+    rows = storage.read_tsv(folder / 'cycles' / 'manifest.tsv', storage.MANIFEST_FIELDS)
     assert rows[-1]['cycle'] == '2'
     assert rows[-1]['note'] == '-'
 
@@ -402,7 +402,7 @@ def test_the_acknowledged_clause_stays_first_in_a_two_clause_note(
     rc, _, _ = _run([
         'finish', _SLUG, '--log', 'two', '--acknowledge', 'formatter ran'])
     assert rc == 0
-    rows = hq._read_tsv(folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS)
+    rows = storage.read_tsv(folder / 'cycles' / 'manifest.tsv', storage.MANIFEST_FIELDS)
     clauses = rows[-1]['note'].split(' | ')
     assert len(clauses) == 2
     assert clauses[0].startswith('acknowledged ')
@@ -417,7 +417,7 @@ def test_the_collision_advisory_strips_heading_markers_and_backticks():
     '## Display `contract`' where the design fixes the bare text.
     Oracle: hand-computed line for one heading and one term.
     """
-    hits = hq.collisions(
+    hits = carry.collisions(
         'Rework the Display contract this cycle.',
         [],
         [('SPEC.md', 14, '## Display `contract` stays fixed')],
@@ -441,7 +441,7 @@ def test_a_tab_in_the_log_reaches_the_rendered_log_as_a_space(
     text = (folder / 'HANDOFF.md').read_text()
     assert '\t' not in text
     assert 'shipped step 4' in text
-    rows = hq._read_tsv(folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS)
+    rows = storage.read_tsv(folder / 'cycles' / 'manifest.tsv', storage.MANIFEST_FIELDS)
     assert rows[-1]['log'] == 'shipped step 4'
 
 
@@ -508,7 +508,7 @@ def test_the_lock_is_created_exclusively(tmp_path, monkeypatch):
         seen.append((str(path), flags))
         return real_open(path, flags, *args, **kwargs)
 
-    monkeypatch.setattr(hq.os, 'open', spy)
+    monkeypatch.setattr(os, 'open', spy)
     assert _run(['begin', _SLUG])[0] == 0
     lock_flags = [f for p, f in seen if p.endswith('.hq.lock')]
     assert len(lock_flags) == 1
@@ -534,8 +534,8 @@ def test_a_non_integer_cycle_is_a_usage_error_or_a_refusal(
     monkeypatch.delenv('HQ_CYCLE')
     manifest = folder / 'cycles' / 'manifest.tsv'
     manifest.write_text(
-        hq._MANIFEST_HEADER + '\n'
-        + '\t'.join(['x'] + ['-'] * (len(hq.MANIFEST_FIELDS) - 1)) + '\n')
+        storage.MANIFEST_HEADER + '\n'
+        + '\t'.join(['x'] + ['-'] * (len(storage.MANIFEST_FIELDS) - 1)) + '\n')
     rc, out, _ = _run(['open', _SLUG])
     assert rc == 1
     assert 'hq: cycles/manifest.tsv row 1 has a non-integer cycle' in out
@@ -558,7 +558,7 @@ def test_the_session_flag_beats_its_environment_variable(
     monkeypatch.setenv('HQ_HOST', 'flag-host')
     rc, _, _ = _run(['--session', 'flag-session', 'begin', _SLUG])
     assert rc == 0
-    lock = hq._read_lock(folder)
+    lock = storage.read_lock(folder)
     assert lock['cycle'] == '7'
     assert lock['time'] == '2026-01-02T03:04:05'
     assert lock['session'] == 'flag-session'
@@ -603,7 +603,7 @@ def test_a_forced_takeover_reaches_the_manifest_session_column(
     assert _run(['begin', _SLUG, '--force'])[0] == 0
     assert _run(['begin', _SLUG])[0] == 0
     assert _run(['finish', _SLUG, '--log', 'one'])[0] == 0
-    rows = hq._read_tsv(folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS)
+    rows = storage.read_tsv(folder / 'cycles' / 'manifest.tsv', storage.MANIFEST_FIELDS)
     assert rows[-1]['session'] == f'{_SESSION} took over other-session'
 
 
@@ -614,8 +614,8 @@ def test_dirty_str_switches_to_a_count_at_six_paths():
     the header line past its budget instead of collapsing.
     Oracle: hand-computed tails either side of the five-path boundary.
     """
-    assert hq._dirty_str(['a', 'b', 'c', 'd', 'e', 'f']) == ' | 6 files dirty'
-    assert hq._dirty_str(['a', 'b', 'c', 'd', 'e']) == ' | dirty: a, b, c, d, e'
+    assert storage.dirty_str(['a', 'b', 'c', 'd', 'e', 'f']) == ' | 6 files dirty'
+    assert storage.dirty_str(['a', 'b', 'c', 'd', 'e']) == ' | dirty: a, b, c, d, e'
 
 
 def test_an_unstampable_name_is_named_apart_from_a_conflicted_copy(
@@ -630,7 +630,7 @@ def test_an_unstampable_name_is_named_apart_from_a_conflicted_copy(
     three, with the tab shown as an escape so the line stays one line.
     """
     _new_root(tmp_path, monkeypatch)
-    monkeypatch.setattr(hq, '_walk_folder', lambda folder: [
+    monkeypatch.setattr(ledger, 'walk_folder', lambda folder: [
         ('tab\tname.md', 'skip'),
         ('notes (conflicted copy 2026-01-01).md', 'skip'),
         ('socket.sock', 'skip'),

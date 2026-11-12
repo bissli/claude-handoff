@@ -7,7 +7,7 @@ is hand-computed.
 
 import hashlib
 
-from bin import hq
+from handoff import carry, ledger, markdown, render, standing, storage
 
 _FIELDS = (
     'cycle', 'ts', 'path', 'base', 'kind', 'status', 'read_before',
@@ -118,7 +118,7 @@ def test_kind_inference_over_a_representative_name_set():
         ('SPEC (conflicted copy 2026-09-09).md', False, '', ('skip', '-')),
     ]
     for name, is_dir, first_heading, expected in cases:
-        result = hq.infer_kind(name, is_dir, first_heading)
+        result = ledger.infer_kind(name, is_dir, first_heading)
         assert result == expected, f'{name}: expected {expected}, got {result}'
 
 
@@ -134,16 +134,16 @@ def test_an_authored_notes_or_todo_name_beats_a_design_heading():
     Oracle: hand-derived from the first-match table as reordered, with
     the heading-only guide.md and the DESIGN-* name as the control rows.
     """
-    assert hq.infer_kind('notes-probe.py', False, '') == ('notes', 'never')
-    assert hq.infer_kind(
+    assert ledger.infer_kind('notes-probe.py', False, '') == ('notes', 'never')
+    assert ledger.infer_kind(
         'notes-widget-deltas.md', False, '# Design deltas to close',
         ) == ('notes', 'never')
-    assert hq.infer_kind(
+    assert ledger.infer_kind(
         'REVIEW-pass2.md', False, '## Design notes') == ('notes', 'never')
-    assert hq.infer_kind(
+    assert ledger.infer_kind(
         'todo-widget.md', False, '# Design of the todo') == ('todo', 'never')
-    assert hq.infer_kind('guide.md', False, '# Design') == ('spec', 'always')
-    assert hq.infer_kind('DESIGN-todo.md', False, '# Design') == ('spec', 'always')
+    assert ledger.infer_kind('guide.md', False, '# Design') == ('spec', 'always')
+    assert ledger.infer_kind('DESIGN-todo.md', False, '# Design') == ('spec', 'always')
 
 
 # --- apply_stem_rule --------------------------------------------------
@@ -169,7 +169,7 @@ def test_adopt_gates_the_newest_spec_per_stem_only():
         ('notes-open-issues.md', 'notes', 180.0),
         ('notes-open-issues.pre-x.md', 'snapshot', 170.0),
     ]
-    result = hq.apply_stem_rule(entries)
+    result = ledger.apply_stem_rule(entries)
     assert 'SPEC.md' not in result
     assert result.get('SPEC.pre-draft-20250114.md') == 'SPEC.md'
     assert result.get('SPEC.pre-final-20250120.md') == 'SPEC.md'
@@ -191,10 +191,10 @@ def test_demote_spec_from_always_without_successor_refused():
     """
     row_edit = _row(read_before='edit')
     row_never = _row(read_before='never')
-    assert hq.check_r1(row_edit, 'spec', False) is not None
-    assert hq.check_r1(row_never, 'spec', False) is not None
-    assert hq.check_r1(row_edit, 'spec', True) is None
-    assert hq.check_r1(row_never, 'spec', True) is None
+    assert ledger.check_r1(row_edit, 'spec', False) is not None
+    assert ledger.check_r1(row_never, 'spec', False) is not None
+    assert ledger.check_r1(row_edit, 'spec', True) is None
+    assert ledger.check_r1(row_never, 'spec', True) is None
 
 
 def test_demote_notes_from_always_is_allowed():
@@ -206,10 +206,10 @@ def test_demote_notes_from_always_is_allowed():
     no successor returns None (allowed) regardless of stored kind.
     """
     row = _row(path='notes-open-issues.md', kind='notes', read_before='never')
-    assert hq.check_r1(row, 'notes', False) is None
+    assert ledger.check_r1(row, 'notes', False) is None
     row_mention = _row(
         path='notes-open-issues.md', kind='notes', read_before='mention')
-    assert hq.check_r1(row_mention, 'notes', False) is None
+    assert ledger.check_r1(row_mention, 'notes', False) is None
 
 
 def test_kind_change_off_spec_is_a_demotion():
@@ -225,15 +225,15 @@ def test_kind_change_off_spec_is_a_demotion():
     read_before=always is also refused because kind is wrong.
     """
     row_notes = _row(kind='notes', read_before='never')
-    assert hq.check_r1(row_notes, 'spec', False) is not None
+    assert ledger.check_r1(row_notes, 'spec', False) is not None
     row_other = _row(kind='other', read_before='never')
-    assert hq.check_r1(row_other, 'spec', False) is not None
+    assert ledger.check_r1(row_other, 'spec', False) is not None
     # A status change off live is also a demotion
     row_archived = _row(status='archived', read_before='never')
-    assert hq.check_r1(row_archived, 'spec', False) is not None
+    assert ledger.check_r1(row_archived, 'spec', False) is not None
     # read_before=always alone does not excuse a kind demotion
     row_notes_always = _row(kind='notes', read_before='always', status='live')
-    assert hq.check_r1(row_notes_always, 'spec', False) is not None
+    assert ledger.check_r1(row_notes_always, 'spec', False) is not None
 
 
 def test_an_ungated_other_row_is_refused_only_for_a_gated_kind():
@@ -245,10 +245,10 @@ def test_an_ungated_other_row_is_refused_only_for_a_gated_kind():
     kinds, allowed for notes and other.
     """
     ungated = _row(kind='other', read_before='never')
-    assert hq.check_r1(ungated, 'spec', False) is not None
-    assert hq.check_r1(ungated, 'draft', False) is not None
-    assert hq.check_r1(ungated, 'notes', False) is None
-    assert hq.check_r1(ungated, 'other', False) is None
+    assert ledger.check_r1(ungated, 'spec', False) is not None
+    assert ledger.check_r1(ungated, 'draft', False) is not None
+    assert ledger.check_r1(ungated, 'notes', False) is None
+    assert ledger.check_r1(ungated, 'other', False) is None
 
 
 # --- check_r3 ---------------------------------------------------------
@@ -265,7 +265,7 @@ def test_r3_utime_only_does_not_block():
     rows = [_row(path='SPEC.md', status='live', read_before='always',
                  sha12='aabb11223344')]
     sha_by_path = {'SPEC.md': 'aabb11223344'}
-    assert hq.check_r3(rows, sha_by_path) == []
+    assert ledger.check_r3(rows, sha_by_path) == []
 
 
 def test_r3_bytes_changed_with_mtime_restored_blocks():
@@ -291,7 +291,7 @@ def test_r3_bytes_changed_with_mtime_restored_blocks():
         'report.py': 'bbccddee0011',
         'notes.md': 'ccdd55667788',
         }
-    result = hq.check_r3(rows, sha_by_path)
+    result = ledger.check_r3(rows, sha_by_path)
     paths = {r['path'] for r in result}
     assert 'SPEC.md' in paths
     assert 'report.py' in paths
@@ -308,7 +308,7 @@ def test_r3_never_row_ignored():
     rows = [_row(path='notes-open-issues.md', status='live', read_before='never',
                  sha12='aabb11223344')]
     sha_by_path = {'notes-open-issues.md': 'ccdd55667788'}
-    assert hq.check_r3(rows, sha_by_path) == []
+    assert ledger.check_r3(rows, sha_by_path) == []
 
 
 # --- witness ----------------------------------------------------------
@@ -332,7 +332,7 @@ def test_witness_catches_a_clause_deleted_inside_a_line():
         'standing_bytes': 0,
         'standing_sha': _sha12(b''),
     }
-    breaks = hq.witness(prev, appended, b'')
+    breaks = storage.witness(prev, appended, b'')
     assert any(b.startswith('W1') for b in breaks)
 
 
@@ -355,7 +355,7 @@ def test_witness_catches_delete_plus_append():
         'standing_bytes': 0,
         'standing_sha': _sha12(b''),
     }
-    breaks = hq.witness(prev, modified, b'')
+    breaks = storage.witness(prev, modified, b'')
     assert any(b.startswith('W1') for b in breaks)
 
 
@@ -378,7 +378,7 @@ def test_witness_passes_a_pure_append():
         'standing_bytes': 0,
         'standing_sha': _sha12(b''),
     }
-    breaks = hq.witness(prev, appended, b'')
+    breaks = storage.witness(prev, appended, b'')
     assert breaks == []
 
 
@@ -396,7 +396,7 @@ def test_block_sha_ignores_realignment():
     """
     text1 = '## Artifacts\nSPEC.md  spec  always  c01  render pass\n'
     text2 = '## Artifacts\nSPEC.md   spec   always   c01   render pass\n'
-    assert hq.block_sha(text1) == hq.block_sha(text2)
+    assert markdown.block_sha(text1) == markdown.block_sha(text2)
 
 
 def test_block_sha_catches_a_dropped_row():
@@ -416,7 +416,7 @@ def test_block_sha_catches_a_dropped_row():
         '## Artifacts\n'
         'SPEC.md  spec  always  c01  label\n'
     )
-    assert hq.block_sha(with_row) != hq.block_sha(without_row)
+    assert markdown.block_sha(with_row) != markdown.block_sha(without_row)
 
 
 # --- resolve_where ----------------------------------------------------
@@ -440,7 +440,7 @@ def test_where_resolves_to_the_current_span():
         '# Section Two\n'
         'content d\n'
     )
-    spans, unresolved = hq.resolve_where(text, ['Section Two'])
+    spans, unresolved = markdown.resolve_where(text, ['Section Two'])
     assert spans == [(6, 7)]
     assert unresolved == []
 
@@ -455,7 +455,7 @@ def test_unresolved_where_is_reported():
     fixture, so spans is empty and unresolved contains the string.
     """
     text = '# Real Heading\ncontent\n'
-    spans, unresolved = hq.resolve_where(text, ['Nonexistent'])
+    spans, unresolved = markdown.resolve_where(text, ['Nonexistent'])
     assert spans == []
     assert 'Nonexistent' in unresolved
 
@@ -475,7 +475,7 @@ def test_collision_hits_an_unbackticked_term():
     headings = [('SPEC.md', 438, 'Vertex Lattice stays unresolved')]
     headlines = []
     rarity = {'Lattice': 2}
-    result = hq.collisions(now_text, headlines, headings, rarity)
+    result = carry.collisions(now_text, headlines, headings, rarity)
     assert len(result) >= 1
     assert any('Lattice' in hit and 'collides:' in hit for hit in result)
 
@@ -505,7 +505,7 @@ def test_collision_ranks_by_rarity_and_caps_at_three():
         'ScanEntry': 2,
         'ParseSource': 1,
     }
-    result = hq.collisions(now_text, headlines, headings, rarity)
+    result = carry.collisions(now_text, headlines, headings, rarity)
     assert len(result) == 3
     assert 'ParseSource' in result[0]
     assert 'ScanEntry' in result[1]
@@ -526,7 +526,7 @@ def test_untyped_unfiled_bullet_blocks_and_names_the_line():
     returns a non-None refusal that contains the bullet's own text.
     """
     cursor = '## Task\nSome work.\n## Unfiled\n- this bullet has no prefix\n'
-    items, new_cursor, refusal = hq.drain_unfiled(cursor)
+    items, new_cursor, refusal = standing.drain_unfiled(cursor)
     assert refusal is not None
     assert 'this bullet has no prefix' in refusal
 
@@ -546,7 +546,7 @@ def test_typed_unfiled_bullets_reach_their_sections():
         '- constraint: **My Constraint** more text here\n'
         '- dead-end: **My Dead End** reason given\n'
     )
-    items, new_cursor, refusal = hq.drain_unfiled(cursor)
+    items, new_cursor, refusal = standing.drain_unfiled(cursor)
     assert refusal is None
     kind_headline_pairs = {(item[0], item[1]) for item in items}
     assert ('decision', 'My Decision') in kind_headline_pairs
@@ -568,7 +568,7 @@ def test_artifacts_block_lists_an_unpointed_file():
     """
     walk = [('notes.md', 'notes')]
     rows = {}
-    result = hq.render_artifacts(walk, rows, 'test-slug', set())
+    result = render.render_artifacts(walk, rows, 'test-slug', set())
     assert 'notes.md  notes?  unstamped' in result.splitlines()
 
 
@@ -587,7 +587,7 @@ def test_a_stamped_spec_enters_the_read_block_with_its_span():
         ]
     spans = {'SPEC.md': [(759, 814), None]}
     sizes = {'SPEC.md': '1.4k tok', 'poller.py': '205 lines, 2.1k tok'}
-    result = hq.render_read(rows, spans, sizes)
+    result = render.render_read(rows, spans, sizes)
     assert result.splitlines() == [
         'poller.py  (205 lines, 2.1k tok)  drafted rewrite',
         'SPEC.md:759-814,?  (1.4k tok)  cache warmup',
@@ -612,7 +612,7 @@ def test_artifacts_mention_row_renders_as_full_line():
             cycle='3', label='background reference',
         )
     }
-    result = hq.render_artifacts(walk, rows, 'test-slug', {'notes.md'})
+    result = render.render_artifacts(walk, rows, 'test-slug', {'notes.md'})
     assert 'notes.md  notes  mention  c3  background reference' in result.splitlines()
 
 
@@ -634,7 +634,7 @@ def test_artifacts_block_collapses_never_rows_and_caps_at_40():
         )
         for i in range(42)
     }
-    result_never = hq.render_artifacts(never_walk, never_rows, 'slug', set())
+    result_never = render.render_artifacts(never_walk, never_rows, 'slug', set())
     full_never = [
         line for line in result_never.splitlines()
         if '  notes  ' in line and '  never  ' in line
@@ -654,7 +654,7 @@ def test_artifacts_block_collapses_never_rows_and_caps_at_40():
         for i in range(41)
     }
     always_whole = set(always_rows)
-    result_always = hq.render_artifacts(
+    result_always = render.render_artifacts(
         always_walk, always_rows, 'slug', always_whole)
     full_always = [
         line for line in result_always.splitlines()
@@ -685,7 +685,7 @@ def test_standing_block_omits_superseded_and_prints_every_live_item():
         {'id': 'd02', 'prefix': 'd', 'cycle': '2',
          'headline': 'Superseded decision', 'body': ''},
     ]
-    result = hq.render_standing(
+    result = render.render_standing(
         items, {'d02'}, 'test-slug', whole_ids={'c01', 'd01'})
     assert 'Superseded decision' not in result
     assert 'd02' not in result
@@ -697,7 +697,7 @@ def test_standing_block_omits_superseded_and_prints_every_live_item():
          'headline': f'Decision number {i}', 'body': ''}
         for i in range(82)
     ]
-    result2 = hq.render_standing(
+    result2 = render.render_standing(
         many, set(), 'slug2', whole_ids={item['id'] for item in many})
     content_lines = [line for line in result2.splitlines() if line.strip()]
     assert len(content_lines) == 83
@@ -731,7 +731,7 @@ def test_log_renders_three_cycles_plus_rollup():
         {'cycle': '5', 'written': '2026-01-05', 'repos': 'main@abc1238',
          'log': 'shipped step 3', 'note': '-'},
     ]
-    result = hq.render_log(manifest, 'auth-refresh')
+    result = render.render_log(manifest, 'auth-refresh')
     lines = result.splitlines()
     assert len(lines) == 4
     assert 'shipped step 1' in lines[0]
@@ -761,20 +761,20 @@ def test_adopt_conservation_reports_a_line_no_part_of_the_union_holds():
     )
     cursor = '## Task\nDo the work.\n## Decisions\n'
     standing = '- [d01] (c01) **Some ruling** body text'
-    missing = hq.conservation(original, cursor, standing, [])
+    missing = carry.conservation(original, cursor, standing, [])
     assert missing == []
 
     # Without standing: the decision content line is not covered
-    missing2 = hq.conservation(original, cursor, '', [])
+    missing2 = carry.conservation(original, cursor, '', [])
     assert any('ruling' in line for line in missing2)
 
     # With nothing: all distinctive lines are missing;
     # proves archive is excluded
-    missing3 = hq.conservation(original, '', '', [])
+    missing3 = carry.conservation(original, '', '', [])
     assert len(missing3) > 0
 
     # A heading genuinely absent from the union is reported
-    missing4 = hq.conservation('## Gone Heading\n', '', '', [])
+    missing4 = carry.conservation('## Gone Heading\n', '', '', [])
     assert any('Gone Heading' in ln for ln in missing4)
 
 
@@ -786,7 +786,7 @@ def test_conservation_reports_a_preamble_before_the_first_heading():
     Oracle: hand-computed - the preamble line is in no part of the union,
     so it is the one line reported.
     """
-    assert hq.conservation(
+    assert carry.conservation(
         'Preamble line.\n## Task\nDo.\n', '## Task\nDo.\n', '', []
         ) == ['Preamble line.']
 
@@ -795,7 +795,7 @@ def test_conservation_reports_a_preamble_before_the_first_heading():
 
 
 def _ledger_row(**overrides):
-    row = dict.fromkeys(hq.LEDGER_FIELDS, '-')
+    row = dict.fromkeys(ledger.LEDGER_FIELDS, '-')
     row.update({'cycle': '1', 'base': 'folder', 'kind': 'notes', 'status': 'live',
                 'read_before': 'never'})
     row.update(overrides)
@@ -816,7 +816,7 @@ def test_stem_rule_leaves_a_newer_stem_mate_alone():
         ('SPEC.draft.md', 'draft', 250.0),
         ('SPEC.pre-x.md', 'snapshot', 100.0),
     ]
-    result = hq.apply_stem_rule(entries)
+    result = ledger.apply_stem_rule(entries)
     assert 'SPEC.draft.md' not in result
     assert result.get('SPEC.pre-x.md') == 'SPEC.md'
 
@@ -834,7 +834,7 @@ def test_drain_unfiled_headline_never_ends_inside_an_open_quotation():
         '## Task\nx\n\n## Unfiled\n'
         '- decision: User said "the old format is fine. Keep it." Filed.\n'
         '- constraint: Pin v1.2 for now. Bump later.\n')
-    items, _, refusal = hq.drain_unfiled(cursor)
+    items, _, refusal = standing.drain_unfiled(cursor)
     assert refusal is None
     assert items == [
         ('decision', 'User said "the old format is fine. Keep it."', 'Filed.'),
@@ -856,13 +856,13 @@ def test_drain_unfiled_runs_a_short_label_headline_on_and_still_refuses_none():
         '## Task\nx\n\n## Unfiled\n'
         '- dead-end: Cycle 26. Reading the gain showed nothing. Done.\n'
         '- constraint: Never trust mtime! It lies on network mounts.\n')
-    items, _, refusal = hq.drain_unfiled(cursor)
+    items, _, refusal = standing.drain_unfiled(cursor)
     assert refusal is None
     assert items == [
         ('dead-end', 'Cycle 26. Reading the gain showed nothing.', 'Done.'),
         ('constraint', 'Never trust mtime!', 'It lies on network mounts.'),
     ]
-    _, _, refusal = hq.drain_unfiled(
+    _, _, refusal = standing.drain_unfiled(
         '## Task\nx\n\n## Unfiled\n- decision: . rest of the thing\n')
     assert refusal == (
         "Unfiled bullet has no headline: '- decision: . rest of the thing'"
@@ -879,8 +879,8 @@ def test_collisions_ignore_a_capital_at_sentence_start():
     same word sits mid-sentence.
     """
     headings = [('SPEC.md', 3, 'Delta section')]
-    assert hq.collisions('Delta must stay fixed.', [], headings, {'Delta': 1}) == []
-    hits = hq.collisions('Fix the Delta path.', [], headings, {'Delta': 1})
+    assert carry.collisions('Delta must stay fixed.', [], headings, {'Delta': 1}) == []
+    hits = carry.collisions('Fix the Delta path.', [], headings, {'Delta': 1})
     assert len(hits) == 1
     assert 'Delta' in hits[0]
 
@@ -897,13 +897,13 @@ def test_collisions_ignore_a_capital_opening_a_list_item():
     still hits at a bullet head.
     """
     headings = [('SPEC.md', 3, 'Lattice section')]
-    assert hq.collisions('- Lattice must hold.', [], headings, {'Lattice': 1}) == []
-    assert hq.collisions('### Lattice next', [], headings, {'Lattice': 1}) == []
-    assert hq.collisions('1. Lattice first.', [], headings, {'Lattice': 1}) == []
-    assert len(hq.collisions(
+    assert carry.collisions('- Lattice must hold.', [], headings, {'Lattice': 1}) == []
+    assert carry.collisions('### Lattice next', [], headings, {'Lattice': 1}) == []
+    assert carry.collisions('1. Lattice first.', [], headings, {'Lattice': 1}) == []
+    assert len(carry.collisions(
         'Fix the Lattice path.', [], headings, {'Lattice': 1})) == 1
     cam = [('SPEC.md', 9, 'LatticeCache is frozen')]
-    assert len(hq.collisions(
+    assert len(carry.collisions(
         '- LatticeCache was renamed.', [], cam, {'LatticeCache': 1})) == 1
 
 
@@ -917,7 +917,7 @@ def test_artifacts_render_trusts_row_status_for_abs_rows():
     """
     rows = {'~/x.md': _ledger_row(
         path='~/x.md', base='abs', read_before='edit', label='outside note')}
-    result = hq.render_artifacts([], rows, 'slug', {'~/x.md'})
+    result = render.render_artifacts([], rows, 'slug', {'~/x.md'})
     assert '~/x.md  notes  edit  c1  outside note' in result
     assert 'missing' not in result
 
@@ -934,7 +934,7 @@ def test_non_live_count_line_has_a_fixed_order():
         'b.md': _ledger_row(path='b.md', status='missing'),
         'c.md': _ledger_row(path='c.md', status='superseded'),
     }
-    result = hq.render_artifacts([], rows, 'slug', set())
+    result = render.render_artifacts([], rows, 'slug', set())
     counted = [
         ln.split()[0] for ln in result.splitlines()
         if ln.startswith(('superseded', 'archived', 'missing'))]
@@ -954,7 +954,7 @@ def test_standing_renders_every_live_constraint_and_no_superseded_line():
          'headline': f'rule {n}', 'body': 'body'}
         for n in range(1, 87)
     ]
-    result = hq.render_standing(
+    result = render.render_standing(
         items, {'c86'}, 'slug',
         whole_ids={item['id'] for item in items}).splitlines()
     assert len(result) == 86
@@ -979,7 +979,7 @@ def test_every_kind_renders_whole_under_its_heading():
             for i in range(1, n + 1)]
 
     items = _items('c', 26, 'why it holds') + _items('d', 38, '') + _items('x', 26, '')
-    lines = hq.render_standing(
+    lines = render.render_standing(
         items, set(), 'widget-alpha',
         whole_ids={item['id'] for item in items}).splitlines()
     assert len(lines) == 93
@@ -988,7 +988,7 @@ def test_every_kind_renders_whole_under_its_heading():
     assert [sum(ln.startswith(f'[{p}') for ln in lines) for p in 'cdx'] == [26, 38, 26]
     assert not any(ln.startswith('... ') for ln in lines)
     more_items = _items('c', 90, 'b') + _items('x', 5, '')
-    lines = hq.render_standing(
+    lines = render.render_standing(
         more_items, set(), 'widget-alpha',
         whole_ids={item['id'] for item in more_items}).splitlines()
     assert len(lines) == 97
@@ -1002,8 +1002,8 @@ def test_header_past_five_dirty_paths_shows_the_total():
     Mutation: five names followed by the count of the rest.
     Oracle: hand-computed tails for five and seven paths.
     """
-    assert hq._dirty_str(['a', 'b', 'c', 'd', 'e']) == ' | dirty: a, b, c, d, e'
-    assert hq._dirty_str(['a', 'b', 'c', 'd', 'e', 'f', 'g']) == ' | 7 files dirty'
+    assert storage.dirty_str(['a', 'b', 'c', 'd', 'e']) == ' | dirty: a, b, c, d, e'
+    assert storage.dirty_str(['a', 'b', 'c', 'd', 'e', 'f', 'g']) == ' | 7 files dirty'
 
 
 def test_collisions_match_a_backticked_flag():
@@ -1014,7 +1014,7 @@ def test_collisions_match_a_backticked_flag():
     Oracle: hand-computed - one hit for `--force` against a dead-end
     headline that names the flag.
     """
-    hits = hq.collisions(
+    hits = carry.collisions(
         'use `--force` now', [('the --force flag failed', 'x01')], [], {'--force': 1})
     assert len(hits) == 1
     assert '--force' in hits[0]
@@ -1045,9 +1045,9 @@ def test_resolve_where_maps_a_section_reference_to_its_numbered_heading():
         '\n'
         'Tail.\n'
     )
-    assert hq.resolve_where(text, ['s4']) == ([(7, 10)], [])
-    assert hq.resolve_where(text, ['s40']) == ([(11, 13)], [])
-    assert hq.resolve_where(text, ['s5']) == ([], ['s5'])
+    assert markdown.resolve_where(text, ['s4']) == ([(7, 10)], [])
+    assert markdown.resolve_where(text, ['s40']) == ([(11, 13)], [])
+    assert markdown.resolve_where(text, ['s5']) == ([], ['s5'])
 
 
 def test_resolve_where_names_a_dotted_sub_heading_by_its_whole_number():
@@ -1077,12 +1077,12 @@ def test_resolve_where_names_a_dotted_sub_heading_by_its_whole_number():
         '## v2.0 notes\n'
         'C\n'
     )
-    assert hq.resolve_where(text, ['s24.4']) == ([(3, 6)], [])
-    assert hq.resolve_where(text, ['s31.2']) == ([(7, 9)], [])
-    assert hq.resolve_where(text, ['S31.2']) == ([(7, 9)], [])
-    assert hq.resolve_where(text, ['s24']) == ([], ['s24'])
-    assert hq.resolve_where(text, ['s2.0']) == ([], ['s2.0'])
-    assert hq.resolve_where(text, ['The decision']) == ([(3, 6)], [])
+    assert markdown.resolve_where(text, ['s24.4']) == ([(3, 6)], [])
+    assert markdown.resolve_where(text, ['s31.2']) == ([(7, 9)], [])
+    assert markdown.resolve_where(text, ['S31.2']) == ([(7, 9)], [])
+    assert markdown.resolve_where(text, ['s24']) == ([], ['s24'])
+    assert markdown.resolve_where(text, ['s2.0']) == ([], ['s2.0'])
+    assert markdown.resolve_where(text, ['The decision']) == ([(3, 6)], [])
 
 
 # --- mutation survivors, 2026-09-09 ---------------------------------------
@@ -1099,9 +1099,9 @@ def test_stem_rule_supersedes_an_older_spec_by_a_newer_spec_alone():
     maps to it, SPEC.notes.md at 300 stays.
     """
     two = [('SPEC.md', 'spec', 200.0), ('SPEC.v2.md', 'spec', 300.0)]
-    assert hq.apply_stem_rule(two) == {'SPEC.md': 'SPEC.v2.md'}
+    assert ledger.apply_stem_rule(two) == {'SPEC.md': 'SPEC.v2.md'}
     three = two + [('SPEC.notes.md', 'notes', 300.0)]
-    assert hq.apply_stem_rule(three) == {'SPEC.md': 'SPEC.v2.md'}
+    assert ledger.apply_stem_rule(three) == {'SPEC.md': 'SPEC.v2.md'}
 
 
 def test_drain_unfiled_cuts_the_prefix_exactly_and_skips_blank_lines():
@@ -1116,7 +1116,7 @@ def test_drain_unfiled_cuts_the_prefix_exactly_and_skips_blank_lines():
         '## Task\nDo.\n\n## Unfiled\n\n'
         '- decision: **Use one call** Batch writes.\n\n'
         '- dead-end: A pid in the lock. Meaningless across hosts.\n\n## Log\n')
-    items, cursor_out, refusal = hq.drain_unfiled(cursor)
+    items, cursor_out, refusal = standing.drain_unfiled(cursor)
     assert refusal is None
     assert items == [
         ('decision', 'Use one call', 'Batch writes.'),
@@ -1134,7 +1134,8 @@ def test_conservation_reports_a_line_missing_after_a_blank_line():
     Oracle: 'Tail fact.' follows a blank line and is absent from the union.
     """
     original = '## Task\nDo.\n\n## State\nTail fact.\n'
-    assert hq.conservation(original, '## Task\nDo.\n## State\n', '', []) == ['Tail fact.']
+    assert carry.conservation(
+        original, '## Task\nDo.\n## State\n', '', []) == ['Tail fact.']
 
 
 def test_conservation_passes_a_rewrap_and_still_flags_a_drop():
@@ -1158,12 +1159,12 @@ def test_conservation_passes_a_rewrap_and_still_flags_a_drop():
         '  and add a pool to cut latency.\n'
         '- Then ship it.\n')
     truncated = '## Plan\n- Rework the loader to use batch reads.\n- Then ship it.\n'
-    assert hq.conservation(original, rewrapped, '', []) == []
-    assert hq.conservation(original, truncated, '', []) == [bullet]
+    assert carry.conservation(original, rewrapped, '', []) == []
+    assert carry.conservation(original, truncated, '', []) == [bullet]
     glued = (
         '## Plan\n- Rework the loader to use batch reads instead of one read per row,')
-    assert hq.conservation(f'{glued}\n', rewrapped, '', []) == []
-    assert hq.conservation(
+    assert carry.conservation(f'{glued}\n', rewrapped, '', []) == []
+    assert carry.conservation(
         '- Then ship it. - Rework the loader\n', rewrapped, '', []) == [
         '- Then ship it. - Rework the loader']
 
@@ -1196,7 +1197,7 @@ def test_render_standing_holds_each_kind_back_and_the_eighty_line_boundary():
         ]
     assert (len(held_c), len(held_d), len(held_x)) == (25, 11, 13)
     whole_ids = {item['id'] for item in items}
-    assert hq.render_standing(items, set(), 'slug', whole_ids).splitlines() == [
+    assert render.render_standing(items, set(), 'slug', whole_ids).splitlines() == [
         '### Constraints',
         ('[c01] (c1) **Never log tokens** Not at debug.'
          f'  +{len(held_c)}c - hq standing slug c01'),
@@ -1209,13 +1210,13 @@ def test_render_standing_holds_each_kind_back_and_the_eighty_line_boundary():
         {'id': f'c{n:02d}', 'prefix': 'c', 'cycle': '1', 'headline': f'r{n}', 'body': 'b'}
         for n in range(1, 80)
         ]
-    lines = hq.render_standing(
+    lines = render.render_standing(
         many, set(), 'slug',
         whole_ids={item['id'] for item in many}).splitlines()
     assert len(lines) == 80
     assert not lines[-1].startswith('... ')
     more = many + [{'id': 'c80', 'prefix': 'c', 'cycle': '1', 'headline': 'r80', 'body': 'b'}]
-    lines = hq.render_standing(
+    lines = render.render_standing(
         more, set(), 'slug',
         whole_ids={item['id'] for item in more}).splitlines()
     assert len(lines) == 81
@@ -1242,7 +1243,7 @@ def test_standing_sorts_each_kind_by_cycle_descending_and_stably():
          'body': 'Every quarter.'},
         ]
     whole_ids = {item['id'] for item in items}
-    assert hq.render_standing(items, set(), 'slug', whole_ids).splitlines() == [
+    assert render.render_standing(items, set(), 'slug', whole_ids).splitlines() == [
         '### Constraints',
         '[c09] (c3) **Rotate the key** Every quarter.',
         '[c05] (c1) **Never log tokens** Not at debug.',
@@ -1268,7 +1269,7 @@ def test_drain_unfiled_preserves_words_before_an_inline_bold_span():
         '## Unfiled\n'
         '- constraint: The retry budget **must not** exceed three attempts per host.\n'
         )
-    items, _, refusal = hq.drain_unfiled(cursor)
+    items, _, refusal = standing.drain_unfiled(cursor)
     assert refusal is None
     assert len(items) == 1
     kind, headline, body = items[0]
@@ -1297,8 +1298,8 @@ def test_resolve_where_ignores_a_hash_line_inside_a_fenced_code_block():
         '```\n'
         'more text\n'
         )
-    spans_s1, _ = hq.resolve_where(text, ['s1'])
-    _, unresolved_s2 = hq.resolve_where(text, ['s2'])
+    spans_s1, _ = markdown.resolve_where(text, ['s1'])
+    _, unresolved_s2 = markdown.resolve_where(text, ['s2'])
     assert spans_s1 == [(1, 7)], (
         f's1 span truncated by in-fence heading; got {spans_s1}')
     assert 's2' in unresolved_s2, (
@@ -1326,7 +1327,7 @@ def test_resolve_where_returns_non_overlapping_spans_for_a_parent_and_child_anch
         'note 1\n'
         'note 2\n'
         )
-    spans, unresolved = hq.resolve_where(text, ['s2', 'Notes'])
+    spans, unresolved = markdown.resolve_where(text, ['s2', 'Notes'])
     assert unresolved == []
     counted = sum(end - beg + 1 for beg, end in spans)
     distinct = len({

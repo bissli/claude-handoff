@@ -66,16 +66,16 @@ import sys
 from typing import Any
 
 try:
-    # pytest and mutmut run from the repo root and import the package.
-    from bin import hq
+    # pytest and mutmut put src/ on sys.path (pytest.ini).
+    from handoff import ledger, markdown, paths, storage
 except ImportError:
-    # Script mode puts scripts/ on sys.path rather than the plugin root,
-    # so reach the program in bin/ by its own path. One branch or the
-    # other binds hq, never both, so a test patching bin.hq patches the
-    # module the hook holds.
-    sys.path.insert(
-        0, str(pathlib.Path(__file__).resolve().parent.parent / 'bin'))
-    import hq
+    # Notes:
+    # - Script mode puts scripts/ on sys.path rather than bin/, so reach
+    #   the package by its own path.
+    # - ../src comes first, since mutmut writes its mutated copy there.
+    plugin_root = pathlib.Path(__file__).resolve().parent.parent
+    sys.path[:0] = [str(plugin_root / 'src'), str(plugin_root / 'bin')]
+    from handoff import ledger, markdown, paths, storage
 
 STATE_DIR = os.path.expanduser('~/.claude/cache/claude-handoff')
 
@@ -432,7 +432,7 @@ def store_reads(tool: str, fields: dict[str, Any], cwd: str) -> list[tuple[str, 
       ``~user`` token costs a name-service lookup through
       ``expanduser``; nothing else leaves the process.
     """
-    name = hq.HANDOFF_DIRNAME
+    name = storage.HANDOFF_DIRNAME
     if tool == 'Read':
         raw = str(fields.get('file_path') or '')
     elif tool == 'Bash':
@@ -452,12 +452,12 @@ def store_reads(tool: str, fields: dict[str, Any], cwd: str) -> list[tuple[str, 
                    for token in _TOKEN_SPLIT.split(segment) if token]
     found: list[tuple[str, str]] = []
     for target in spelled:
-        if not any(store in target for store in hq.STORE_VERBS):
+        if not any(store in target for store in storage.STORE_VERBS):
             continue
         parts = _resolved(target, cwd).split(os.sep)
         for index, part in enumerate(parts[:-2]):
             store = parts[index + 2]
-            if part == name and store in hq.STORE_VERBS:
+            if part == name and store in storage.STORE_VERBS:
                 found.append((parts[index + 1], store))
     return list(dict.fromkeys(found))
 
@@ -532,7 +532,7 @@ def gate(payload: dict[str, Any]) -> int:
     if os.environ.get('HQ_GATE') == '0':
         return 0
     deny = os.environ.get('HQ_GATE_DENY') == '1'
-    name = hq.HANDOFF_DIRNAME
+    name = storage.HANDOFF_DIRNAME
     cwd = str(payload.get('cwd') or '')
     tool = str(payload.get('tool_name') or '')
     fields = payload.get('tool_input') or {}
@@ -542,7 +542,7 @@ def gate(payload: dict[str, Any]) -> int:
     # them.
     nudge = '; '.join(
         f'{read_slug}/{store} is dictated, not opened - run: '
-        + hq.STORE_VERBS[store].format(slug=read_slug)
+        + storage.STORE_VERBS[store].format(slug=read_slug)
         for read_slug, store in store_reads(tool, fields, cwd))
     # Notes:
     # - A Bash target is the word after a redirect, or a non-flag word
@@ -650,7 +650,7 @@ def gate(payload: dict[str, Any]) -> int:
     #   anywhere under `.handoff/` is bookkeeping the same way.
     own = False
     if folder is not None and targets:
-        pin, _ = hq.resolve_work_dir(folder)
+        pin, _ = paths.resolve_work_dir(folder)
         if pin and not pin.startswith(('/', '~')):
             pin = str(root / pin)
         bases = [os.path.normpath(str(root)) + os.sep]
@@ -671,8 +671,8 @@ def gate(payload: dict[str, Any]) -> int:
 
     message = ''
     if folder is not None:
-        rows = hq.latest_rows(
-            hq._read_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS))
+        rows = ledger.latest_rows(
+            storage.read_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS))
         # hq read falls back to the folder when a sandboxed shell leaves
         # the state directory read-only, so a receipt lives in either.
         receipts: list[str] = []
@@ -688,7 +688,7 @@ def gate(payload: dict[str, Any]) -> int:
         tokens = [set(_TOKEN_SPLIT.split(entry)) for entry in segments]
         missing: list[tuple[str, str, bool]] = []
         for row in rows.values():
-            if row['status'] != 'live' or row['read_before'] not in hq._GATE_RB:
+            if row['status'] != 'live' or row['read_before'] not in ledger.GATE_RB:
                 continue
             stored = row['path']
             if row['base'] == 'abs':
@@ -719,8 +719,8 @@ def gate(payload: dict[str, Any]) -> int:
                     text = target.read_text(encoding='utf-8', errors='replace')
                 except OSError:
                     text = ''
-                spans, unresolved = hq.resolve_where(
-                    text, hq._split_where(row['where']))
+                spans, unresolved = markdown.resolve_where(
+                    text, markdown.split_where(row['where']))
                 # The resolved list follows the anchor order, not the
                 # file's, so a joined list of every span reads out of
                 # order. The count carries the extent instead.

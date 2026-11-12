@@ -9,7 +9,7 @@ import contextlib
 import io
 import pathlib
 
-from bin import hq
+from handoff import cli, ledger, markdown, storage
 
 _SLUG = 'label-adv-slug'
 _SESSION = 'session-label-adv'
@@ -60,7 +60,7 @@ def _env(tmp_path, monkeypatch):
 
 
 def _run(argv):
-    """Drive hq.main over one argument list and capture stdout.
+    """Drive cli.main over one argument list and capture stdout.
 
     Returns
     -------
@@ -70,7 +70,7 @@ def _run(argv):
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         try:
-            rc = hq.main(argv)
+            rc = cli.main(argv)
         except SystemExit as exc:
             rc = exc.code
     return rc, out.getvalue(), err.getvalue()
@@ -190,8 +190,8 @@ def test_a_section_anchored_by_its_title_counts_as_covered(
     assert _run(['begin', _SLUG])[0] == 0
     (folder / 'SPEC.md').write_text(_SPEC_TEXT, encoding='utf-8')
     # Confirm both anchors reach the same heading start.
-    spans_title, _ = hq.resolve_where(_SPEC_TEXT, ['Scope'])
-    spans_s1, _ = hq.resolve_where(_SPEC_TEXT, ['s1'])
+    spans_title, _ = markdown.resolve_where(_SPEC_TEXT, ['Scope'])
+    spans_s1, _ = markdown.resolve_where(_SPEC_TEXT, ['s1'])
     assert spans_title
     assert spans_s1
     assert spans_title[0][0] == spans_s1[0][0]
@@ -212,7 +212,7 @@ def test_the_advisory_leaves_the_row_written_and_the_exit_zero(
 
     Mutation: the advisory turned into a refusal returning 1, or the check
     placed above _append_tsv so a fired advisory leaves no row.
-    Oracle: hq.latest_rows(hq._read_tsv(...))['SPEC.md'] read directly
+    Oracle: ledger.latest_rows(storage.read_tsv(...))['SPEC.md'] read directly
     for where and label; exit code captured from the run.
     """
     folder = _env(tmp_path, monkeypatch)
@@ -226,7 +226,7 @@ def test_the_advisory_leaves_the_row_written_and_the_exit_zero(
     assert rc == 0
     assert any(
         ln.startswith(_advisory_prefix()) for ln in out.splitlines())
-    rows = hq._read_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS)
-    row = hq.latest_rows(rows)['SPEC.md']
+    rows = storage.read_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS)
+    row = ledger.latest_rows(rows)['SPEC.md']
     assert row['where'] == 's1'
     assert row['label'] == 's1 scope, s2 facts, s3 rulings'

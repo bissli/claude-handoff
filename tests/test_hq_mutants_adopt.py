@@ -8,7 +8,7 @@ counted at the end of this module.
 
 import pathlib
 
-from bin import hq
+from handoff import carry, cli, ledger, markdown, paths, standing, storage
 
 _SLUG = 'mut-adopt'
 _SESSION = 'session-mut'
@@ -59,13 +59,13 @@ def _handoff(folder, key_files='', cycle=3, extra=''):
 
 def _ledger(folder):
     """Return the ledger rows as a list of dicts."""
-    return hq._read_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS)
+    return storage.read_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS)
 
 
 def _manifest(folder):
     """Return the manifest rows as a list of dicts."""
-    return hq._read_tsv(
-        folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS)
+    return storage.read_tsv(
+        folder / 'cycles' / 'manifest.tsv', storage.MANIFEST_FIELDS)
 
 
 # --- split_handoff ---------------------------------------------------
@@ -84,7 +84,7 @@ def test_split_handoff_keys_are_lowercase():
         'Written: 2026-09-01 | Cycle: 3\n\n'
         '## Task\n\nDo it.\n'
     )
-    result = hq.split_handoff(text)
+    result = markdown.split_handoff(text)
     assert set(result.keys()) == {'header', 'slug', 'cycle', 'cursor', 'blocks', 'log'}
     assert result['slug'] == 'test-slug'
     assert result['cycle'] == 3
@@ -99,7 +99,7 @@ def test_split_handoff_slug_is_case_sensitive():
     Oracle: slug equals 'demo' from '# Handoff: demo'.
     """
     text = '# Handoff: demo\n\nWritten: 2026-01-01 | Cycle: 1\n\n## Task\n'
-    result = hq.split_handoff(text)
+    result = markdown.split_handoff(text)
     assert result['slug'] == 'demo'
 
 
@@ -128,7 +128,7 @@ def test_split_handoff_blocks_parsed_in_order():
     signal.signal(signal.SIGALRM, _alarm)
     signal.alarm(2)
     try:
-        result = hq.split_handoff(text)
+        result = markdown.split_handoff(text)
     finally:
         signal.alarm(0)
     assert result['blocks'].get('alpha') == 'alpha body'
@@ -147,7 +147,7 @@ def test_split_handoff_log_captured_after_log_heading():
         '## Task\n\nWork.\n\n'
         '## Log\n\n- 2026-01-01: started\n'
     )
-    result = hq.split_handoff(text)
+    result = markdown.split_handoff(text)
     assert '2026-01-01: started' in result['log']
 
 
@@ -175,7 +175,7 @@ def test_conservation_indented_heading_covered_by_content():
         'Covered content line ZZZZ.\n'
     )
     cursor = '# Handoff: s\n\n## Task\n\nWork.\n\nCovered content line ZZZZ.'
-    missing = hq.conservation(original, cursor, '', [])
+    missing = carry.conservation(original, cursor, '', [])
     assert missing == []
 
 
@@ -195,7 +195,7 @@ def test_walk_folder_regular_file_and_dir_not_skipped():
         folder = pathlib.Path(tmp)
         (folder / 'spec.md').write_text('# Spec\n', encoding='utf-8')
         (folder / 'subdir').mkdir()
-        results = dict(hq._walk_folder(folder))
+        results = dict(ledger.walk_folder(folder))
         assert results['spec.md'] == 'spec'
         assert results['subdir'] == 'probe-dir'
 
@@ -216,7 +216,7 @@ def test_walk_folder_continue_after_skip_name():
         folder = pathlib.Path(tmp)
         (folder / 'HANDOFF.md').write_text('# Handoff: x\n', encoding='utf-8')
         (folder / 'zzz-spec.md').write_text('# Spec\n', encoding='utf-8')
-        results = dict(hq._walk_folder(folder))
+        results = dict(ledger.walk_folder(folder))
         assert 'zzz-spec.md' in results
         assert 'HANDOFF.md' not in results
 
@@ -236,7 +236,7 @@ def test_parse_standing_break_on_non_bullet_stops_early():
         '\n'
         '- [d02] (c1) **Second decision.** Body two.\n'
     )
-    items, _ = hq._parse_standing(text)
+    items, _ = standing.parse_standing(text)
     ids = [it['id'] for it in items]
     assert 'd01' in ids
     assert 'd02' in ids
@@ -254,7 +254,7 @@ def test_parse_standing_superseded_continue_processes_rest():
         '- [d02] (c1) **New decision.** Replaces first.\n'
         '- [c01] (c1) **Constraint one.** Always.\n'
     )
-    items, superseded = hq._parse_standing(text)
+    items, superseded = standing.parse_standing(text)
     assert 'd01' in superseded
     ids = [it['id'] for it in items]
     assert 'd02' in ids
@@ -270,7 +270,7 @@ def test_parse_standing_cycle_field_uses_group_2():
     Oracle: an item with (c5) carries cycle='5', not the headline text.
     """
     text = '- [d01] (c5) **My headline.** Body text.\n'
-    items, _ = hq._parse_standing(text)
+    items, _ = standing.parse_standing(text)
     assert len(items) == 1
     assert items[0]['cycle'] == '5'
     assert items[0]['headline'] == 'My headline.'
@@ -297,7 +297,7 @@ def test_pointer_path_returns_early_when_exists():
         (pathlib.Path(tmp) / 'SPEC.md').write_text('decoy', encoding='utf-8')
         target = folder / 'SPEC.md'
         target.write_text('# Spec\n', encoding='utf-8')
-        stored, path_obj, base = hq._pointer_path(folder, 'SPEC.md')
+        stored, path_obj, base = paths.pointer_path(folder, 'SPEC.md')
         assert stored == 'SPEC.md'
         assert base == 'folder'
         assert path_obj == target
@@ -311,10 +311,10 @@ def test_adopt_returns_1_when_handoff_missing(tmp_path, monkeypatch):
 
     Mutation: return 1 changed to return 2 (mutmut_13) for the missing
     HANDOFF.md case.
-    Oracle: hq.main(['adopt', slug]) == 1.
+    Oracle: cli.main(['adopt', slug]) == 1.
     """
     _root(tmp_path, monkeypatch)
-    assert hq.main(['adopt', _SLUG]) == 1
+    assert cli.main(['adopt', _SLUG]) == 1
 
 
 def test_adopt_returns_0_and_creates_ledger(tmp_path, monkeypatch):
@@ -326,7 +326,7 @@ def test_adopt_returns_0_and_creates_ledger(tmp_path, monkeypatch):
     """
     folder = _root(tmp_path, monkeypatch)
     _handoff(folder)
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     assert (folder / 'ledger.tsv').exists()
 
 
@@ -351,7 +351,7 @@ def test_adopt_ledger_row_has_lowercase_keys_and_correct_values(
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n', encoding='utf-8')
     (folder / 'notes.md').write_text('Notes text.\n', encoding='utf-8')
     _handoff(folder)
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = {r['path']: r for r in _ledger(folder)}
     assert 'SPEC.md' in rows
     spec = rows['SPEC.md']
@@ -380,7 +380,7 @@ def test_adopt_spec_and_draft_get_always_others_get_never(
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n', encoding='utf-8')
     (folder / 'data.json').write_text('{}', encoding='utf-8')
     _handoff(folder)
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['SPEC.md']['read_before'] == 'always'
     assert rows['data.json']['read_before'] == 'never'
@@ -402,7 +402,7 @@ def test_adopt_superseded_file_gets_never_rb(tmp_path, monkeypatch):
     time.sleep(0.01)
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n', encoding='utf-8')
     _handoff(folder)
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['SPEC.md.pre-2']['status'] == 'superseded'
     assert rows['SPEC.md.pre-2']['read_before'] == 'never'
@@ -427,7 +427,7 @@ def test_adopt_kf_rb_edit_applies_only_to_notes_kind(tmp_path, monkeypatch):
         '  - `SPEC.md` the spec\n'
         '  - `notes-bg.md` background notes\n'
     ))
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['SPEC.md']['read_before'] == 'always'
     assert rows['notes-bg.md']['read_before'] == 'edit'
@@ -452,7 +452,7 @@ def test_adopt_skip_entries_excluded_from_ledger(tmp_path, monkeypatch):
     cc.write_text('# Spec\n\nOld.\n', encoding='utf-8')
     (folder / 'data.json').write_text('{}', encoding='utf-8')
     _handoff(folder)
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = {r['path']: r for r in _ledger(folder)}
     assert 'SPEC (conflicted copy 2023-01-01).md' not in rows
     assert 'data.json' in rows
@@ -472,7 +472,7 @@ def test_adopt_conflicted_copy_message(tmp_path, monkeypatch, capsys):
     conflict = folder / 'SPEC (conflicted copy 2026-09-01).md'
     conflict.write_text('# Spec\n\nOld.\n', encoding='utf-8')
     _handoff(folder)
-    hq.main(['adopt', _SLUG])
+    cli.main(['adopt', _SLUG])
     out = capsys.readouterr().out
     assert 'skipped conflicted copy' in out
     assert 'unstampable name' not in out
@@ -495,7 +495,7 @@ def test_adopt_skip_continue_not_break(tmp_path, monkeypatch):
     cc.write_text('# old\n\nContent.\n', encoding='utf-8')
     (folder / 'zzz-data.json').write_text('{}', encoding='utf-8')
     _handoff(folder)
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = {r['path']: r for r in _ledger(folder)}
     assert 'zzz-data.json' in rows
 
@@ -518,7 +518,7 @@ def test_adopt_archives_prev_only_when_cycle_gt_1(tmp_path, monkeypatch):
         '# Handoff: old\n\nWritten: 2026-01-01 | Cycle: 1\n\n## Task\n\nOld.\n',
         encoding='utf-8')
     _handoff(folder, cycle=1)
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     assert not (folder / 'cycles' / 'c00.md').exists()
 
     folder2 = _root(tmp_path, monkeypatch, slug='mut-adopt2')
@@ -527,7 +527,7 @@ def test_adopt_archives_prev_only_when_cycle_gt_1(tmp_path, monkeypatch):
         '# Handoff: old2\n\nWritten: 2026-01-01 | Cycle: 1\n\n## Task\n\nOld.\n',
         encoding='utf-8')
     _handoff(folder2, cycle=2)
-    assert hq.main(['adopt', 'mut-adopt2']) == 0
+    assert cli.main(['adopt', 'mut-adopt2']) == 0
     assert (folder2 / 'cycles' / 'c01.md').exists()
 
 
@@ -544,7 +544,7 @@ def test_adopt_prev_archived_to_correct_cycle_number(tmp_path, monkeypatch):
         '# Handoff: prev-demo\n\nWritten: 2026-01-01 | Cycle: 2\n\n## Task\n\nPrev.\n',
         encoding='utf-8')
     _handoff(folder, cycle=3)
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     cycles_dir = folder / 'cycles'
     assert (cycles_dir / 'c02.md').exists()
     assert not (cycles_dir / 'c04.md').exists()
@@ -569,7 +569,7 @@ def test_adopt_not_overwrite_existing_prev_archive(tmp_path, monkeypatch):
         '# Handoff: new-prev\n\nWritten: 2026-09-01 | Cycle: 2\n\n## Task\n\nNew.\n',
         encoding='utf-8')
     _handoff(folder, cycle=3)
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     assert (cycles_dir / 'c02.md').read_text(encoding='utf-8') == sentinel
 
 
@@ -583,7 +583,7 @@ def test_adopt_cycles_dir_exist_ok(tmp_path, monkeypatch):
     folder = _root(tmp_path, monkeypatch)
     (folder / 'cycles').mkdir()
     _handoff(folder)
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
 
 def test_adopt_prev_path_filename_is_uppercase(tmp_path, monkeypatch):
@@ -599,7 +599,7 @@ def test_adopt_prev_path_filename_is_uppercase(tmp_path, monkeypatch):
         '# Handoff: prev\n\nWritten: 2026-01-01 | Cycle: 2\n\n## Task\n\nOld.\n',
         encoding='utf-8')
     _handoff(folder, cycle=3)
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     assert (folder / 'cycles' / 'c02.md').exists()
 
 
@@ -623,7 +623,7 @@ def test_adopt_manifest_row_has_lowercase_keys_and_correct_date(
     (folder / 'HANDOFF.md').write_text(
         f'# Handoff: {folder.name}\n\nWritten: 2026-08-22 | Cycle: 3\n\n' + _CURSOR,
         encoding='utf-8')
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = _manifest(folder)
     assert len(rows) == 1
     row = rows[0]
@@ -646,7 +646,7 @@ def test_adopt_payload_tokens_uses_integer_division(tmp_path, monkeypatch):
     """
     folder = _root(tmp_path, monkeypatch)
     _handoff(folder)
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     manifest_rows = _manifest(folder)
     token_str = manifest_rows[0]['payload_tokens']
     assert '.' not in token_str
@@ -669,7 +669,7 @@ def test_adopt_anchor_cycle_uses_parsed_cycle(tmp_path, monkeypatch):
         '\n## Decisions\n\n'
         '- **Keep the floor.** Never below one.\n'
     ))
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     standing = (folder / 'standing.md').read_text(encoding='utf-8')
     assert '(c5)' in standing
 
@@ -685,7 +685,7 @@ def test_adopt_branch_and_sha_in_header_line(tmp_path, monkeypatch):
     """
     folder = _root(tmp_path, monkeypatch)
     _handoff(folder)
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     text = (folder / 'HANDOFF.md').read_text(encoding='utf-8')
     header = [ln for ln in text.splitlines() if ln.startswith('Written:')][0]
     assert '2026-09-01' in header
@@ -707,7 +707,7 @@ def test_adopt_rb_count_correct_for_one_and_two_files(tmp_path, monkeypatch,
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n', encoding='utf-8')
     (folder / 'DESIGN.md').write_text('# Design\n\nContent.\n', encoding='utf-8')
     _handoff(folder)
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     out = capsys.readouterr().out
     assert 'read_before=always: 2' in out
 
@@ -725,7 +725,7 @@ def test_adopt_gated_check_uses_live_and_gate_rb(tmp_path, monkeypatch,
     folder = _root(tmp_path, monkeypatch)
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n', encoding='utf-8')
     _handoff(folder)
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     out = capsys.readouterr().out
     assert 'gated (1)' in out
 
@@ -743,7 +743,7 @@ def test_adopt_gated_names_shows_at_most_five(tmp_path, monkeypatch, capsys):
     for name in spec_names:
         (folder / name).write_text(f'# Spec {name}\n\nContent.\n', encoding='utf-8')
     _handoff(folder)
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     out = capsys.readouterr().out
     gated_line = [ln for ln in out.splitlines() if ln.startswith('  gated')]
     assert gated_line
@@ -765,7 +765,7 @@ def test_adopt_never_cnt_key_is_lowercase(tmp_path, monkeypatch):
     folder = _root(tmp_path, monkeypatch)
     (folder / 'data.json').write_text('{}', encoding='utf-8')
     _handoff(folder)
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     manifest_rows = _manifest(folder)
     assert manifest_rows[0]['log'] == 'adopted'
 
@@ -785,7 +785,7 @@ def test_adopt_unfiled_section_case_exact(tmp_path, monkeypatch):
     """
     folder = _root(tmp_path, monkeypatch)
     _handoff(folder, extra='\n## Unfiled\n\n- loose line\n')
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     text = (folder / 'HANDOFF.md').read_text(encoding='utf-8')
     assert '## Unfiled' in text
 
@@ -807,7 +807,7 @@ def test_adopt_known_sections_skipped_in_unfiled_loop(tmp_path, monkeypatch):
         '\n## Artifacts\n\n- artifact-file.zip\n'
         '\n## Read first\n\n- SPEC.md\n'
     ))
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     text = (folder / 'HANDOFF.md').read_text(encoding='utf-8')
     unfiled_bullets = [ln for ln in text.splitlines()
                        if ln.startswith('- unfiled:')]
@@ -826,7 +826,7 @@ def test_adopt_unfiled_rstrip_preserves_trailing_space_loss(
     """
     folder = _root(tmp_path, monkeypatch)
     _handoff(folder, extra='\n## Unfiled\n\n- a note   \n')
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     text = (folder / 'HANDOFF.md').read_text(encoding='utf-8')
     assert '- a note' in text
 
@@ -844,7 +844,7 @@ def test_adopt_kf_group_set_to_lowercase(tmp_path, monkeypatch):
     folder = _root(tmp_path, monkeypatch)
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n', encoding='utf-8')
     _handoff(folder, key_files='Read now:\n- `SPEC.md` the spec\n')
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['SPEC.md']['read_before'] == 'always'
 
@@ -861,7 +861,7 @@ def test_adopt_range_info_rstripped_not_lstripped(tmp_path, monkeypatch):
     folder = _root(tmp_path, monkeypatch)
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n', encoding='utf-8')
     _handoff(folder, key_files='- `SPEC.md:10-40`\n')
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = {r['path']: r for r in _ledger(folder)}
     label = rows['SPEC.md']['label']
     assert label == 'lines 10-40'
@@ -878,7 +878,7 @@ def test_adopt_sref_findall_is_ignorecase(tmp_path, monkeypatch):
     (folder / 'SPEC.md').write_text(
         '# Spec\n\n## 3. Retry\n\nContent.\n', encoding='utf-8')
     _handoff(folder, key_files='- `SPEC.md` see Section 3\n')
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['SPEC.md']['where'] == 's3'
 
@@ -895,7 +895,7 @@ def test_adopt_rb_over_none_not_empty_string(tmp_path, monkeypatch):
     folder = _root(tmp_path, monkeypatch)
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n', encoding='utf-8')
     _handoff(folder, key_files='- `SPEC.md` the design spec\n')
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['SPEC.md']['read_before'] in {'always', 'never', 'edit', 'mention'}
     assert rows['SPEC.md']['read_before'] != ''
@@ -912,7 +912,7 @@ def test_adopt_key_files_section_name_case_exact(tmp_path, monkeypatch):
     folder = _root(tmp_path, monkeypatch)
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n', encoding='utf-8')
     _handoff(folder, key_files='Read now:\n- `SPEC.md` the spec\n')
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['SPEC.md']['read_before'] == 'always'
 
@@ -932,7 +932,7 @@ def test_adopt_hq_block_marker_stops_cur_body(tmp_path, monkeypatch):
         'some content\n'
         '<!-- /hq:keyfiles -->\n'
     ))
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
 
 # --- _verb_adopt (manifest not-carried output) -----------------------
@@ -949,7 +949,7 @@ def test_adopt_manifest_log_still_adopted_for_basic_run(
     """
     folder = _root(tmp_path, monkeypatch)
     _handoff(folder)
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     assert _manifest(folder)[0]['log'] == 'adopted'
 
 
@@ -972,7 +972,7 @@ def test_adopt_prints_every_not_carried_line_in_full(
     long_item = '- ' + 'a' * 68 + 'BCD'
     items = [f'- item{i} STANDA0{i}' for i in range(1, 6)] + [long_item]
     _handoff(folder, extra='\n## Standing\n\n' + '\n'.join(items) + '\n')
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     out = capsys.readouterr().out
     assert 'conservation: 7 original lines not carried' in out
     printed = [ln for ln in out.splitlines() if ln.startswith('  not carried: ')]
@@ -1001,7 +1001,7 @@ def test_adopt_prints_every_orig_not_carried_line_in_full(
         + '\n## Standing\n\n' + '\n'.join(items) + '\n'
     )
     (folder / 'HANDOFF.orig.md').write_text(orig_text, encoding='utf-8')
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     out = capsys.readouterr().out
     assert 'conservation vs HANDOFF.orig.md: 7 lines not carried' in out
     orig_part = out.split('conservation vs HANDOFF.orig.md:', 1)[1]
@@ -1021,7 +1021,7 @@ def test_adopt_on_disk_false_prints_missing_notice(tmp_path, monkeypatch,
     """
     folder = _root(tmp_path, monkeypatch)
     _handoff(folder, key_files='- `missing-file.md` label text\n')
-    hq.main(['adopt', _SLUG])
+    cli.main(['adopt', _SLUG])
     out = capsys.readouterr().out
     assert 'not on disk' in out
 
@@ -1039,7 +1039,7 @@ def test_adopt_handoff_is_dir_returns_1(tmp_path, monkeypatch):
     folder = _root(tmp_path, monkeypatch)
     handoff = folder / 'HANDOFF.md'
     handoff.mkdir(parents=True)
-    assert hq.main(['adopt', _SLUG]) == 1
+    assert cli.main(['adopt', _SLUG]) == 1
 
 
 def test_adopt_manifest_created_when_absent(tmp_path, monkeypatch):
@@ -1052,7 +1052,7 @@ def test_adopt_manifest_created_when_absent(tmp_path, monkeypatch):
     """
     folder = _root(tmp_path, monkeypatch)
     _handoff(folder)
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = _manifest(folder)
     assert len(rows) == 1
 
@@ -1067,7 +1067,7 @@ def test_adopt_draft_gets_always_rb(tmp_path, monkeypatch):
     folder = _root(tmp_path, monkeypatch)
     (folder / 'worker.py').write_text('def f(): pass\n', encoding='utf-8')
     _handoff(folder)
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['worker.py']['read_before'] == 'always'
     assert rows['worker.py']['kind'] == 'draft'
@@ -1086,7 +1086,7 @@ def test_adopt_manifest_repos_field_stored(tmp_path, monkeypatch):
     """
     folder = _root(tmp_path, monkeypatch)
     _handoff(folder)
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = _manifest(folder)
     row = rows[0]
     assert row['note'].startswith('adopted ')
@@ -1110,7 +1110,7 @@ def test_adopt_successor_on_disk_requires_file(tmp_path, monkeypatch):
     import time
     time.sleep(0.01)
     _handoff(folder)
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = {r['path']: r for r in _ledger(folder)}
     # SPEC.md is newer; SPEC.md.pre-1 gets superseded by apply_stem_rule
     assert rows['SPEC.md']['status'] == 'live'
@@ -1126,7 +1126,7 @@ def test_adopt_ledger_cycle_key_lowercase(tmp_path, monkeypatch):
     folder = _root(tmp_path, monkeypatch)
     (folder / 'data.json').write_text('{}', encoding='utf-8')
     _handoff(folder)
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['data.json']['cycle'] == '3'
 
@@ -1145,7 +1145,7 @@ def test_adopt_at_top_base_folder_check(tmp_path, monkeypatch):
     sub.mkdir()
     (sub / 'DRAFT-notes.md').write_text('# Draft\n\nContent.\n', encoding='utf-8')
     _handoff(folder, key_files='- `sub/DRAFT-notes.md` draft notes\n')
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = {r['path']: r for r in _ledger(folder)}
     # sub/DRAFT-notes.md is under folder, base='folder', but '/' in stored
     # means at_top is False; rb is inferred from infer_kind with top_level=False
@@ -1163,7 +1163,7 @@ def test_adopt_rb_count_never_key_lowercase(tmp_path, monkeypatch):
     folder = _root(tmp_path, monkeypatch)
     (folder / 'data.json').write_text('{}', encoding='utf-8')
     _handoff(folder)
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = _manifest(folder)
     assert rows[0]['log'] == 'adopted'
 
@@ -1180,7 +1180,7 @@ def test_adopt_kf_label_ne_dash_condition(tmp_path, monkeypatch):
     folder = _root(tmp_path, monkeypatch)
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n', encoding='utf-8')
     _handoff(folder, key_files='- `SPEC.md` the design spec\n')
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['SPEC.md']['label'] == 'the design spec'
 
@@ -1201,7 +1201,7 @@ def test_adopt_kf_heading_grade_kills_170_172_173(tmp_path, monkeypatch):
     folder = _root(tmp_path, monkeypatch)
     (folder / 'notes.md').write_text('Notes.\n', encoding='utf-8')
     _handoff(folder, key_files='## Read now:\n- `notes.md` the notes\n')
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['notes.md']['read_before'] == 'always'
 
@@ -1221,7 +1221,7 @@ def test_adopt_hq_marker_excluded_from_adopted_text(tmp_path, monkeypatch):
         'some content\n'
         '<!-- /hq:keyfiles -->\n'
     ))
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     text = (folder / 'HANDOFF.md').read_text(encoding='utf-8')
     assert '<!-- hq:keyfiles' not in text
 
@@ -1237,7 +1237,7 @@ def test_adopt_kf_grade_lower_for_notes_grade(tmp_path, monkeypatch):
     folder = _root(tmp_path, monkeypatch)
     (folder / 'notes.md').write_text('Notes text.\n', encoding='utf-8')
     _handoff(folder, key_files='Read now:\n- `notes.md` background notes\n')
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['notes.md']['read_before'] == 'always'
 
@@ -1254,7 +1254,7 @@ def test_adopt_ledger_row_ts_sha12_lines_fields(tmp_path, monkeypatch):
     folder = _root(tmp_path, monkeypatch)
     (folder / 'data.json').write_text('{}\n', encoding='utf-8')
     _handoff(folder)
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = {r['path']: r for r in _ledger(folder)}
     row = rows['data.json']
     assert row['ts'].startswith('2026')
@@ -1275,7 +1275,7 @@ def test_adopt_gated_uses_and_not_or(tmp_path, monkeypatch, capsys):
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n', encoding='utf-8')
     (folder / 'notes.md').write_text('Notes.\n', encoding='utf-8')
     _handoff(folder)
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     out = capsys.readouterr().out
     assert 'gated (1)' in out
     assert 'gated (2)' not in out
@@ -1291,7 +1291,7 @@ def test_adopt_unfiled_content_not_prefixed(tmp_path, monkeypatch):
     """
     folder = _root(tmp_path, monkeypatch)
     _handoff(folder, extra='\n## Unfiled\n\n- my note XY99\n')
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     text = (folder / 'HANDOFF.md').read_text(encoding='utf-8')
     assert '- my note XY99' in text
     assert '- unfiled: - my note XY99' not in text
@@ -1309,7 +1309,7 @@ def test_adopt_unfiled_rstrip_removes_trailing_spaces(tmp_path, monkeypatch):
     """
     folder = _root(tmp_path, monkeypatch)
     _handoff(folder, extra='\n## Unfiled\n\n- a note   \n- b note\n')
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     text = (folder / 'HANDOFF.md').read_text(encoding='utf-8')
     assert '- a note   ' not in text
     assert '- a note' in text
@@ -1324,7 +1324,7 @@ def test_adopt_manifest_cursor_lines_not_dash(tmp_path, monkeypatch):
     """
     folder = _root(tmp_path, monkeypatch)
     _handoff(folder)
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = _manifest(folder)
     assert rows[0]['cursor_lines'].isdigit()
     assert int(rows[0]['cursor_lines']) > 0
@@ -1339,7 +1339,7 @@ def test_adopt_manifest_standing_sha_not_dash(tmp_path, monkeypatch):
     """
     folder = _root(tmp_path, monkeypatch)
     _handoff(folder)
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = _manifest(folder)
     assert len(rows[0]['standing_sha']) == 12
 
@@ -1358,7 +1358,7 @@ def test_adopt_kf_matched_prevents_duplicate_row(tmp_path, monkeypatch):
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n', encoding='utf-8')
     (folder / 'data.json').write_text('{}', encoding='utf-8')
     _handoff(folder, key_files='- `SPEC.md` the design spec\n')
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     all_rows = _ledger(folder)
     spec_rows = [r for r in all_rows if r['path'] == 'SPEC.md']
     assert len(spec_rows) == 1
@@ -1373,7 +1373,7 @@ def test_adopt_missing_pointer_rb_is_lowercase_never(tmp_path, monkeypatch):
     """
     folder = _root(tmp_path, monkeypatch)
     _handoff(folder, key_files='- `missing-file.md` label\n')
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = {r['path']: r for r in _ledger(folder)}
     assert 'missing-file.md' in rows
     assert rows['missing-file.md']['read_before'] == 'never'
@@ -1393,7 +1393,7 @@ def test_adopt_pointer_row_cycle_and_ts_stored(tmp_path, monkeypatch):
     sub.mkdir()
     (sub / 'notes.md').write_text('Notes.\n', encoding='utf-8')
     _handoff(folder, key_files='- `sub/notes.md` notes\n')
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = {r['path']: r for r in _ledger(folder)}
     assert 'sub/notes.md' in rows
     assert rows['sub/notes.md']['cycle'] == '3'
@@ -1414,7 +1414,7 @@ def test_adopt_pointer_notes_edit_applied(tmp_path, monkeypatch):
     sub.mkdir()
     (sub / 'notes-bg.md').write_text('Background notes.\n', encoding='utf-8')
     _handoff(folder, key_files='Reference only:\n- `sub/notes-bg.md` bg\n')
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = {r['path']: r for r in _ledger(folder)}
     assert 'sub/notes-bg.md' in rows
     assert rows['sub/notes-bg.md']['read_before'] == 'edit'
@@ -1433,7 +1433,7 @@ def test_adopt_missing_top_level_draft_keeps_kind_and_stays_missing(
     """
     folder = _root(tmp_path, monkeypatch)
     _handoff(folder, key_files='- `script.py` the draft script\n')
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = {r['path']: r for r in _ledger(folder)}
     row = rows['script.py']
     assert (row['kind'], row['status'], row['read_before']) == (

@@ -5,7 +5,7 @@ import io
 import pathlib
 import re
 
-from bin import hq
+from handoff import cli
 
 _SLUG = 'cited'
 
@@ -25,11 +25,11 @@ def _root(tmp_path, monkeypatch):
 
 
 def _run(argv):
-    """Call hq.main, returning (rc, stdout) with SystemExit caught."""
+    """Call cli.main, returning (rc, stdout) with SystemExit caught."""
     out = io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
         try:
-            rc = hq.main(argv)
+            rc = cli.main(argv)
         except SystemExit as exc:
             rc = exc.code
     return rc, out.getvalue()

@@ -9,7 +9,7 @@ import contextlib
 import io
 import pathlib
 
-from bin import hq
+from handoff import cli, help_text, markdown, render
 
 _SLUG = 'arc-slug'
 
@@ -31,7 +31,7 @@ def _run(argv):
     out = io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
         try:
-            rc = hq.main(argv)
+            rc = cli.main(argv)
         except SystemExit as exc:
             rc = exc.code
     return rc, out.getvalue()
@@ -90,7 +90,7 @@ def test_arc_prints_each_section_by_its_first_sentence():
         '## Read first\n'
         '- [ ] not a plan item.\n'
         '<!-- /hq:read -->\n')
-    assert hq.render_arc('poller-auth', manifest, handoff_text, first_text) == (
+    assert render.render_arc('poller-auth', manifest, handoff_text, first_text) == (
         '# Arc: poller-auth  cycles 1-3, 2026-09-01 to 2026-09-03\n'
         'Began as (c1): Store OAuth tokens on disk.\n'
         'Task: Refresh expired OAuth tokens in the poller instead of failing'
@@ -135,7 +135,7 @@ def test_an_adopted_thread_prints_its_prior_log_before_the_history():
         '## Task\nSync the legacy rows.\n\n'
         '## Now\nRun the third sync.\n\n'
         '## Open questions\n\n')
-    assert hq.render_arc('legacy-sync', manifest, handoff_text, first_text) == (
+    assert render.render_arc('legacy-sync', manifest, handoff_text, first_text) == (
         '# Arc: legacy-sync  cycles 2-3, 2026-08-20 to 2026-08-21\n'
         'Task: Sync the legacy rows.\n'
         'Before c2 (the prior Log, cycles/c02.md):\n'
@@ -165,7 +165,7 @@ def test_the_rollup_line_names_an_arc_command_that_runs_and_writes_nothing(
         assert _run(['begin', _SLUG])[0] == 0
         _cursor(folder, f'## Task\nShip the poller.\n\n## Now\nStep {cycle}.\n')
         assert _run(['finish', _SLUG, '--log', f'step {cycle} shipped'])[0] == 0
-    log = hq.split_handoff((folder / 'HANDOFF.md').read_text())['log']
+    log = markdown.split_handoff((folder / 'HANDOFF.md').read_text())['log']
     rollup = log.strip().splitlines()[-1]
     assert rollup == f'- cycles 1-1 - hq arc {_SLUG}'
     command = rollup.split(' - ')[-1].split()
@@ -203,16 +203,16 @@ def test_the_help_text_routes_the_thread_overall_to_arc():
     dropped from help write or the finish epilog.
     Oracle: the clauses of the routing bullet and of the --log rule.
     """
-    read_text = ' '.join(hq.HELP_TOPICS['read'].split())
+    read_text = ' '.join(help_text.HELP_TOPICS['read'].split())
     assert (
         'An item the Standing block names prints whole with'
         ' hq standing <slug> <id>. Where the thread started, how it got here,'
         ' or where it stands overall goes to hq arc <slug> first') in read_text
-    parser = hq._build_parser()
+    parser = cli.build_parser()
     finish = next(
         action for action in parser._subparsers._group_actions
         ).choices['finish']
-    for text in (hq.HELP_TOPICS['write'], finish.epilog):
+    for text in (help_text.HELP_TOPICS['write'], finish.epilog):
         assert 'whole entry in hq arc' in ' '.join(text.split())
         assert 'check: <n> findings applied - <what they changed>' in (
             ' '.join(text.split()))

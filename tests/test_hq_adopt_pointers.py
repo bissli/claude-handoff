@@ -8,8 +8,8 @@ import pathlib
 import shutil
 
 import pytest
-
-from bin import hq
+from handoff import cli, ledger, storage
+from handoff.verbs import adopt
 
 FIXTURES = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), 'fixtures', 'handoff')
@@ -66,14 +66,14 @@ def _handoff(
 def _ledger(folder: pathlib.Path) -> list[dict]:
     """Return ledger rows as a list of dicts.
     """
-    return hq._read_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS)
+    return storage.read_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS)
 
 
 def _manifest(folder: pathlib.Path) -> list[dict]:
     """Return manifest rows as a list of dicts.
     """
-    return hq._read_tsv(
-        folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS)
+    return storage.read_tsv(
+        folder / 'cycles' / 'manifest.tsv', storage.MANIFEST_FIELDS)
 
 
 # --- Two pointers to one path ---
@@ -97,7 +97,7 @@ def test_two_pointers_to_same_path_merge_label_where_and_rb(
         '- `DESIGN.md` section 2 overview\n'
         '- `DESIGN.md` section 3 detail\n'))
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     rows = {r['path']: r for r in _ledger(folder)}
     assert 'DESIGN.md' in rows
@@ -127,7 +127,7 @@ def test_two_pointers_different_rb_grade_merges_to_always(
         '- `notes-x.md` first pointer\n'
         '- `notes-x.md` second pointer\n'))
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['notes-x.md']['read_before'] == 'always'
@@ -153,7 +153,7 @@ def test_multi_path_bullet_seeds_one_row_per_path(tmp_path, monkeypatch):
     _handoff(folder, key_files=(
         '- `hq.py`, `gate.py`, `cfg.json` - shipped in v0.2.0\n'))
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     rows = {r['path']: r for r in _ledger(folder)}
     for path in ('hq.py', 'gate.py', 'cfg.json'):
@@ -184,7 +184,7 @@ def test_multi_range_pointer_seeds_the_bare_path_with_the_ranges_in_its_label(
         '- `loader.py:10-25,40` the loader\n'
         '- saver.py:12-30,44-46 the saver\n'))
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     out = capsys.readouterr().out
     rows = {r['path']: r for r in _ledger(folder)}
@@ -218,7 +218,7 @@ def test_paths_joined_by_and_each_take_a_row_sharing_the_text(
         '- `notes-x.md` - the loader and parser notes\n'
         '- `one.md`, and `two.md` the pair\n'))
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     rows = {r['path']: r for r in _ledger(folder)}
     assert [rows[p]['read_before'] for p in ('stack-a.yaml', 'stack-b.yaml')] == [
@@ -249,7 +249,7 @@ def test_a_continuation_line_keeps_a_leading_dash_used_as_punctuation(
         '- Earlier material is parked\n'
         '  - never read it first\n'))
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['module-map.md']['label'] == (
@@ -289,7 +289,7 @@ def test_an_unindented_paragraph_under_key_files_or_the_header_is_one_bullet(
         '- Parked material one\n'
         '- Parked material two\n', encoding='utf-8')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     text = (folder / 'HANDOFF.md').read_text()
     assert [ln for ln in text.splitlines() if ln.startswith('- unfiled: ')] == [
@@ -327,7 +327,7 @@ def test_a_label_wrapped_over_two_lines_grades_the_bullets_below_it(
         'and the billing item follows it:\n\n'
         '- `notes-reg.md` the register notes\n'))
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['notes-reg.md']['read_before'] == 'always'
@@ -364,7 +364,7 @@ def test_a_colon_line_that_is_no_label_opens_an_ungraded_never_group(
         '- `notes-gate.md` the gateway notes\n'
         '- `SPEC-gate.md` the gateway spec\n'))
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     rows = {r['path']: r for r in _ledger(folder)}
     assert [rows[p]['read_before'] for p in ('notes-a.md', 'notes-b.md')] == [
@@ -404,7 +404,7 @@ def test_reference_only_leaves_a_non_notes_row_seeded_with_its_label(
         '- `stack.yaml` the stack config\n'
         '- `sub/helper.py` the nested helper\n'))
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['notes-bg.md']['read_before'] == 'edit'
@@ -437,7 +437,7 @@ def test_an_ungraded_header_that_mentions_a_label_word_still_grades_never(
         'Kept here for reference only:\n\n'
         '- `notes-beta.md` the notes\n'))
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['alpha.md']['read_before'] == 'always'
@@ -462,7 +462,7 @@ def test_a_bare_multi_range_pointer_after_a_separator_keeps_its_ranges(
     _handoff(folder, key_files=(
         'Read now:\n- `zeta.md`, mod.py:12-40,57 the ranges\n'))
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['mod.py']['label'] == 'lines 12-40,57; the ranges'
@@ -487,7 +487,7 @@ def test_two_bullets_to_one_path_under_an_ungraded_group_merge_to_never(
         'Gateway notes:\n\n- `zeta.md` the loader\n- `zeta.md` also the cache\n'
         '- `stack.yaml` the config\n'))
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['stack.yaml']['read_before'] == 'never'
@@ -516,7 +516,7 @@ def test_witnessed_pairs_filters_by_written_label():
         'b.md': 'the detail and more text',
         'c.md': 'entirely different text',
         }
-    result = hq.witnessed_pairs(records, written_labels)
+    result = adopt.witnessed_pairs(records, written_labels)
     assert 'raw a' in result
     assert 'raw b' in result
     assert 'raw c' not in result
@@ -536,7 +536,7 @@ def test_witnessed_pairs_absent_path_excluded_unless_dash():
         ('e.md', 'raw e', '-'),
         ]
     written_labels: dict = {}
-    result = hq.witnessed_pairs(records, written_labels)
+    result = adopt.witnessed_pairs(records, written_labels)
     assert 'raw d' not in result
     assert 'raw e' in result
 
@@ -556,7 +556,7 @@ def test_multi_path_bullet_first_line_reported_carried(
     _handoff(folder, key_files=(
         '- `hq.py`, `gate.py` - shared label\n'))
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     out = capsys.readouterr().out
     assert 'every original line carried' in out
@@ -582,7 +582,7 @@ def test_loose_key_files_bullet_with_continuation_is_one_unfiled(
         '  data from prior runs\n'
         '  and archived notes\n'))
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     hf_text = (folder / 'HANDOFF.md').read_text()
     assert '- unfiled: - Earlier cycles material:' in hf_text
@@ -616,7 +616,7 @@ def test_where_seed_accepts_trailing_letter_on_section_number(
     _handoff(folder, key_files=(
         '- `DESIGN.md` covers section 11b and section 12, Migration\n'))
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['DESIGN.md']['where'] == 's11b;s12'
@@ -639,7 +639,7 @@ def test_where_seed_keeps_a_dotted_section_number_whole(tmp_path, monkeypatch):
     _handoff(folder, key_files=(
         '- `DESIGN.md` covers section 24.4 and s7\n'))
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['DESIGN.md']['where'] == 's24.4;s7'
@@ -665,7 +665,7 @@ def test_where_seed_falls_back_to_the_parent_section_of_a_dotted_number(
         '- `DESIGN.md` the retry rule, see section 3.2\n'
         '- `notes-b.md` the backoff, see section 3.2\n'))
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['DESIGN.md']['where'] == 's3'
@@ -684,7 +684,7 @@ def test_where_seed_plain_number_unchanged(tmp_path, monkeypatch):
     (folder / 'DESIGN.md').write_text('# Design\n\n## 5. Details\n\nx\n')
     _handoff(folder, key_files='- `DESIGN.md` see section 5 for details\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['DESIGN.md']['where'] == 's5'
@@ -709,7 +709,7 @@ def test_where_seed_keeps_only_anchors_the_file_resolves(
         '- `notes-cache.md` Read now: layout (s2), the S1 premise, and\n'
         '  eviction under section 4\n'))
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['notes-cache.md']['where'] == 's2;s4'
@@ -736,10 +736,10 @@ def test_begin_names_each_row_adopt_seeded_as_missing(
     _handoff(folder, key_files=(
         'Read now:\n\n- `SPEC-widget.md` - the lane spec\n'
         '- `docs/ghost-notes.md` - background\n'))
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     capsys.readouterr()
 
-    assert hq.main(['begin', _SLUG]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
 
     move = 'stamp --status live if it is back, or --successor / --archive --reason'
     lines = [ln for ln in capsys.readouterr().out.splitlines() if 'missing:' in ln]
@@ -747,9 +747,9 @@ def test_begin_names_each_row_adopt_seeded_as_missing(
         f'  missing: SPEC-widget.md - {move}',
         f'  missing: docs/ghost-notes.md - {move}',
     ]
-    assert hq.main(['stamp', _SLUG, 'docs/ghost-notes.md', '--archive',
+    assert cli.main(['stamp', _SLUG, 'docs/ghost-notes.md', '--archive',
                     '--reason', 'never written']) == 0
-    assert hq.main(['begin', _SLUG]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
     lines = [ln for ln in capsys.readouterr().out.splitlines() if 'missing:' in ln]
     assert lines == [f'  missing: SPEC-widget.md - {move}']
 
@@ -770,7 +770,7 @@ def test_missing_draft_pointer_stays_missing_never_and_finish_passes(
     (folder / 'panels.json').write_text('{}\n')
     _handoff(folder, key_files='- panels.json, smooth.py - paper kit.\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     rows = {r['path']: r for r in _ledger(folder)}
     row = rows['smooth.py']
@@ -780,8 +780,8 @@ def test_missing_draft_pointer_stays_missing_never_and_finish_passes(
     assert 'gated (' not in out
     assert 'Key files pointer not on disk: smooth.py' in out
     monkeypatch.setenv('HQ_CYCLE', '4')
-    assert hq.main(['begin', _SLUG]) == 0
-    assert hq.main(['finish', _SLUG, '--log', 'kit']) == 0
+    assert cli.main(['begin', _SLUG]) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'kit']) == 0
     assert 'missing live gated' not in capsys.readouterr().out
 
 
@@ -800,7 +800,7 @@ def test_bare_continuation_token_resolves_beside_the_first_path(
     (folder / 'sub' / 'b.py').write_text('b = 2\n')
     _handoff(folder, key_files='- sub/a.py, b.py - the pair\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     rows = {r['path']: r for r in _ledger(folder)}
     assert 'b.py' not in rows
@@ -831,7 +831,7 @@ def test_unreadable_pointed_file_leaves_adopt_whole_and_drops_the_anchor(
 
     monkeypatch.setattr(pathlib.Path, 'read_text', _locked)
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['notes-locked.md']['where'] == '-'
@@ -852,7 +852,7 @@ def test_an_anchor_cited_twice_on_one_bullet_is_seeded_once(
     (folder / 'notes-x.md').write_text('# N\n\n## 2. A\n\nx\n\n## 3. B\n\ny\n')
     _handoff(folder, key_files='- `notes-x.md` Read now: s2 covers it, and s2 again\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['notes-x.md']['where'] == 's2'
@@ -874,7 +874,7 @@ def test_a_label_less_pointer_to_a_walked_file_seeds_one_row(
     (folder / 'notes-a.md').write_text('# A\n')
     _handoff(folder, key_files='Read now:\n- `SPEC.md`\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     rows = _ledger(folder)
     assert [r['path'] for r in rows].count('SPEC.md') == 1
@@ -906,7 +906,7 @@ def test_adopt_log_field_is_summary_not_full_lines(tmp_path, monkeypatch):
         f'# Handoff: {folder.name}\n\nWritten: 2026-08-31 | Cycle: 2\n\n'
         '## Task\nx\n\n## Now\ny\n\n## Log\n' + '\n'.join(log_lines) + '\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     manifest = _manifest(folder)
     last = manifest[-1]
@@ -940,7 +940,7 @@ def test_adopt_note_joins_wrapped_log_items_before_separating_them(
         '  count 2^16\n'
         '- day two: x\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     last = _manifest(folder)[-1]
     assert last['note'] == (
@@ -965,7 +965,7 @@ def test_adopt_log_field_is_bare_adopted_with_no_log_section(
         f'# Handoff: {folder.name}\n\nWritten: 2026-09-01 | Cycle: 1\n\n'
         '## Task\nx\n\n## Now\ny\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     manifest = _manifest(folder)
     last = manifest[-1]
@@ -1002,7 +1002,7 @@ def test_adopt_row_describes_the_archive_and_notes_its_own_provenance(
         '## State\n\nState line.\n\n'
         '## Log\n- 2026-08-22: started\n', encoding='utf-8')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     archive = folder / 'cycles' / 'c04.md'
     handoff = folder / 'HANDOFF.md'
@@ -1013,8 +1013,8 @@ def test_adopt_row_describes_the_archive_and_notes_its_own_provenance(
     assert row['session'] == '-'
     assert row['cursor_lines'] == '12'
     assert row['payload_tokens'] == str(len(archive.read_text(encoding='utf-8')) // 4)
-    assert row['handoff_sha'] == hq._sha12_path(archive)
-    assert row['rewrite_sha'] == hq._sha12_path(handoff)
+    assert row['handoff_sha'] == storage.sha12_path(archive)
+    assert row['rewrite_sha'] == storage.sha12_path(handoff)
     assert row['handoff_sha'] != row['rewrite_sha']
     assert row['note'] == f'adopted 2026-09-01 by {_SESSION} | - 2026-08-22: started'
     log_body = handoff.read_text(encoding='utf-8').split('## Log\n', 1)[1]
@@ -1045,8 +1045,8 @@ def test_adopt_row_written_is_the_date_alone_or_the_adopt_date(
         f'# Handoff: {undated.name}\n\nWritten: | Cycle: 2\n\n## Task\n\nx\n',
         encoding='utf-8')
 
-    assert hq.main(['adopt', 'ptr-stamped']) == 0
-    assert hq.main(['adopt', 'ptr-undated']) == 0
+    assert cli.main(['adopt', 'ptr-stamped']) == 0
+    assert cli.main(['adopt', 'ptr-undated']) == 0
 
     assert _manifest(stamped)[-1]['written'] == '2026-08-31'
     assert _manifest(undated)[-1]['written'] == '2026-09-01'
@@ -1065,13 +1065,13 @@ def test_adopt_note_names_the_adopting_git_state_and_the_row_keeps_the_archive(
     """
     folder = _root(tmp_path, monkeypatch)
     monkeypatch.setenv('HQ_GIT', '1')
-    monkeypatch.setattr(hq, '_git_state', lambda root: ('trunk', 'abc1234', []))
+    monkeypatch.setattr(storage, '_git_state', lambda root: ('trunk', 'abc1234', []))
     (folder / 'HANDOFF.md').write_text(
         f'# Handoff: {folder.name}\n\n'
         'Written: 2026-08-22 | Cycle: 3 | old @ 1111111 | clean\n\n## Task\n\nx\n',
         encoding='utf-8')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     row = _manifest(folder)[-1]
     assert row['note'] == f'adopted 2026-09-01 by {_SESSION} at trunk@abc1234'
@@ -1096,15 +1096,15 @@ def test_adopt_row_describes_an_archive_already_on_disk(tmp_path, monkeypatch):
         f'# Handoff: {folder.name}\n\n'
         'Written: 2026-01-05 | Cycle: 3 | old @ 1111111 | clean\n\n## Task\n\nold\n',
         encoding='utf-8')
-    archive_sha = hq._sha12_path(archive)
+    archive_sha = storage.sha12_path(archive)
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     row = _manifest(folder)[-1]
     assert row['written'] == '2026-01-05'
     assert row['repos'] == 'old@1111111'
     assert row['handoff_sha'] == archive_sha
-    assert row['handoff_sha'] != hq._sha12_path(folder / 'HANDOFF.md')
+    assert row['handoff_sha'] != storage.sha12_path(folder / 'HANDOFF.md')
 
 
 # --- HANDOFF*.md at the top level only ---
@@ -1118,7 +1118,7 @@ def test_infer_kind_handoff_md_at_top_level_is_snapshot():
     Oracle: infer_kind('HANDOFF.md', False, '', top_level=True) ==
     ('snapshot', 'never').
     """
-    assert hq.infer_kind('HANDOFF.md', False, '', top_level=True) == (
+    assert ledger.infer_kind('HANDOFF.md', False, '', top_level=True) == (
         'snapshot', 'never')
 
 
@@ -1130,7 +1130,7 @@ def test_infer_kind_handoff_md_nested_is_other():
     Oracle: infer_kind('HANDOFF.md', False, '# Handoff: x', top_level=False)
     == ('other', 'never').
     """
-    assert hq.infer_kind(
+    assert ledger.infer_kind(
         'HANDOFF.md', False, '# Handoff: x', top_level=False) == (
         'other', 'never')
 
@@ -1143,9 +1143,9 @@ def test_other_snapshot_patterns_are_level_independent():
     Oracle: notes.bak and SPEC.prev.md return ('snapshot', 'never') at
     top_level=False.
     """
-    assert hq.infer_kind('notes.bak', False, '', top_level=False) == (
+    assert ledger.infer_kind('notes.bak', False, '', top_level=False) == (
         'snapshot', 'never')
-    assert hq.infer_kind('SPEC.prev.md', False, '', top_level=False) == (
+    assert ledger.infer_kind('SPEC.prev.md', False, '', top_level=False) == (
         'snapshot', 'never')
 
 
@@ -1170,7 +1170,7 @@ def test_adopt_outside_handoff_pointer_seeds_kind_other(
     _handoff(folder,
              key_files='Read now:\n- `~/OTHER/HANDOFF.md` ref handoff\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     rows = {r['path']: r for r in _ledger(folder)}
     r = rows.get('~/OTHER/HANDOFF.md')
@@ -1198,7 +1198,7 @@ def test_multi_path_bullet_wrapped_over_lines_shares_the_whole_text(
         '  installed copies live under\n'
         '  `~/x/`.\n'))
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     rows = {r['path']: r for r in _ledger(folder)}
     expected = 'shipped in v0.2.0; the installed copies live under `~/x/`.'
@@ -1221,7 +1221,7 @@ def test_separator_pointer_is_reported_carried(tmp_path, monkeypatch, capsys):
     (folder / 'notes-a.md').write_text('# A\n')
     _handoff(folder, key_files='- `notes-a.md` - the sketch, kept live\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['notes-a.md']['label'] == 'the sketch, kept live'
@@ -1241,7 +1241,7 @@ def test_merged_labels_join_after_a_sentence_with_a_space(
         '- `notes-x.md` first clause.\n'
         '- `notes-x.md` second clause\n'))
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     rows = {r['path']: r for r in _ledger(folder)}
     assert rows['notes-x.md']['label'] == 'first clause. second clause'
@@ -1263,7 +1263,7 @@ def test_bare_first_token_with_glued_comma_opens_the_list(
     (folder / 'b.md').write_text('b\n')
     _handoff(folder, key_files='Read now:\n- a.md, b.md - bare tokens\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     rows = {r['path']: r for r in _ledger(folder)}
     for name in ('a.md', 'b.md'):
@@ -1285,7 +1285,7 @@ def test_list_ending_in_a_word_drops_the_leading_comma(tmp_path, monkeypatch):
     _handoff(folder, key_files=(
         '- `a.md`, `b.md`, and their tests - the shared text\n'))
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     rows = {r['path']: r for r in _ledger(folder)}
     for name in ('a.md', 'b.md'):
@@ -1308,10 +1308,10 @@ def test_a_pointer_the_ledger_absorbed_is_not_a_dropped_line(
     folder = _root(tmp_path, monkeypatch, slug='orbit-cache-rewrite')
     shutil.rmtree(folder)
     shutil.copytree(os.path.join(FIXTURES, 'orbit-cache-rewrite'), folder)
-    assert hq.main(['adopt', 'orbit-cache-rewrite']) == 0
-    assert hq.main(['begin', 'orbit-cache-rewrite']) == 0
+    assert cli.main(['adopt', 'orbit-cache-rewrite']) == 0
+    assert cli.main(['begin', 'orbit-cache-rewrite']) == 0
     capsys.readouterr()
-    rc = hq.main(['finish', 'orbit-cache-rewrite', '--log', 'after adopt'])
+    rc = cli.main(['finish', 'orbit-cache-rewrite', '--log', 'after adopt'])
     out = capsys.readouterr().out
     assert rc == 0, out
     assert 'not carried' not in out

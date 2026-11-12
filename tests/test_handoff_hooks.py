@@ -5,16 +5,15 @@ import json
 import pathlib
 import sys
 
+from handoff import ledger, markdown, storage, threads
 from scripts import handoff_gate, handoff_stop
-
-from bin import hq
 
 _SLUG = 'demo-slug'
 _NOW = '2026-09-09T12:00:00'
 _SPEC_TEXT = '# Spec\n\n## Scope\n\nOne.\nTwo.\n\n## Risks\n\nThree.\n'
 _SPEC_SPAN = 'lines 3-7'
-_LEDGER_HEADER = '\t'.join(hq.LEDGER_FIELDS)
-_MANIFEST_HEADER = '\t'.join(hq.MANIFEST_FIELDS)
+_LEDGER_HEADER = '\t'.join(ledger.LEDGER_FIELDS)
+_MANIFEST_HEADER = '\t'.join(storage.MANIFEST_FIELDS)
 _REPO = pathlib.Path(__file__).resolve().parents[1]
 
 
@@ -31,7 +30,7 @@ def _row(path: str, **overrides: str) -> dict:
     Returns
     -------
     dict
-        A row carrying every field in ``hq.LEDGER_FIELDS``.
+        A row carrying every field in ``ledger.LEDGER_FIELDS``.
     """
     row = {
         'cycle': '1', 'ts': _NOW, 'path': path, 'base': 'folder',
@@ -75,11 +74,11 @@ def _handoff_root(tmp_path: pathlib.Path, slug: str = _SLUG) -> tuple:
                                    encoding='utf-8')
     (folder / 'HANDOFF.md').write_text('# Handoff\n\n## Task\n\nWork.\n',
                                        encoding='utf-8')
-    ledger = folder / 'ledger.tsv'
+    ledger_path = folder / 'ledger.tsv'
     for row in (_row('SPEC.md'),
                 _row('NOTES.md', read_before='mention'),
                 _row('OLD.md', status='superseded')):
-        hq._append_tsv(ledger, hq.LEDGER_FIELDS, row, _LEDGER_HEADER)
+        storage.append_tsv(ledger_path, ledger.LEDGER_FIELDS, row, _LEDGER_HEADER)
     return root, folder
 
 
@@ -351,14 +350,14 @@ def test_gate_counts_the_spans_it_does_not_name(
                            {'file_path': 'src/app.py'})
         return _context(_run(monkeypatch, capsys, handoff_gate, payload))
 
-    ledger = folder / 'ledger.tsv'
-    hq._append_tsv(ledger, hq.LEDGER_FIELDS,
-                   _row('SPEC.md', cycle='2', where='Scope;Risks'),
-                   _LEDGER_HEADER)
+    ledger_path = folder / 'ledger.tsv'
+    storage.append_tsv(ledger_path, ledger.LEDGER_FIELDS,
+                       _row('SPEC.md', cycle='2', where='Scope;Risks'),
+                       _LEDGER_HEADER)
     assert 'SPEC.md (lines 3-7 of 2 spans)' in run('w1')
-    hq._append_tsv(ledger, hq.LEDGER_FIELDS,
-                   _row('SPEC.md', cycle='3', where='Risks'),
-                   _LEDGER_HEADER)
+    storage.append_tsv(ledger_path, ledger.LEDGER_FIELDS,
+                       _row('SPEC.md', cycle='3', where='Risks'),
+                       _LEDGER_HEADER)
     assert 'SPEC.md (lines 8-10)' in run('w2')
 
 
@@ -377,9 +376,9 @@ def test_gate_counts_every_resolved_span_in_anchor_order(
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     tr = _transcript(tmp_path / 't.jsonl',
                      [_bash(f'python3 bin/hq.py open {_SLUG}')])
-    hq._append_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS,
-                   _row('SPEC.md', cycle='2', where='Risks;Scope'),
-                   _LEDGER_HEADER)
+    storage.append_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS,
+                       _row('SPEC.md', cycle='2', where='Risks;Scope'),
+                       _LEDGER_HEADER)
     payload = _payload(root, tr, 'o1', 'Edit', {'file_path': 'src/app.py'})
     out = _context(_run(monkeypatch, capsys, handoff_gate, payload))
     assert 'SPEC.md (lines 8-10 of 2 spans)' in out
@@ -403,9 +402,9 @@ def test_a_read_of_a_narrowed_span_still_clears_the_gate(
     monkeypatch.setenv('HQ_STATE_DIR', str(state))
     tr = _transcript(tmp_path / 't.jsonl',
                      [_bash(f'python3 bin/hq.py open {_SLUG}')])
-    hq._append_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS,
-                   _row('SPEC.md', cycle='2', where='Risks'),
-                   _LEDGER_HEADER)
+    storage.append_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS,
+                       _row('SPEC.md', cycle='2', where='Risks'),
+                       _LEDGER_HEADER)
 
     def run(session):
         payload = _payload(root, tr, session, 'Edit',
@@ -434,9 +433,9 @@ def test_a_receipt_in_the_folder_clears_the_gate(
     monkeypatch.setenv('HQ_STATE_DIR', str(state))
     tr = _transcript(tmp_path / 't.jsonl',
                      [_bash(f'python3 bin/hq.py open {_SLUG}')])
-    hq._append_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS,
-                   _row('SPEC.md', cycle='2', where='Risks'),
-                   _LEDGER_HEADER)
+    storage.append_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS,
+                       _row('SPEC.md', cycle='2', where='Risks'),
+                       _LEDGER_HEADER)
 
     def run(session):
         payload = _payload(root, tr, session, 'Edit',
@@ -748,11 +747,11 @@ def _finished(folder: pathlib.Path, cycle: str, sha: str, **overrides: str) -> N
     None
     """
     (folder / 'cycles').mkdir(exist_ok=True)
-    row = dict.fromkeys(hq.MANIFEST_FIELDS, '-')
+    row = dict.fromkeys(storage.MANIFEST_FIELDS, '-')
     row.update({'cycle': cycle, 'written': _NOW, 'handoff_sha': sha})
     row.update(overrides)
-    hq._append_tsv(folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS,
-                   row, _MANIFEST_HEADER)
+    storage.append_tsv(folder / 'cycles' / 'manifest.tsv', storage.MANIFEST_FIELDS,
+                       row, _MANIFEST_HEADER)
 
 
 def _stop_payload(root: pathlib.Path, session: str, **extra) -> dict:
@@ -779,8 +778,8 @@ def test_stop_reports_when_handoff_sha_differs_from_manifest(monkeypatch,
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     handoff = folder / 'HANDOFF.md'
     _finished(folder, '1', 'aaaaaaaaaaaa')
-    _finished(folder, '2', hq._sha12_path(handoff))
-    hq._record_thread('P1', _SLUG)
+    _finished(folder, '2', storage.sha12_path(handoff))
+    threads.record_thread('P1', _SLUG)
     handoff.write_text('# Handoff\n\n## Task\n\nWonk.\n', encoding='utf-8')
     out = _run(monkeypatch, capsys, handoff_stop, _stop_payload(root, 'P1'))
     assert json.loads(out) == {'systemMessage': (
@@ -805,9 +804,9 @@ def test_stop_compares_against_the_rewrite_an_adopt_row_records(
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     handoff = folder / 'HANDOFF.md'
     _finished(folder, '3', 'aaaaaaaaaaaa',
-              rewrite_sha=hq._sha12_path(handoff))
+              rewrite_sha=storage.sha12_path(handoff))
     for session in ('R1', 'R2'):
-        hq._record_thread(session, _SLUG)
+        threads.record_thread(session, _SLUG)
     assert _run(monkeypatch, capsys, handoff_stop,
                 _stop_payload(root, 'R1')) == ''
     handoff.write_text('# Handoff\n\n## Task\n\nOther.\n', encoding='utf-8')
@@ -830,9 +829,9 @@ def test_stop_silent_when_it_matches(monkeypatch, capsys, tmp_path):
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     handoff = folder / 'HANDOFF.md'
     _finished(folder, '1', 'aaaaaaaaaaaa')
-    _finished(folder, '2', hq._sha12_path(handoff))
+    _finished(folder, '2', storage.sha12_path(handoff))
     for session in ('Q1', 'Q2', 'Q3'):
-        hq._record_thread(session, _SLUG)
+        threads.record_thread(session, _SLUG)
     assert _run(monkeypatch, capsys, handoff_stop,
                 _stop_payload(root, 'Q1')) == ''
     (folder / '.hq.lock').write_text(f'slug={_SLUG}\ncycle=2\n',
@@ -860,9 +859,9 @@ def test_stop_reports_once_per_session_with_flag_set_or_not(monkeypatch,
     root, folder = _handoff_root(tmp_path)
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     handoff = folder / 'HANDOFF.md'
-    _finished(folder, '1', hq._sha12_path(handoff))
+    _finished(folder, '1', storage.sha12_path(handoff))
     for session in ('R1', 'R2'):
-        hq._record_thread(session, _SLUG)
+        threads.record_thread(session, _SLUG)
     handoff.write_text('# Handoff\n\n## Task\n\nFirst edit.\n',
                        encoding='utf-8')
     assert 'HANDOFF.md' in _run(monkeypatch, capsys, handoff_stop,
@@ -906,7 +905,7 @@ def test_stop_keeps_the_band_message(monkeypatch, capsys, tmp_path):
     before = band.read_bytes()
     handoff = folder / 'HANDOFF.md'
     _finished(folder, '1', 'aaaaaaaaaaaa')
-    hq._record_thread('B1', _SLUG)
+    threads.record_thread('B1', _SLUG)
     assert 'HANDOFF.md' in _run(monkeypatch, capsys, handoff_stop,
                                 _stop_payload(root, 'B1'))
     assert band.read_bytes() == before
@@ -925,7 +924,7 @@ def test_stop_ignores_subagents(monkeypatch, capsys, tmp_path):
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     _finished(folder, '1', 'aaaaaaaaaaaa')
     for session in ('T1', 'T2'):
-        hq._record_thread(session, _SLUG)
+        threads.record_thread(session, _SLUG)
     assert 'HANDOFF.md' in _run(monkeypatch, capsys, handoff_stop,
                                 _stop_payload(root, 'T1'))
     assert _run(monkeypatch, capsys, handoff_stop,
@@ -938,14 +937,14 @@ def test_stop_silent_for_a_session_on_no_thread(monkeypatch, capsys, tmp_path):
     Mutation: falling back to every folder under .handoff when the session
     holds no thread record, which nags each session in the project.
     Oracle: a spy on stdout - the same drifted folder is silent with no
-    record and reports once hq._record_thread puts the session on it.
+    record and reports once threads.record_thread puts the session on it.
     """
     root, folder = _handoff_root(tmp_path)
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     _finished(folder, '1', 'aaaaaaaaaaaa')
     assert _run(monkeypatch, capsys, handoff_stop,
                 _stop_payload(root, 'N1')) == ''
-    hq._record_thread('N1', _SLUG)
+    threads.record_thread('N1', _SLUG)
     assert 'HANDOFF.md' in _run(monkeypatch, capsys, handoff_stop,
                                 _stop_payload(root, 'N1'))
 
@@ -963,12 +962,12 @@ def test_stop_names_only_the_sessions_thread(monkeypatch, capsys, tmp_path):
     root, folder = _handoff_root(tmp_path)
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     handoff = folder / 'HANDOFF.md'
-    _finished(folder, '1', hq._sha12_path(handoff))
+    _finished(folder, '1', storage.sha12_path(handoff))
     sibling = root / '.handoff' / 'other-slug'
     sibling.mkdir()
     (sibling / 'HANDOFF.md').write_text('# Handoff\n', encoding='utf-8')
     _finished(sibling, '1', 'aaaaaaaaaaaa')
-    hq._record_thread('M1', _SLUG)
+    threads.record_thread('M1', _SLUG)
     assert _run(monkeypatch, capsys, handoff_stop,
                 _stop_payload(root, 'M1')) == ''
     handoff.write_text('# Handoff\n\n## Task\n\nEdited.\n', encoding='utf-8')
@@ -988,7 +987,7 @@ def test_stop_finds_the_thread_from_a_subdirectory(monkeypatch, capsys, tmp_path
     root, folder = _handoff_root(tmp_path)
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path / 'state'))
     _finished(folder, '1', 'aaaaaaaaaaaa')
-    hq._record_thread('W1', _SLUG)
+    threads.record_thread('W1', _SLUG)
     out = _run(monkeypatch, capsys, handoff_stop,
                _stop_payload(root / 'src', 'W1'))
     assert f'{_SLUG}/HANDOFF.md' in out
@@ -998,10 +997,10 @@ def test_gate_resolves_escaped_semicolon_in_where(monkeypatch, capsys, tmp_path)
     r"""Verify a heading whose text contains a semicolon resolves correctly.
 
     Mutation: splitting row['where'] with str.split(';') instead of
-    hq._split_where, which turns the stored '3\\; Retry' into ['3\\',
+    markdown.split_where, which turns the stored '3\\; Retry' into ['3\\',
     'Retry'] and leaves both anchors unresolved, printing 'anchor not
     found' for a heading that exists.
-    Oracle: hq._split_where's own output on the stored value confirms
+    Oracle: markdown.split_where's own output on the stored value confirms
     the anchor list; the gate must report a line span, not 'anchor not
     found'.
     """
@@ -1010,10 +1009,10 @@ def test_gate_resolves_escaped_semicolon_in_where(monkeypatch, capsys, tmp_path)
     (folder / 'SPEC.md').write_text(
         '# Spec\n\n## 3; Retry\n\nBody.\n', encoding='utf-8')
     stored_where = '3\\; Retry'
-    assert hq._split_where(stored_where) == ['3; Retry']
-    hq._append_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS,
-                   _row('SPEC.md', cycle='2', where=stored_where),
-                   _LEDGER_HEADER)
+    assert markdown.split_where(stored_where) == ['3; Retry']
+    storage.append_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS,
+                       _row('SPEC.md', cycle='2', where=stored_where),
+                       _LEDGER_HEADER)
     tr = _transcript(tmp_path / 't.jsonl',
                      [_bash(f'python3 bin/hq.py open {_SLUG}')])
     payload = _payload(root, tr, 'sc1', 'Edit', {'file_path': 'src/app.py'})
@@ -1037,9 +1036,9 @@ def test_gate_counts_distinct_spans_not_anchors(monkeypatch, capsys, tmp_path):
     (folder / 'SPEC.md').write_text(
         '# Spec\n\n## 3. Retry\n\nBody.\n\n## Next\n\nOther.\n',
         encoding='utf-8')
-    hq._append_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS,
-                   _row('SPEC.md', cycle='2', where='3. Retry;s3'),
-                   _LEDGER_HEADER)
+    storage.append_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS,
+                       _row('SPEC.md', cycle='2', where='3. Retry;s3'),
+                       _LEDGER_HEADER)
     tr = _transcript(tmp_path / 't.jsonl',
                      [_bash(f'python3 bin/hq.py open {_SLUG}')])
     payload = _payload(root, tr, 'dd1', 'Edit', {'file_path': 'src/app.py'})

@@ -12,7 +12,7 @@ from typing import Any
 HERE = os.path.dirname(os.path.abspath(__file__))
 FIXTURES = os.path.join(HERE, 'fixtures', 'handoff')
 
-from bin import hq
+from handoff import carry, cli, help_text, ledger, markdown, standing, storage
 
 _SLUG = 'test-slug'
 _SESSION = 'session-abc'
@@ -111,7 +111,7 @@ def _set_cursor(handoff_path: 'os.PathLike[str]', content: str) -> None:
 
 def _strip_read(out: str) -> str:
     """Remove the appended read topic from open output before comparing."""
-    return out.replace(hq.HELP_TOPICS['read'] + '\n', '')
+    return out.replace(help_text.HELP_TOPICS['read'] + '\n', '')
 
 
 def _new_root(
@@ -214,21 +214,21 @@ def _thread(
         monkeypatch.setenv('HQ_NOW', now.isoformat())
         monkeypatch.setenv('HQ_CYCLE', str(cycle))
 
-        hq.main(['begin', slug])
+        cli.main(['begin', slug])
 
         if cycle == 1:
             _set_cursor(folder / 'HANDOFF.md', _LARGE_CURSOR)
             for i in range(artifacts):
-                hq.main(
+                cli.main(
                     ['stamp', slug, f'SPEC-{i:02d}.md', '--read-before', 'always'])
             for j in range(10):
-                hq.main([
+                cli.main([
                     'note', slug, 'constraint',
                     '--headline', f'Constraint {j:02d}',
                     f'Body of constraint {j:02d}.',
                     ])
 
-        hq.main(['finish', slug, '--log', f'cycle {cycle}'])
+        cli.main(['finish', slug, '--log', f'cycle {cycle}'])
 
     return folder
 
@@ -243,11 +243,11 @@ def test_refused_stamp_appends_a_receipt_row(tmp_path, monkeypatch):
     the second row has reason starting with 'refused:'.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text(
         '# Spec\n\n## Overview\n\nContent.\n\n## Other\n\nDetails.\n')
     (folder / 'NEXT.md').write_text('# Next\n\nContent.\n')
-    hq.main([
+    cli.main([
         'stamp', _SLUG, 'SPEC.md', '--read-before', 'always',
         '--label', 'always stamp label',
         '--where', 'Overview',
@@ -258,7 +258,7 @@ def test_refused_stamp_appends_a_receipt_row(tmp_path, monkeypatch):
     rows_before = len(ledger.read_text().splitlines()) - 1
 
     (folder / 'NEXT.md').unlink()
-    ret = hq.main(['stamp', _SLUG, 'SPEC.md', '--read-before', 'edit'])
+    ret = cli.main(['stamp', _SLUG, 'SPEC.md', '--read-before', 'edit'])
     assert ret == 1
 
     lines = ledger.read_text().splitlines()
@@ -292,17 +292,17 @@ def test_restamp_of_superseded_spec_keeps_carried_successor(
     read_before never, and the new label.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n')
     (folder / 'NEXT.md').write_text('# Next\n\nContent.\n')
-    assert hq.main(['stamp', _SLUG, 'SPEC.md', '--successor', 'NEXT.md']) == 0
+    assert cli.main(['stamp', _SLUG, 'SPEC.md', '--successor', 'NEXT.md']) == 0
 
-    ret = hq.main(['stamp', _SLUG, 'SPEC.md', '--label', 'renamed label'])
+    ret = cli.main(['stamp', _SLUG, 'SPEC.md', '--label', 'renamed label'])
     assert ret == 0
 
     lines = (folder / 'ledger.tsv').read_text().splitlines()
     assert len(lines) == 3
-    row = dict(zip(hq.LEDGER_FIELDS, lines[2].split('\t')))
+    row = dict(zip(ledger.LEDGER_FIELDS, lines[2].split('\t')))
     assert row['status'] == 'superseded'
     assert row['read_before'] == 'never'
     assert row['successor'] == 'NEXT.md'
@@ -318,15 +318,15 @@ def test_relabel_of_archived_spec_keeps_its_reason(tmp_path, monkeypatch):
     and the new label.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n')
-    assert hq.main([
+    assert cli.main([
         'stamp', _SLUG, 'SPEC.md', '--archive', '--reason', 'obsolete']) == 0
 
-    assert hq.main(['stamp', _SLUG, 'SPEC.md', '--label', 'renamed']) == 0
+    assert cli.main(['stamp', _SLUG, 'SPEC.md', '--label', 'renamed']) == 0
 
     lines = (folder / 'ledger.tsv').read_text().splitlines()
-    row = dict(zip(hq.LEDGER_FIELDS, lines[-1].split('\t')))
+    row = dict(zip(ledger.LEDGER_FIELDS, lines[-1].split('\t')))
     assert row['status'] == 'archived'
     assert row['reason'] == 'obsolete'
     assert row['label'] == 'renamed'
@@ -342,15 +342,15 @@ def test_restamp_after_refusal_skips_the_receipt_reason(tmp_path, monkeypatch):
     reason '-' and read_before still always.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n')
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Spec'])
-    assert hq.main(['stamp', _SLUG, 'SPEC.md', '--read-before', 'never']) == 1
+    cli.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Spec'])
+    assert cli.main(['stamp', _SLUG, 'SPEC.md', '--read-before', 'never']) == 1
 
-    assert hq.main(['stamp', _SLUG, 'SPEC.md', '--label', 'again']) == 0
+    assert cli.main(['stamp', _SLUG, 'SPEC.md', '--label', 'again']) == 0
 
     lines = (folder / 'ledger.tsv').read_text().splitlines()
-    row = dict(zip(hq.LEDGER_FIELDS, lines[-1].split('\t')))
+    row = dict(zip(ledger.LEDGER_FIELDS, lines[-1].split('\t')))
     assert row['reason'] == '-'
     assert row['read_before'] == 'always'
 
@@ -365,15 +365,15 @@ def test_successor_with_explicit_status_keeps_that_status(
     writes status live and read_before always.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n')
     (folder / 'NEXT.md').write_text('# Next\n')
-    assert hq.main([
+    assert cli.main([
         'stamp', _SLUG, 'SPEC.md', '--successor', 'NEXT.md', '--where', 'Spec',
         '--status', 'live', '--read-before', 'always']) == 0
 
     lines = (folder / 'ledger.tsv').read_text().splitlines()
-    row = dict(zip(hq.LEDGER_FIELDS, lines[-1].split('\t')))
+    row = dict(zip(ledger.LEDGER_FIELDS, lines[-1].split('\t')))
     assert row['status'] == 'live'
     assert row['read_before'] == 'always'
     assert row['successor'] == 'NEXT.md'
@@ -389,19 +389,19 @@ def test_directory_or_self_is_not_a_successor(tmp_path, monkeypatch):
     Oracle: every stamp exits 1 and the current row stays live and always.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n')
     (folder / 'drafts').mkdir()
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Spec'])
+    cli.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Spec'])
 
-    assert hq.main(['stamp', _SLUG, 'SPEC.md', '--successor', 'drafts']) == 1
-    assert hq.main(['stamp', _SLUG, 'SPEC.md', '--successor', 'SPEC.md']) == 1
-    assert hq.main(['stamp', _SLUG, 'SPEC.md', '--successor', './SPEC.md']) == 1
-    assert hq.main([
+    assert cli.main(['stamp', _SLUG, 'SPEC.md', '--successor', 'drafts']) == 1
+    assert cli.main(['stamp', _SLUG, 'SPEC.md', '--successor', 'SPEC.md']) == 1
+    assert cli.main(['stamp', _SLUG, 'SPEC.md', '--successor', './SPEC.md']) == 1
+    assert cli.main([
         'stamp', _SLUG, 'SPEC.md', '--successor', str(folder / 'SPEC.md')]) == 1
 
     lines = (folder / 'ledger.tsv').read_text().splitlines()
-    row = dict(zip(hq.LEDGER_FIELDS, lines[-1].split('\t')))
+    row = dict(zip(ledger.LEDGER_FIELDS, lines[-1].split('\t')))
     assert row['status'] == 'live'
     assert row['read_before'] == 'always'
     assert row['successor'] == '-'
@@ -415,15 +415,15 @@ def test_refused_stamp_does_not_clear_r3(tmp_path, monkeypatch):
     Oracle: finish returns 1 before and after the refused stamp.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n')
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Spec'])
+    cli.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Spec'])
     (folder / 'SPEC.md').write_text('# Spec\n\nChanged.\n')
-    assert hq.main(['finish', _SLUG, '--log', 'probe']) == 1
+    assert cli.main(['finish', _SLUG, '--log', 'probe']) == 1
 
-    assert hq.main(['stamp', _SLUG, 'SPEC.md', '--read-before', 'never']) == 1
+    assert cli.main(['stamp', _SLUG, 'SPEC.md', '--read-before', 'never']) == 1
 
-    assert hq.main(['finish', _SLUG, '--log', 'probe']) == 1
+    assert cli.main(['finish', _SLUG, '--log', 'probe']) == 1
 
 
 def test_home_prefixed_successor_is_found_on_disk(tmp_path, monkeypatch):
@@ -437,16 +437,16 @@ def test_home_prefixed_successor_is_found_on_disk(tmp_path, monkeypatch):
     home = pathlib.Path(tmp_path) / 'home'
     home.mkdir()
     monkeypatch.setenv('HOME', str(home))
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (home / 'OUT-SPEC.md').write_text('# Spec\n\nContent.\n')
     (home / 'OUT-NEXT.md').write_text('# Next\n')
 
-    ret = hq.main([
+    ret = cli.main([
         'stamp', _SLUG, '~/OUT-SPEC.md', '--successor', '~/OUT-NEXT.md'])
     assert ret == 0
 
     lines = (folder / 'ledger.tsv').read_text().splitlines()
-    row = dict(zip(hq.LEDGER_FIELDS, lines[-1].split('\t')))
+    row = dict(zip(ledger.LEDGER_FIELDS, lines[-1].split('\t')))
     assert row['status'] == 'superseded'
     assert row['successor'] == '~/OUT-NEXT.md'
 
@@ -461,18 +461,19 @@ def test_stale_reason_does_not_excuse_status_archived(tmp_path, monkeypatch):
     and the current row stays live, always, with the earlier reason intact.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n')
-    assert hq.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Spec', '--reason', 'wip note']) == 0
+    assert cli.main(
+        ['stamp', _SLUG, 'SPEC.md', '--where', 'Spec', '--reason', 'wip note']) == 0
     before = (folder / 'ledger.tsv').read_bytes()
 
-    ret = hq.main([
+    ret = cli.main([
         'stamp', _SLUG, 'SPEC.md', '--status', 'archived', '--read-before', 'never'])
     assert ret == 2
     assert (folder / 'ledger.tsv').read_bytes() == before
 
     lines = (folder / 'ledger.tsv').read_text().splitlines()
-    row = dict(zip(hq.LEDGER_FIELDS, lines[-1].split('\t')))
+    row = dict(zip(ledger.LEDGER_FIELDS, lines[-1].split('\t')))
     assert row['status'] == 'live'
     assert row['read_before'] == 'always'
     assert row['reason'] == 'wip note'
@@ -486,10 +487,10 @@ def test_reason_with_receipt_prefix_is_usage(tmp_path, monkeypatch):
     Oracle: exit 2 and a ledger of header only.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n')
 
-    ret = hq.main([
+    ret = cli.main([
         'stamp', _SLUG, 'SPEC.md', '--archive', '--reason', 'refused: by review'])
     assert ret == 2
     assert len((folder / 'ledger.tsv').read_text().splitlines()) == 1
@@ -504,10 +505,11 @@ def test_control_chars_in_label_refused_before_ledger(tmp_path, monkeypatch):
     Oracle: exit 2 and no data row written to ledger.tsv.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n')
 
-    assert hq.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Spec', '--label', 'a\tb\nc']) == 2
+    assert cli.main(
+        ['stamp', _SLUG, 'SPEC.md', '--where', 'Spec', '--label', 'a\tb\nc']) == 2
 
     lines = (folder / 'ledger.tsv').read_text().splitlines()
     # Header only; no data row was written.
@@ -523,13 +525,13 @@ def test_batch_reports_a_line_it_cannot_parse(tmp_path, monkeypatch):
     misspelled line named in the output.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n')
     (folder / 'notes-a.md').write_text('# A\n')
     monkeypatch.setattr(
         'sys.stdin', io.StringIO('SPEC.md --successr NEXT.md\nnotes-a.md\n'))
 
-    ret = hq.main(['stamp', _SLUG, '--batch', '-'])
+    ret = cli.main(['stamp', _SLUG, '--batch', '-'])
     assert ret == 2
 
     lines = (folder / 'ledger.tsv').read_text().splitlines()
@@ -545,12 +547,12 @@ def test_batch_survives_an_unbalanced_quote(tmp_path, monkeypatch):
     Oracle: exit 2 and one data row, from the well-formed second line.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'notes-a.md').write_text('# A\n')
     monkeypatch.setattr(
         'sys.stdin', io.StringIO('notes-a.md --label "oops\nnotes-a.md --label ok\n'))
 
-    ret = hq.main(['stamp', _SLUG, '--batch', '-'])
+    ret = cli.main(['stamp', _SLUG, '--batch', '-'])
     assert ret == 2
 
     lines = (folder / 'ledger.tsv').read_text().splitlines()
@@ -566,11 +568,11 @@ def test_open_accepts_the_blocks_finish_wrote(tmp_path, monkeypatch, capsys):
     Oracle: open after a fresh finish prints no 'block sha mismatch'.
     """
     _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    assert hq.main(['finish', _SLUG, '--log', 'first']) == 0
+    cli.main(['begin', _SLUG])
+    assert cli.main(['finish', _SLUG, '--log', 'first']) == 0
     capsys.readouterr()
 
-    assert hq.main(['open', _SLUG]) == 0
+    assert cli.main(['open', _SLUG]) == 0
 
     assert 'block sha mismatch' not in capsys.readouterr().out
 
@@ -595,22 +597,22 @@ def test_finish_renders_a_directory_and_undecodable_file_at_always(
     one kilobyte in the read block.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'probes').mkdir()
     (folder / 'probes' / 'a.md').write_text('# a\n')
     (folder / 'bad.md').write_bytes(b'# Notes\n\xff\xfe not utf8\n')
     for path, kind, label in (('probes', 'probe-dir', 'the probe subtree'),
                               ('bad.md', 'notes', 'a binary note')):
-        hq._append_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS, {
+        storage.append_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS, {
             'cycle': '1', 'ts': '2026-09-09T12:00:00', 'path': path,
             'base': 'folder', 'kind': kind, 'status': 'live',
             'read_before': 'always', 'successor': '-', 'where': '-',
             'sha12': '-', 'lines': '1', 'reason': '-', 'label': label,
-            }, '\t'.join(hq.LEDGER_FIELDS))
+            }, '\t'.join(ledger.LEDGER_FIELDS))
     _cursor_with(
         folder, 'Unfiled', '- constraint: **Stdlib only** no third-party deps.')
 
-    assert hq.main(['finish', _SLUG, '--log', 'c1']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'c1']) == 0
 
     standing = (folder / 'standing.md').read_text().splitlines()
     assert [ln for ln in standing if 'Stdlib only' in ln] == [standing[0]]
@@ -627,14 +629,14 @@ def test_subdirectory_row_on_disk_does_not_block_finish(tmp_path, monkeypatch):
     Oracle: exit 0 and the row rendered as a full artifacts line.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'probes').mkdir()
     (folder / 'probes' / 'run1.md').write_text('# run 1\n')
-    assert hq.main([
+    assert cli.main([
         'stamp', _SLUG, 'probes/run1.md', '--kind', 'notes',
         '--read-before', 'edit', '--label', 'probe result']) == 0
 
-    assert hq.main(['finish', _SLUG, '--log', 'c1']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'c1']) == 0
 
     assert 'probes/run1.md  notes  edit  c1  probe result' in (
         folder / 'HANDOFF.md').read_text()
@@ -661,9 +663,9 @@ def test_log_line_carries_the_dirty_count(tmp_path, monkeypatch):
         'commit', '-q', '-m', 'init'], cwd=root, check=True)
     (root / 'tracked.txt').write_text('two\n')
     monkeypatch.setenv('HQ_GIT', '1')
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
 
-    assert hq.main(['finish', _SLUG, '--log', 'c1 log']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'c1 log']) == 0
 
     text = (folder / 'HANDOFF.md').read_text()
     assert '+1): c1 log' in text
@@ -678,10 +680,10 @@ def test_finish_prints_the_token_split(tmp_path, monkeypatch, capsys):
     Oracle: the success line names cursor, read, artifacts, and standing.
     """
     _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     capsys.readouterr()
 
-    assert hq.main(['finish', _SLUG, '--log', 'c1']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'c1']) == 0
 
     out = capsys.readouterr().out
     assert '(cursor ' in out
@@ -698,14 +700,14 @@ def test_takeover_names_the_unfinished_cycle(tmp_path, monkeypatch, capsys):
     other-host at <time>, never finished'.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     stale = (dt.datetime.fromisoformat(_NOW) - dt.timedelta(hours=3)).isoformat()
     (folder / '.hq.lock').write_text(
         f'slug={_SLUG}\nsession=other-session\nhost=other-host\n'
         f'time={stale}\ncycle=1\n')
     capsys.readouterr()
 
-    assert hq.main(['begin', _SLUG]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
 
     assert (f'cycle 1 begun by other-session on other-host at {stale}, never finished'
             in capsys.readouterr().out)
@@ -727,7 +729,7 @@ def test_begin_after_adopt_announces_the_next_cycle(tmp_path, monkeypatch, capsy
     fixture_cycle = int(header.split('Cycle: ')[1].split(' ')[0])
     monkeypatch.delenv('HQ_CYCLE')
 
-    assert hq.main(['begin', 'orbit-cache-rewrite']) == 0
+    assert cli.main(['begin', 'orbit-cache-rewrite']) == 0
 
     out = capsys.readouterr().out
     assert f'cycle {fixture_cycle + 1} begun' in out
@@ -746,18 +748,18 @@ def test_open_reports_a_moved_span_after_an_unresolved_anchor(
     prints 'span moved: SPEC.md'.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\n## Alpha\n\na\n\n## Beta\n\nb\n')
-    assert hq.main([
+    assert cli.main([
         'stamp', _SLUG, 'SPEC.md', '--where', 'Missing;Beta',
         '--read-before', 'always']) == 0
-    assert hq.main(['finish', _SLUG, '--log', 'c1']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'c1']) == 0
     assert 'SPEC.md:?,' in (folder / 'HANDOFF.md').read_text()
     (folder / 'SPEC.md').write_text(
         '# Spec\n\n## Alpha\n\na\nmore\nmore\n\n## Beta\n\nb\n')
     capsys.readouterr()
 
-    assert hq.main(['open', _SLUG]) == 0
+    assert cli.main(['open', _SLUG]) == 0
 
     assert 'span moved: SPEC.md' in capsys.readouterr().out
 
@@ -780,10 +782,10 @@ def test_adopt_carries_the_legacy_log_into_the_manifest(tmp_path, monkeypatch):
         f'# Handoff: {_SLUG}\n\nWritten: 2026-08-31 | Cycle: 2\n\n'
         '## Task\nx\n\n## Now\ny\n\n## Log\n' + '\n'.join(log_lines) + '\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     rows = (folder / 'cycles' / 'manifest.tsv').read_text().splitlines()
-    last_row = dict(zip(hq.MANIFEST_FIELDS, rows[-1].split('\t')))
+    last_row = dict(zip(storage.MANIFEST_FIELDS, rows[-1].split('\t')))
     log_field = last_row['log']
     note_field = last_row['note']
     assert log_field == 'adopted; prior Log: 2 lines in cycles/c02.md'
@@ -813,9 +815,9 @@ def test_adopt_stores_a_key_files_pointer_outside_the_walk(tmp_path, monkeypatch
         '## Key files\n- `probes/run1.md` the probe result\n'
         '- `~/OUT-NOTE.md` an outside note\n\n## Log\n- 2026-09-01 (cycle 1): began.\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
-    rows = [dict(zip(hq.LEDGER_FIELDS, ln.split('\t')))
+    rows = [dict(zip(ledger.LEDGER_FIELDS, ln.split('\t')))
             for ln in (folder / 'ledger.tsv').read_text().splitlines()[1:]]
     by_path = {r['path']: r for r in rows}
     assert by_path['probes/run1.md']['base'] == 'folder'
@@ -833,10 +835,10 @@ def test_adopt_refuses_an_adopted_folder(tmp_path, monkeypatch):
     """
     folder = _new_root(tmp_path, monkeypatch, slug='orbit-cache-rewrite')
     shutil.copytree(os.path.join(FIXTURES, 'orbit-cache-rewrite'), folder)
-    assert hq.main(['adopt', 'orbit-cache-rewrite']) == 0
+    assert cli.main(['adopt', 'orbit-cache-rewrite']) == 0
     ledger_before = (folder / 'ledger.tsv').read_bytes()
 
-    assert hq.main(['adopt', 'orbit-cache-rewrite']) == 1
+    assert cli.main(['adopt', 'orbit-cache-rewrite']) == 1
 
     assert (folder / 'ledger.tsv').read_bytes() == ledger_before
 
@@ -855,7 +857,7 @@ def test_adopt_rebuilds_the_header_without_git(tmp_path, monkeypatch):
         'Written: 2026-01-01 | Cycle: 3 | main @ abc1234 | dirty: x.py\n\n'
         '## Task\nx\n\n## Now\ny\n\n## Log\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     lines = (folder / 'HANDOFF.md').read_text().splitlines()
     assert lines[2] == f'Written: {_NOW[:10]} | Cycle: 3'
@@ -869,7 +871,7 @@ def test_finish_ranks_collisions_by_folder_wide_rarity(tmp_path, monkeypatch, ca
     Oracle: Delta (in one file) is reported before Alpha (in four).
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\n## Alpha section\n\n## Delta section\n')
     for name in ('notes-a.md', 'notes-b.md', 'notes-c.md'):
         (folder / name).write_text('# n\n\nAbout the Alpha path.\n')
@@ -878,7 +880,7 @@ def test_finish_ranks_collisions_by_folder_wide_rarity(tmp_path, monkeypatch, ca
         '## Now\n', '## Now\nWire Alpha and Delta into the run.\n'))
     capsys.readouterr()
 
-    assert hq.main(['finish', _SLUG, '--log', 'c1']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'c1']) == 0
 
     hits = [ln for ln in capsys.readouterr().out.splitlines() if 'collides:' in ln]
     assert len(hits) == 2
@@ -893,13 +895,13 @@ def test_when_prints_every_row_with_no_cap(tmp_path, monkeypatch, capsys):
     Oracle: 35 stamps of one file give 35 lines and no 'omitted' line.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'notes-a.md').write_text('# n\n')
     for _ in range(35):
-        assert hq.main(['stamp', _SLUG, 'notes-a.md']) == 0
+        assert cli.main(['stamp', _SLUG, 'notes-a.md']) == 0
     capsys.readouterr()
 
-    assert hq.main(['when', _SLUG, 'notes-a.md']) == 0
+    assert cli.main(['when', _SLUG, 'notes-a.md']) == 0
 
     lines = capsys.readouterr().out.splitlines()
     assert len(lines) == 35
@@ -913,13 +915,13 @@ def test_artifacts_verb_prints_live_rows_only(tmp_path, monkeypatch, capsys):
     Oracle: after SPEC.md is archived, no output line names it.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n')
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Spec'])
-    assert hq.main(['stamp', _SLUG, 'SPEC.md', '--archive', '--reason', 'old']) == 0
+    cli.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Spec'])
+    assert cli.main(['stamp', _SLUG, 'SPEC.md', '--archive', '--reason', 'old']) == 0
     capsys.readouterr()
 
-    assert hq.main(['artifacts', _SLUG]) == 0
+    assert cli.main(['artifacts', _SLUG]) == 0
 
     assert 'SPEC.md' not in capsys.readouterr().out
 
@@ -944,9 +946,9 @@ def test_adopt_seeds_numbered_and_plain_decision_lines(tmp_path, monkeypatch):
                 '1. **Chose alpha** Because beta needs a rewrite.\n'
                 'Capped at fifty. Memory bound.\n\n## Log\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
-    items, _ = hq._parse_standing((folder / 'standing.md').read_text())
+    items, _ = standing.parse_standing((folder / 'standing.md').read_text())
     assert [i['headline'] for i in items] == ['Chose alpha', 'Capped at fifty.']
     assert items[1]['body'] == 'Memory bound.'
 
@@ -967,9 +969,9 @@ def test_adopt_joins_a_bullet_wrapped_at_the_column(tmp_path, monkeypatch):
                 'plain text; and generated queries, which would undo\n'
                 'the read-only rule.\n\n## Log\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
-    items, _ = hq._parse_standing((folder / 'standing.md').read_text())
+    items, _ = standing.parse_standing((folder / 'standing.md').read_text())
     assert [(i['id'], i['headline']) for i in items] == [
         ('c01', ('Ruled out three routes: page offsets for the size problem;'
                  ' a packed wire format, since the reader wants plain text;'
@@ -993,9 +995,9 @@ def test_adopt_splits_a_plain_item_below_a_finished_sentence(
     _conforming(folder, 2, '## Task\nx\n\n## Constraints\n'
                 '- Never below one.\nAlways above zero.\n\n## Log\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
-    items, _ = hq._parse_standing((folder / 'standing.md').read_text())
+    items, _ = standing.parse_standing((folder / 'standing.md').read_text())
     assert [(i['id'], i['headline']) for i in items] == [
         ('c01', 'Never below one.'),
         ('c02', 'Always above zero.'),
@@ -1016,9 +1018,9 @@ def test_adopt_closes_an_open_item_at_a_blank_line(tmp_path, monkeypatch):
                 '- Ruled out page offsets and\npacked formats\n\n'
                 'Revisit when the reader changes.\n\n## Log\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
-    items, _ = hq._parse_standing((folder / 'standing.md').read_text())
+    items, _ = standing.parse_standing((folder / 'standing.md').read_text())
     assert [(i['id'], i['headline']) for i in items] == [
         ('c01', 'Ruled out page offsets and packed formats'),
         ('c02', 'Revisit when the reader changes.'),
@@ -1039,10 +1041,10 @@ def test_adopt_keeps_the_words_of_an_inner_bold_span(tmp_path, monkeypatch):
                 '- widgets is a **public** package - it carries no\n'
                 '  internal names.\n\n## Log\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     text = (folder / 'standing.md').read_text()
-    items, _ = hq._parse_standing(text)
+    items, _ = standing.parse_standing(text)
     assert [i['headline'] for i in items] == [
         'widgets is a public package - it carries no internal names.']
     stored = [ln for ln in text.splitlines() if 'widgets' in ln]
@@ -1060,7 +1062,7 @@ def test_adopt_concatenates_a_repeated_heading(tmp_path, monkeypatch):
     _conforming(folder, 3, '## Task\nParagraph A, the original scope.\n\n'
                 '## Now\ny\n\n## Task\nParagraph B, the revised scope.\n\n## Log\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     text = (folder / 'HANDOFF.md').read_text()
     assert 'Paragraph A, the original scope.' in text
@@ -1075,15 +1077,15 @@ def test_r3_fires_for_a_gated_row_in_a_subdirectory(tmp_path, monkeypatch, capsy
     Oracle: finish exits 1 naming sub/DESIGN.md after its body changes.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'sub').mkdir()
     (folder / 'sub' / 'DESIGN.md').write_text('# Design\n\noriginal body\n')
-    assert hq.main(['stamp', _SLUG, 'sub/DESIGN.md', '--where', 'Design',
+    assert cli.main(['stamp', _SLUG, 'sub/DESIGN.md', '--where', 'Design',
                     '--label', 'sub spec']) == 0
     (folder / 'sub' / 'DESIGN.md').write_text('# Design\n\nedited body\n')
     capsys.readouterr()
 
-    assert hq.main(['finish', _SLUG, '--log', 'c1']) == 1
+    assert cli.main(['finish', _SLUG, '--log', 'c1']) == 1
 
     assert 'R3: sub/DESIGN.md' in capsys.readouterr().out
 
@@ -1096,10 +1098,10 @@ def test_finish_recreates_a_pruned_cycles_directory(tmp_path, monkeypatch):
     Oracle: exit 0 and cycles/c01.md present.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     shutil.rmtree(folder / 'cycles')
 
-    assert hq.main(['finish', _SLUG, '--log', 'c1']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'c1']) == 0
 
     assert (folder / 'cycles' / 'c01.md').exists()
 
@@ -1114,14 +1116,14 @@ def test_missing_row_whose_file_returns_reads_live(tmp_path, monkeypatch):
     folder = _new_root(tmp_path, monkeypatch)
     _conforming(folder, 3, '## Task\nx\n\n## Key files\n'
                 '- `later.md` Notes on the thing, written next cycle\n\n## Log\n')
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
     rows = (folder / 'ledger.tsv').read_text().splitlines()
-    assert dict(zip(hq.LEDGER_FIELDS, rows[-1].split('\t')))['status'] == 'missing'
+    assert dict(zip(ledger.LEDGER_FIELDS, rows[-1].split('\t')))['status'] == 'missing'
     (folder / 'later.md').write_text('# Later\n\nnow it exists\n')
     monkeypatch.setenv('HQ_CYCLE', '4')
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
 
-    assert hq.main(['finish', _SLUG, '--log', 'made later.md']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'made later.md']) == 0
 
     block = (folder / 'HANDOFF.md').read_text().split('<!-- hq:artifacts', 1)[1]
     block = block.split('<!-- /hq:artifacts -->', 1)[0]
@@ -1141,7 +1143,7 @@ def test_adopt_never_renders_an_absent_pointer_in_full(tmp_path, monkeypatch):
     _conforming(folder, 3, '## Task\nx\n\n## Key files\n'
                 '- `sub/SPEC-GONE.md` Read now: a spec that is not on disk\n\n## Log\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     text = (folder / 'HANDOFF.md').read_text()
     read_block = text.split('<!-- hq:read', 1)[1].split('<!-- /hq:read -->', 1)[0]
@@ -1158,13 +1160,13 @@ def test_artifacts_verb_hides_a_folder_row_whose_file_is_gone(
     Oracle: after notes-a.md is deleted, no output line names it.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'notes-a.md').write_text('# A\n')
-    hq.main(['stamp', _SLUG, 'notes-a.md', '--read-before', 'never', '--label', 'n'])
+    cli.main(['stamp', _SLUG, 'notes-a.md', '--read-before', 'never', '--label', 'n'])
     (folder / 'notes-a.md').unlink()
     capsys.readouterr()
 
-    assert hq.main(['artifacts', _SLUG]) == 0
+    assert cli.main(['artifacts', _SLUG]) == 0
 
     assert 'notes-a.md' not in capsys.readouterr().out
 
@@ -1178,15 +1180,15 @@ def test_worklist_does_not_report_a_present_subdirectory_row(
     Oracle: the second begin prints no 'missing live' line.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'sub').mkdir()
     (folder / 'sub' / 'DESIGN.md').write_text('# Design\n')
-    hq.main(['stamp', _SLUG, 'sub/DESIGN.md', '--label', 'sub spec'])
-    assert hq.main(['finish', _SLUG, '--log', 'c1']) == 0
+    cli.main(['stamp', _SLUG, 'sub/DESIGN.md', '--label', 'sub spec'])
+    assert cli.main(['finish', _SLUG, '--log', 'c1']) == 0
     monkeypatch.setenv('HQ_CYCLE', '2')
     capsys.readouterr()
 
-    assert hq.main(['begin', _SLUG]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
 
     assert 'missing live' not in capsys.readouterr().out
 
@@ -1202,7 +1204,7 @@ def test_adopt_keeps_text_before_the_first_heading(tmp_path, monkeypatch):
     folder = _new_root(tmp_path, monkeypatch)
     _conforming(folder, 3, 'Status: blocked on the adapter.\n\n## Task\nx\n\n## Log\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     assert '- unfiled: Status: blocked on the adapter.' in (
         folder / 'HANDOFF.md').read_text()
@@ -1232,13 +1234,14 @@ def test_adopt_carries_the_continuation_lines_of_a_wrapped_header_in_the_note(
         'Status: blocked on the adapter.\n\n'
         '## Task\nx\n\n## Log\n- 2026-09-01: started\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     text = (folder / 'HANDOFF.md').read_text()
     unfiled = [ln for ln in text.splitlines() if ln.startswith('- unfiled:')]
     assert unfiled == ['- unfiled: Status: blocked on the adapter.']
     assert 'conservation: every original line carried' in capsys.readouterr().out
-    manifest = hq._read_tsv(folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS)
+    manifest = storage.read_tsv(
+        folder / 'cycles' / 'manifest.tsv', storage.MANIFEST_FIELDS)
     assert manifest[-1]['note'] == (
         f'adopted {_NOW[:10]} by {_SESSION}'
         ' | header: pyproject.toml modified; alpha/ and beta/ untracked'
@@ -1264,11 +1267,12 @@ def test_a_line_glued_under_the_header_reaches_the_note_not_the_void(
         'Status: blocked on the adapter.\n\n'
         '## Task\nx\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     assert '- unfiled:' not in (folder / 'HANDOFF.md').read_text()
     assert 'conservation: every original line carried' in capsys.readouterr().out
-    manifest = hq._read_tsv(folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS)
+    manifest = storage.read_tsv(
+        folder / 'cycles' / 'manifest.tsv', storage.MANIFEST_FIELDS)
     assert manifest[-1]['note'] == (
         f'adopted {_NOW[:10]} by {_SESSION} | header: Status: blocked on the adapter.')
 
@@ -1290,7 +1294,7 @@ def test_conservation_knows_a_bold_header_by_its_pattern(
         '**Written: 2026-09-01 | Cycle: 3 | master @ 0123abc | clean**\n\n'
         '## Task\nx\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     assert 'conservation: every original line carried' in capsys.readouterr().out
 
@@ -1307,22 +1311,22 @@ def test_where_anchor_escapes_a_semicolon_inside_a_heading(
     anchor` line, and read prints the heading and its body line.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'notes-findings.md').write_text(
         '# Findings\n\n## F7. Cache hit ratio holds (n>=2; n=1 excluded)\n'
         'body\n## Next\nmore\n')
-    assert hq.main([
+    assert cli.main([
         'stamp', _SLUG, 'notes-findings.md', '--read-before', 'always',
         '--where', 'F7. Cache hit ratio holds (n>=2\\; n=1 excluded)',
         '--label', 'f7']) == 0
     (folder / 'HANDOFF.md').write_text(
         f'# Handoff: {_SLUG}\n\nWritten: 2026-09-01 | Cycle: 1\n\n## Task\nx\n')
-    assert hq.main(['finish', _SLUG, '--log', 'one']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'one']) == 0
     assert 'notes-findings.md:3-4' in (folder / 'HANDOFF.md').read_text()
     capsys.readouterr()
-    assert hq.main(['open', _SLUG]) == 0
+    assert cli.main(['open', _SLUG]) == 0
     assert 'unresolved anchor' not in _strip_read(capsys.readouterr().out)
-    assert hq.main(['read', _SLUG, 'notes-findings.md']) == 0
+    assert cli.main(['read', _SLUG, 'notes-findings.md']) == 0
     assert capsys.readouterr().out.splitlines() == [
         '## F7. Cache hit ratio holds (n>=2; n=1 excluded)', 'body']
 
@@ -1343,7 +1347,7 @@ def test_finish_flags_a_one_line_span_ended_by_a_same_level_heading(
     notes-last.md is not, and does not crash finish.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'notes-wrap.md').write_text(
         '# Notes\n\n## Alpha beta gamma\n## delta epsilon\nbody\n## Next\nmore\n')
     (folder / 'notes-solo.md').write_text('# Notes\n\n## Solo\n# Top\nbody\n')
@@ -1354,13 +1358,13 @@ def test_finish_flags_a_one_line_span_ended_by_a_same_level_heading(
                         ('notes-solo.md', 'Solo'),
                         ('notes-multi.md', 'Alpha'),
                         ('notes-last.md', 'Last')):
-        assert hq.main([
+        assert cli.main([
             'stamp', _SLUG, name, '--read-before', 'always',
             '--where', where, '--label', 'n']) == 0
     (folder / 'HANDOFF.md').write_text(
         f'# Handoff: {_SLUG}\n\nWritten: 2026-09-01 | Cycle: 1\n\n## Task\nx\n')
     capsys.readouterr()
-    assert hq.main(['finish', _SLUG, '--log', 'one']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'one']) == 0
     flagged = [ln for ln in capsys.readouterr().out.splitlines()
                if 'one-line span' in ln]
     assert flagged == [
@@ -1382,9 +1386,9 @@ def test_key_files_continuation_with_one_space_joins_the_label(
                 '- `notes-a.md` first half of the label\n second half\n\n## Log\n')
     (folder / 'notes-a.md').write_text('# A\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
-    rows = [dict(zip(hq.LEDGER_FIELDS, ln.split('\t')))
+    rows = [dict(zip(ledger.LEDGER_FIELDS, ln.split('\t')))
             for ln in (folder / 'ledger.tsv').read_text().splitlines()[1:]]
     assert {r['path']: r['label'] for r in rows}['notes-a.md'] == (
         'first half of the label second half')
@@ -1410,9 +1414,9 @@ def test_adopt_files_a_lead_in_sentence_above_the_first_bullet_under_unfiled(
                 '- Tried an async retry loop; the same lock blocks it.\n\n'
                 '## Log\n- 2026-09-01: started\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
-    items, _ = hq._parse_standing((folder / 'standing.md').read_text())
+    items, _ = standing.parse_standing((folder / 'standing.md').read_text())
     assert [(i['id'], i['headline']) for i in items] == [
         ('c01', 'Never below one.'),
         ('c02', 'Always above zero.'),
@@ -1444,9 +1448,9 @@ def test_adopt_joins_a_wrapped_lead_in_sentence_into_one_unfiled_bullet(
                 '- Keep the retry ceiling at four attempts.\n\n'
                 '## Log\n- 2026-09-01: started\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
-    items, _ = hq._parse_standing((folder / 'standing.md').read_text())
+    items, _ = standing.parse_standing((folder / 'standing.md').read_text())
     assert [i['headline'] for i in items] == [
         'Keep the retry ceiling at four attempts.']
     text = (folder / 'HANDOFF.md').read_text()
@@ -1475,7 +1479,7 @@ def test_adopt_keeps_the_marker_a_header_tail_line_already_carries(
         '- render-kit @ ccc3333\n\n'
         '## Task\nx\n\n## Log\n- 2026-09-01: started\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     text = (folder / 'HANDOFF.md').read_text()
     env = text.split('## Environment\n', 1)[1].split('\n\n## ', 1)[0]
@@ -1502,13 +1506,14 @@ def test_adopt_files_the_wrapped_header_tail_under_environment(
         '## Task\nx\n\n## Environment\nServers: box-one.\n\n'
         '## Log\n- 2026-09-01: started\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     text = (folder / 'HANDOFF.md').read_text()
     env = text.split('## Environment\n', 1)[1].split('\n\n## ', 1)[0]
     assert env == (
         'Servers: box-one.\n- parser-lib @ bbb2222 dirty 4 | render-kit @ ccc3333')
-    manifest = hq._read_tsv(folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS)
+    manifest = storage.read_tsv(
+        folder / 'cycles' / 'manifest.tsv', storage.MANIFEST_FIELDS)
     assert (' | header: parser-lib @ bbb2222 dirty 4 | render-kit @ ccc3333'
             in manifest[-1]['note'])
     assert 'conservation: every original line carried' in capsys.readouterr().out
@@ -1526,9 +1531,9 @@ def test_adopt_headline_ends_at_a_sentence_not_a_dot(tmp_path, monkeypatch):
                 '- Keep loader.py as the one source of truth. It reran clean.\n'
                 '- Never trust mtime! It lies on network mounts.\n\n## Log\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
-    items, _ = hq._parse_standing((folder / 'standing.md').read_text())
+    items, _ = standing.parse_standing((folder / 'standing.md').read_text())
     assert [(i['headline'], i['body']) for i in items] == [
         ('Keep loader.py as the one source of truth.', 'It reran clean.'),
         ('Never trust mtime!', 'It lies on network mounts.'),
@@ -1550,9 +1555,9 @@ def test_adopt_headline_never_ends_inside_an_open_quotation(
                 '- User, verbatim: "keep the old format, which is fine.'
                 ' Migrate later." Filed as is.\n\n## Log\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
-    items, _ = hq._parse_standing((folder / 'standing.md').read_text())
+    items, _ = standing.parse_standing((folder / 'standing.md').read_text())
     assert [(i['headline'], i['body']) for i in items] == [
         ('User, verbatim: "keep the old format, which is fine. Migrate later."',
          'Filed as is.'),
@@ -1578,9 +1583,9 @@ def test_adopt_runs_a_two_word_label_headline_on_to_the_next_sentence(
                 ' memory instead.\n'
                 '- A pid in the lock. Meaningless across hosts.\n\n## Log\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
-    items, _ = hq._parse_standing((folder / 'standing.md').read_text())
+    items, _ = standing.parse_standing((folder / 'standing.md').read_text())
     assert [(i['headline'], i['body']) for i in items] == [
         ('Cycle 26. Reading the batch gain showed the loader still drops rows.',
          'Not again.'),
@@ -1607,10 +1612,10 @@ def test_key_files_group_labels_grade_and_loose_lines_go_unfiled(
     (folder / 'notes-a.md').write_text('# A\n')
     (folder / 'notes-b.md').write_text('# B\n')
 
-    assert hq.main(['adopt', _SLUG]) == 0
+    assert cli.main(['adopt', _SLUG]) == 0
 
     rows = {r['path']: r for r in (
-        dict(zip(hq.LEDGER_FIELDS, ln.split('\t')))
+        dict(zip(ledger.LEDGER_FIELDS, ln.split('\t')))
         for ln in (folder / 'ledger.tsv').read_text().splitlines()[1:])}
     assert rows['notes-a.md']['read_before'] == 'always'
     assert rows['notes-a.md']['label'] == 'the live sketch'
@@ -1627,16 +1632,16 @@ def test_absent_abs_row_is_an_advisory_not_r3(tmp_path, monkeypatch, capsys):
     Oracle: finish exits 0 and prints the abs-path advisory.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     outside = folder.parent.parent / 'outside.md'
     outside.write_text('# Outside\n')
-    assert hq.main([
+    assert cli.main([
         'stamp', _SLUG, str(outside), '--read-before', 'always', '--where', 'Outside',
         '--label', 'outside notes']) == 0
     outside.unlink()
     capsys.readouterr()
 
-    assert hq.main(['finish', _SLUG, '--log', 'c1']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'c1']) == 0
 
     out = capsys.readouterr().out
     assert 'advisory: abs path not on disk' in out
@@ -1651,15 +1656,15 @@ def test_lifted_missing_row_faces_r3(tmp_path, monkeypatch, capsys):
     Oracle: finish exits 1 naming notes-x.md after its body changes.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'notes-x.md').write_text('# X\n\nv1\n')
-    assert hq.main([
+    assert cli.main([
         'stamp', _SLUG, 'notes-x.md', '--read-before', 'edit',
         '--status', 'missing', '--label', 'the notes']) == 0
     (folder / 'notes-x.md').write_text('# X\n\nv2 changed\n')
     capsys.readouterr()
 
-    assert hq.main(['finish', _SLUG, '--log', 'c1']) == 1
+    assert cli.main(['finish', _SLUG, '--log', 'c1']) == 1
 
     assert 'R3: notes-x.md' in capsys.readouterr().out
 
@@ -1674,12 +1679,12 @@ def test_finish_rarity_counts_files_containing_the_term(
     Zephyr, Yankee, Xenon are reported.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     for n in range(5):
         (folder / f'notes-{n}.md').write_text(
             '# n\n\nRun the loader with --force to rebuild the cache.\n')
     for word in ('--force', 'Zephyr', 'Yankee', 'Xenon'):
-        assert hq.main([
+        assert cli.main([
             'note', _SLUG, 'dead-end', '--headline', f'the {word} path failed',
             'body']) == 0
     hp = folder / 'HANDOFF.md'
@@ -1687,7 +1692,7 @@ def test_finish_rarity_counts_files_containing_the_term(
         '## Now\n', '## Now\nRun `--force` on the Zephyr, Yankee and Xenon paths.\n'))
     capsys.readouterr()
 
-    assert hq.main(['finish', _SLUG, '--log', 'c1']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'c1']) == 0
 
     hits = [ln for ln in capsys.readouterr().out.splitlines() if 'collides:' in ln]
     assert len(hits) == 3
@@ -1702,10 +1707,10 @@ def test_restamp_carries_label_and_where_forward(tmp_path, monkeypatch):
     Oracle: ledger second row has label equal to the first row's label.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text(
         '# Spec\n\n## Render pass\n\nDetails.\n\n## Other\n\nContent.\n')
-    hq.main([
+    cli.main([
         'stamp', _SLUG, 'SPEC.md',
         '--label', 'original label text',
         '--where', 'Render pass',
@@ -1713,7 +1718,7 @@ def test_restamp_carries_label_and_where_forward(tmp_path, monkeypatch):
 
     (folder / 'SPEC.md').write_text(
         '# Spec\n\n## Render pass\n\nUpdated.\n\n## Other\n\nContent.\n')
-    hq.main(['stamp', _SLUG, 'SPEC.md'])
+    cli.main(['stamp', _SLUG, 'SPEC.md'])
 
     lines = (folder / 'ledger.tsv').read_text().splitlines()
     assert len(lines) == 3
@@ -1736,9 +1741,9 @@ def test_finish_writes_nothing_on_a_blocking_finding(tmp_path, monkeypatch):
     the blocked finish; manifest has zero data rows.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\nOriginal content.\n')
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--read-before', 'always'])
+    cli.main(['stamp', _SLUG, 'SPEC.md', '--read-before', 'always'])
 
     (folder / 'SPEC.md').write_text('# Spec\n\nModified content.\n')
 
@@ -1752,7 +1757,7 @@ def test_finish_writes_nothing_on_a_blocking_finding(tmp_path, monkeypatch):
         return result
 
     before = _sha_all(str(folder))
-    ret = hq.main(['finish', _SLUG, '--log', 'should be blocked'])
+    ret = cli.main(['finish', _SLUG, '--log', 'should be blocked'])
     assert ret == 1
     after = _sha_all(str(folder))
     assert before == after
@@ -1771,20 +1776,20 @@ def test_finish_rerun_appends_one_log_line(tmp_path, monkeypatch):
     finish exits 1. After a new begin+finish, manifest has exactly two rows.
     """
     folder = _new_root(tmp_path, monkeypatch, cycle='1')
-    hq.main(['begin', _SLUG])
-    hq.main(['finish', _SLUG, '--log', 'first cycle'])
+    cli.main(['begin', _SLUG])
+    cli.main(['finish', _SLUG, '--log', 'first cycle'])
 
     # Second finish with no intervening begin:
     # lock is gone, session mismatch.
-    ret2 = hq.main(['finish', _SLUG, '--log', 'duplicate'])
+    ret2 = cli.main(['finish', _SLUG, '--log', 'duplicate'])
     assert ret2 == 1
 
     rows = (folder / 'cycles' / 'manifest.tsv').read_text().splitlines()[1:]
     assert len(rows) == 1
 
     monkeypatch.setenv('HQ_CYCLE', '2')
-    hq.main(['begin', _SLUG])
-    ret3 = hq.main(['finish', _SLUG, '--log', 'second cycle'])
+    cli.main(['begin', _SLUG])
+    ret3 = cli.main(['finish', _SLUG, '--log', 'second cycle'])
     assert ret3 == 0
 
     rows2 = (folder / 'cycles' / 'manifest.tsv').read_text().splitlines()[1:]
@@ -1798,8 +1803,8 @@ def test_begin_twice_advances_nothing(tmp_path, monkeypatch):
     Oracle: cycles/ has no archive after two begins; manifest has zero rows.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
 
     cycles_dir = folder / 'cycles'
     archives = [
@@ -1821,10 +1826,10 @@ def test_begin_takes_over_a_stale_lock_and_names_it(tmp_path, monkeypatch,
     _SESSION.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     _write_lock(folder, 'other-session', _STALE_LOCK_TIME, cycle=1)
 
-    ret = hq.main(['begin', _SLUG])
+    ret = cli.main(['begin', _SLUG])
     assert ret == 0
 
     out = capsys.readouterr().out
@@ -1841,10 +1846,10 @@ def test_begin_refuses_a_young_foreign_lock(tmp_path, monkeypatch):
     Oracle: return code 1; lock still carries 'other-session' after the call.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     _write_lock(folder, 'other-session', _YOUNG_LOCK_TIME, cycle=1)
 
-    ret = hq.main(['begin', _SLUG])
+    ret = cli.main(['begin', _SLUG])
     assert ret == 1
 
     lock_text = (folder / '.hq.lock').read_text()
@@ -1858,8 +1863,8 @@ def test_archive_holds_cycle_n_as_finished(tmp_path, monkeypatch):
     Oracle: cycles/c01.md exists and is byte-identical to HANDOFF.md.
     """
     folder = _new_root(tmp_path, monkeypatch, cycle='1')
-    hq.main(['begin', _SLUG])
-    hq.main(['finish', _SLUG, '--log', 'archive test'])
+    cli.main(['begin', _SLUG])
+    cli.main(['finish', _SLUG, '--log', 'archive test'])
 
     archive = folder / 'cycles' / 'c01.md'
     assert archive.exists(), 'c01.md not found; off-by-one likely'
@@ -1874,14 +1879,14 @@ def test_probe_dir_is_one_row(tmp_path, monkeypatch, capsys):
     Oracle: artifacts output has exactly one line containing 'experiments'.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     exp_dir = folder / 'experiments'
     exp_dir.mkdir()
     for i in range(5):
         (exp_dir / f'run{i:02d}.py').write_text(f'# run {i}\n')
 
     capsys.readouterr()
-    hq.main(['artifacts', _SLUG])
+    cli.main(['artifacts', _SLUG])
     out = capsys.readouterr().out
     probe_lines = [ln for ln in out.splitlines() if 'experiments' in ln]
     assert len(probe_lines) == 1
@@ -1895,11 +1900,11 @@ def test_conflicted_copy_is_skipped_and_named(tmp_path, monkeypatch, capsys):
     Oracle: artifacts output contains the filename but not as 'spec'.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     conflict_name = 'SPEC (conflicted copy 2026-09-09).md'
     (folder / conflict_name).write_text('# Spec\n\nContent.\n')
 
-    hq.main(['artifacts', _SLUG])
+    cli.main(['artifacts', _SLUG])
     out = capsys.readouterr().out
     assert conflict_name in out
     # The conflicted copy must not be classified as a spec
@@ -1917,7 +1922,7 @@ def test_where_resolves_to_the_current_span(tmp_path, monkeypatch):
     span 3-7.
     """
     folder = _new_root(tmp_path, monkeypatch, cycle='1')
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text(
         '# Spec\n'
         '\n'
@@ -1929,8 +1934,8 @@ def test_where_resolves_to_the_current_span(tmp_path, monkeypatch):
         '## Implementation\n'
         '\n'
         'Other content.\n')
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Render pass'])
-    hq.main(['finish', _SLUG, '--log', 'where test'])
+    cli.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Render pass'])
+    cli.main(['finish', _SLUG, '--log', 'where test'])
 
     handoff_text = (folder / 'HANDOFF.md').read_text()
     assert 'SPEC.md:3-7' in handoff_text
@@ -1948,7 +1953,7 @@ def test_read_block_line_shapes(tmp_path, monkeypatch):
     and 15 characters, giving 'NOTES.md:?  (3 lines, 3 tok)  -'.
     """
     folder = _new_root(tmp_path, monkeypatch, cycle='1')
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text(
         '# Spec\n'
         '\n'
@@ -1961,13 +1966,13 @@ def test_read_block_line_shapes(tmp_path, monkeypatch):
         '\n'
         'Other content.\n')
     (folder / 'NOTES.md').write_text('# Notes\n\nBody.\n')
-    hq.main([
+    cli.main([
         'stamp', _SLUG, 'SPEC.md', '--read-before', 'always',
         '--where', 'Render pass;Ghost Section'])
-    hq.main([
+    cli.main([
         'stamp', _SLUG, 'NOTES.md', '--read-before', 'always',
         '--where', 'Missing'])
-    hq.main(['finish', _SLUG, '--log', 'shape test'])
+    cli.main(['finish', _SLUG, '--log', 'shape test'])
 
     handoff_text = (folder / 'HANDOFF.md').read_text()
     text_lines = handoff_text.splitlines()
@@ -1983,12 +1988,12 @@ def test_untyped_unfiled_bullet_blocks_and_names_the_line(
     Oracle: finish returns 1 and stdout names the offending bullet text.
     """
     folder = _new_root(tmp_path, monkeypatch, cycle='1')
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     _set_cursor(
         folder / 'HANDOFF.md',
         '## Task\n\nDo the work.\n\n## Unfiled\n\n- some untyped bullet item\n')
 
-    ret = hq.main(['finish', _SLUG, '--log', 'untyped test'])
+    ret = cli.main(['finish', _SLUG, '--log', 'untyped test'])
     assert ret == 1
 
     out = capsys.readouterr().out
@@ -2004,14 +2009,14 @@ def test_typed_unfiled_bullets_reach_their_sections(tmp_path, monkeypatch):
     c-prefixed line has 'Max 400 lines' headline (not swapped).
     """
     folder = _new_root(tmp_path, monkeypatch, cycle='1')
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     _set_cursor(
         folder / 'HANDOFF.md',
         '## Task\n\nDo the work.\n\n## Unfiled\n\n'
         '- decision: **Use single writes** Batch all writes into one call.\n'
         '- constraint: **Max 400 lines** Cursor must stay under 400 lines.\n')
 
-    ret = hq.main(['finish', _SLUG, '--log', 'typed unfiled test'])
+    ret = cli.main(['finish', _SLUG, '--log', 'typed unfiled test'])
     assert ret == 0
 
     standing_text = (folder / 'standing.md').read_text()
@@ -2034,13 +2039,13 @@ def test_abs_path_resolved_once_and_absence_is_advisory(tmp_path, monkeypatch):
     unchanged regardless of cwd.
     """
     folder = _new_root(tmp_path, monkeypatch, cycle='1')
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     abs_path = '/nonexistent/path/to/notes.md'
 
     original_cwd = os.getcwd()
     try:
         os.chdir(str(tmp_path))
-        ret = hq.main(['stamp', _SLUG, abs_path])
+        ret = cli.main(['stamp', _SLUG, abs_path])
         lines = (folder / 'ledger.tsv').read_text().splitlines()
     finally:
         os.chdir(original_cwd)
@@ -2075,7 +2080,7 @@ def test_adopt_of_a_non_conforming_handoff_changes_nothing(tmp_path,
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path))
 
     folder = root / '.handoff' / 'legacy-import-notes'
-    ret = hq.main(['adopt', 'legacy-import-notes'])
+    ret = cli.main(['adopt', 'legacy-import-notes'])
     assert ret == 1
     assert not (folder / 'ledger.tsv').exists()
     assert not (folder / 'standing.md').exists()
@@ -2111,7 +2116,7 @@ def test_adopt_conservation_excludes_the_archive(tmp_path, monkeypatch):
     monkeypatch.setenv('HQ_GIT', '0')
     monkeypatch.setenv('HQ_STATE_DIR', str(tmp_path))
 
-    ret = hq.main(['adopt', slug])
+    ret = cli.main(['adopt', slug])
     assert ret == 0
 
     ledger_rows = (folder / 'ledger.tsv').read_text().splitlines()[1:]
@@ -2153,13 +2158,13 @@ def test_adopt_conservation_excludes_the_archive(tmp_path, monkeypatch):
     # Conservation: the adopted cursor plus standing cover the original.
     standing_text = (folder / 'standing.md').read_text()
     pairs = [f'{r[2]} {r[12]}' for r in parsed_rows if len(r) > 12]
-    missing = hq.conservation(original_text, cursor_section, standing_text, pairs)
+    missing = carry.conservation(original_text, cursor_section, standing_text, pairs)
     assert missing == []
 
     monkeypatch.setenv('HQ_CYCLE', '6')
-    ret = hq.main(['begin', slug])
+    ret = cli.main(['begin', slug])
     assert ret == 0
-    ret = hq.main(['finish', slug, '--log', 'second cycle'])
+    ret = cli.main(['finish', slug, '--log', 'second cycle'])
     assert ret == 0
 
 
@@ -2171,10 +2176,10 @@ def test_open_writes_nothing(tmp_path, monkeypatch):
     after open.
     """
     folder = _new_root(tmp_path, monkeypatch, cycle='1')
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n')
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--read-before', 'always'])
-    hq.main(['finish', _SLUG, '--log', 'setup'])
+    cli.main(['stamp', _SLUG, 'SPEC.md', '--read-before', 'always'])
+    cli.main(['finish', _SLUG, '--log', 'setup'])
 
     def _sha_all(root: str) -> dict:
         result = {}
@@ -2186,7 +2191,7 @@ def test_open_writes_nothing(tmp_path, monkeypatch):
         return result
 
     before = _sha_all(str(folder))
-    hq.main(['open', _SLUG])
+    cli.main(['open', _SLUG])
     after = _sha_all(str(folder))
     assert before == after
 
@@ -2223,16 +2228,16 @@ def test_when_shows_all_rows_for_path(tmp_path, monkeypatch, capsys):
     Oracle: three stamps of SPEC.md produce three rows in when output.
     """
     folder = _new_root(tmp_path, monkeypatch, cycle='1')
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\nVersion 1.\n')
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Spec', '--label', 'first stamp'])
+    cli.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Spec', '--label', 'first stamp'])
     (folder / 'SPEC.md').write_text('# Spec\n\nVersion 2.\n')
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--label', 'second stamp'])
+    cli.main(['stamp', _SLUG, 'SPEC.md', '--label', 'second stamp'])
     (folder / 'SPEC.md').write_text('# Spec\n\nVersion 3.\n')
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--label', 'third stamp'])
+    cli.main(['stamp', _SLUG, 'SPEC.md', '--label', 'third stamp'])
 
     capsys.readouterr()
-    hq.main(['when', _SLUG, 'SPEC.md'])
+    cli.main(['when', _SLUG, 'SPEC.md'])
     out = capsys.readouterr().out
     spec_lines = [ln for ln in out.splitlines() if 'SPEC.md' in ln]
     assert len(spec_lines) == 3
@@ -2248,19 +2253,19 @@ def test_diff_shows_cursor_changes_between_cycles(tmp_path, monkeypatch,
     to 'Line A' removed (- prefix) and 'Line B' added (+ prefix).
     """
     folder = _new_root(tmp_path, monkeypatch, cycle='1')
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     _set_cursor(folder / 'HANDOFF.md', '## Task\n\nLine A\n')
-    hq.main(['finish', _SLUG, '--log', 'cycle one'])
+    cli.main(['finish', _SLUG, '--log', 'cycle one'])
 
     monkeypatch.setenv('HQ_CYCLE', '2')
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     _set_cursor(folder / 'HANDOFF.md', '## Task\n\nLine B\n')
-    hq.main(['finish', _SLUG, '--log', 'cycle two'])
+    cli.main(['finish', _SLUG, '--log', 'cycle two'])
     capsys.readouterr()
 
-    assert hq.main(['diff', _SLUG, '1', '2']) == 0
+    assert cli.main(['diff', _SLUG, '1', '2']) == 0
     assert capsys.readouterr().out.splitlines() == ['## Task  +1 -1']
-    assert hq.main(['diff', _SLUG, '1', '2', 'task']) == 0
+    assert cli.main(['diff', _SLUG, '1', '2', 'task']) == 0
     out = capsys.readouterr().out
     assert any(ln.startswith('- ') and 'Line A' in ln for ln in out.splitlines())
     assert any(ln.startswith('+ ') and 'Line B' in ln for ln in out.splitlines())
@@ -2275,13 +2280,13 @@ def test_artifacts_verb_shows_every_live_row(tmp_path, monkeypatch, capsys):
     'edit'.
     """
     folder = _new_root(tmp_path, monkeypatch, cycle='1')
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n')
     (folder / 'notes-impl.md').write_text('# Notes\n\nContent.\n')
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--read-before', 'always'])
-    hq.main(['stamp', _SLUG, 'notes-impl.md', '--read-before', 'edit'])
+    cli.main(['stamp', _SLUG, 'SPEC.md', '--read-before', 'always'])
+    cli.main(['stamp', _SLUG, 'notes-impl.md', '--read-before', 'edit'])
 
-    ret = hq.main(['artifacts', _SLUG])
+    ret = cli.main(['artifacts', _SLUG])
     assert ret == 0
 
     out_lines = capsys.readouterr().out.splitlines()
@@ -2296,15 +2301,15 @@ def test_standing_verb_shows_unsuperseded_items(tmp_path, monkeypatch, capsys):
     Oracle: d01's headline absent from output; d02's headline present.
     """
     folder = _new_root(tmp_path, monkeypatch, cycle='1')
-    hq.main(['begin', _SLUG])
-    hq.main(['note', _SLUG, 'decision',
+    cli.main(['begin', _SLUG])
+    cli.main(['note', _SLUG, 'decision',
              '--headline', 'Original approach', 'First decision body.'])
-    hq.main(['note', _SLUG, 'decision',
+    cli.main(['note', _SLUG, 'decision',
              '--headline', 'Revised approach', 'Second decision body.'])
-    hq.main(['supersede', _SLUG, 'd01', 'd02'])
+    cli.main(['supersede', _SLUG, 'd01', 'd02'])
     capsys.readouterr()
 
-    ret = hq.main(['standing', _SLUG])
+    ret = cli.main(['standing', _SLUG])
     assert ret == 0
 
     out = capsys.readouterr().out
@@ -2322,14 +2327,14 @@ def test_read_verb_appends_receipt(tmp_path, monkeypatch, capsys):
     path; the first printed line is the anchor's own heading.
     """
     folder = _new_root(tmp_path, monkeypatch, cycle='1')
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text(
         '# Spec\n\n## Design\n\nContent.\n\n## Other\n\nMore.\n')
-    hq.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Design'])
-    hq.main(['finish', _SLUG, '--log', 'read test'])
+    cli.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Design'])
+    cli.main(['finish', _SLUG, '--log', 'read test'])
 
     capsys.readouterr()
-    ret = hq.main(['read', _SLUG, 'SPEC.md'])
+    ret = cli.main(['read', _SLUG, 'SPEC.md'])
     assert ret == 0
     assert capsys.readouterr().out.splitlines()[0] == '## Design'
 
@@ -2355,17 +2360,17 @@ def test_dangling_successor_is_an_advisory_in_finish_and_the_work_list(
     prints 'successor missing: SPEC.md -> NEXT.md' in its work list.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\nOld.\n')
     (folder / 'NEXT.md').write_text('# Spec\n\nNew.\n')
-    assert hq.main(['stamp', _SLUG, 'SPEC.md', '--successor', 'NEXT.md']) == 0
+    assert cli.main(['stamp', _SLUG, 'SPEC.md', '--successor', 'NEXT.md']) == 0
     (folder / 'NEXT.md').unlink()
     capsys.readouterr()
 
-    assert hq.main(['finish', _SLUG, '--log', 'dangling']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'dangling']) == 0
     assert 'advisory: successor missing: SPEC.md -> NEXT.md' in capsys.readouterr().out
 
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     assert 'successor missing: SPEC.md -> NEXT.md' in capsys.readouterr().out
 
 
@@ -2380,19 +2385,19 @@ def test_directory_successor_on_disk_is_not_named_missing(
     it is removed.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'probe-old').mkdir()
-    assert hq.main(['stamp', _SLUG, 'probe-old', '--kind', 'probe-dir']) == 0
+    assert cli.main(['stamp', _SLUG, 'probe-old', '--kind', 'probe-dir']) == 0
     (folder / 'probe-old').rename(folder / 'probe-new')
-    assert hq.main(['stamp', _SLUG, 'probe-new', '--kind', 'probe-dir']) == 0
-    assert hq.main(['stamp', _SLUG, 'probe-old', '--successor', 'probe-new']) == 0
+    assert cli.main(['stamp', _SLUG, 'probe-new', '--kind', 'probe-dir']) == 0
+    assert cli.main(['stamp', _SLUG, 'probe-old', '--successor', 'probe-new']) == 0
     capsys.readouterr()
 
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     assert 'successor missing' not in capsys.readouterr().out
 
     (folder / 'probe-new').rmdir()
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     assert 'successor missing: probe-old -> probe-new' in capsys.readouterr().out
 
 
@@ -2406,15 +2411,15 @@ def test_r1_holds_when_the_stored_kind_is_spec_and_the_heading_moved(
     exits 1 and the current row stays kind spec, live, always.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'plan.md').write_text('# Spec\n\nContent.\n')
-    assert hq.main(['stamp', _SLUG, 'plan.md', '--where', 'Spec']) == 0
+    assert cli.main(['stamp', _SLUG, 'plan.md', '--where', 'Spec']) == 0
     (folder / 'plan.md').write_text('# Plan\n\nContent.\n')
 
-    assert hq.main(['stamp', _SLUG, 'plan.md', '--read-before', 'never']) == 1
+    assert cli.main(['stamp', _SLUG, 'plan.md', '--read-before', 'never']) == 1
 
     lines = (folder / 'ledger.tsv').read_text().splitlines()
-    row = dict(zip(hq.LEDGER_FIELDS, lines[-1].split('\t')))
+    row = dict(zip(ledger.LEDGER_FIELDS, lines[-1].split('\t')))
     assert row['kind'] == 'spec'
     assert row['status'] == 'live'
     assert row['read_before'] == 'always'
@@ -2430,12 +2435,12 @@ def test_archive_without_reason_is_usage_and_writes_no_row(tmp_path, monkeypatch
     are unchanged.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\nContent.\n')
-    assert hq.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Spec']) == 0
+    assert cli.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Spec']) == 0
     ledger_before = (folder / 'ledger.tsv').read_bytes()
 
-    assert hq.main(['stamp', _SLUG, 'SPEC.md', '--archive']) == 2
+    assert cli.main(['stamp', _SLUG, 'SPEC.md', '--archive']) == 2
     assert (folder / 'ledger.tsv').read_bytes() == ledger_before
 
 
@@ -2448,19 +2453,19 @@ def test_successor_whose_own_row_is_not_live_is_refused(tmp_path, monkeypatch):
     live, always, successor '-'; A still points at B.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC-A.md').write_text('# Spec\n\nA.\n')
     (folder / 'SPEC-B.md').write_text('# Spec\n\nB.\n')
-    assert hq.main(['stamp', _SLUG, 'SPEC-B.md', '--where', 'Spec']) == 0
-    assert hq.main(['stamp', _SLUG, 'SPEC-A.md', '--successor', 'SPEC-B.md']) == 0
+    assert cli.main(['stamp', _SLUG, 'SPEC-B.md', '--where', 'Spec']) == 0
+    assert cli.main(['stamp', _SLUG, 'SPEC-A.md', '--successor', 'SPEC-B.md']) == 0
 
-    assert hq.main(['stamp', _SLUG, 'SPEC-B.md', '--successor', 'SPEC-A.md']) == 1
+    assert cli.main(['stamp', _SLUG, 'SPEC-B.md', '--successor', 'SPEC-A.md']) == 1
 
     rows = [
-        dict(zip(hq.LEDGER_FIELDS, ln.split('\t')))
+        dict(zip(ledger.LEDGER_FIELDS, ln.split('\t')))
         for ln in (folder / 'ledger.tsv').read_text().splitlines()[1:]
         ]
-    latest = hq.latest_rows(rows)
+    latest = ledger.latest_rows(rows)
     assert latest['SPEC-B.md']['status'] == 'live'
     assert latest['SPEC-B.md']['read_before'] == 'always'
     assert latest['SPEC-B.md']['successor'] == '-'
@@ -2478,18 +2483,19 @@ def test_a_kind_declared_spec_is_gated_from_that_stamp_on(tmp_path, monkeypatch)
     exits 1 and the current row stays always.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'notes-a.md').write_text('# Notes\n\nActually the spec.\n')
 
-    assert hq.main(['stamp', _SLUG, 'notes-a.md', '--kind', 'spec', '--where', 'Notes']) == 0
+    assert cli.main(
+        ['stamp', _SLUG, 'notes-a.md', '--kind', 'spec', '--where', 'Notes']) == 0
     lines = (folder / 'ledger.tsv').read_text().splitlines()
-    row = dict(zip(hq.LEDGER_FIELDS, lines[-1].split('\t')))
+    row = dict(zip(ledger.LEDGER_FIELDS, lines[-1].split('\t')))
     assert (row['kind'], row['status'], row['read_before']) == ('spec', 'live', 'always')
 
-    assert hq.main([
+    assert cli.main([
         'stamp', _SLUG, 'notes-a.md', '--kind', 'spec', '--read-before', 'never']) == 1
     lines = (folder / 'ledger.tsv').read_text().splitlines()
-    row = dict(zip(hq.LEDGER_FIELDS, lines[-1].split('\t')))
+    row = dict(zip(ledger.LEDGER_FIELDS, lines[-1].split('\t')))
     assert row['read_before'] == 'always'
     assert row['reason'].startswith('refused:')
 
@@ -2509,16 +2515,16 @@ def test_work_list_caps_names_and_judges_presence_on_live_rows_only(
     line for the archived spec.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     for i in range(7):
         (folder / f'notes-{i}.md').write_text('# n\n')
     (folder / 'notes-x (conflicted copy 2026).md').write_text('# n\n')
     (folder / 'OLD.md').write_text('# Spec\n')
-    assert hq.main(['stamp', _SLUG, 'OLD.md', '--archive', '--reason', 'old']) == 0
+    assert cli.main(['stamp', _SLUG, 'OLD.md', '--archive', '--reason', 'old']) == 0
     (folder / 'OLD.md').unlink()
     capsys.readouterr()
 
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     out = capsys.readouterr().out
 
     line = next(ln for ln in out.splitlines() if ln.startswith('  unstamped notes x7: '))
@@ -2540,18 +2546,19 @@ def test_acknowledge_passes_a_witness_break_and_records_the_reason(
     'acknowledged: formatter'.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n')
-    assert hq.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Spec']) == 0
-    assert hq.main(['finish', _SLUG, '--log', 'one']) == 0
-    hq.main(['begin', _SLUG])
+    assert cli.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Spec']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'one']) == 0
+    cli.main(['begin', _SLUG])
     ledger = folder / 'ledger.tsv'
     ledger.write_bytes(ledger.read_bytes().replace(b'always', b'alwayz', 1))
 
-    assert hq.main(['finish', _SLUG, '--log', 'two']) == 1
-    assert hq.main(['finish', _SLUG, '--log', 'two', '--acknowledge', 'formatter']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'two']) == 1
+    assert cli.main(
+        ['finish', _SLUG, '--log', 'two', '--acknowledge', 'formatter']) == 0
 
-    rows = hq._read_tsv(folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS)
+    rows = storage.read_tsv(folder / 'cycles' / 'manifest.tsv', storage.MANIFEST_FIELDS)
     note = rows[-1]['note']
     assert note.startswith('acknowledged W1: ledger prefix changed')
     assert note.endswith('; formatter')
@@ -2569,19 +2576,19 @@ def test_collisions_skip_a_superseded_spec_and_a_present_abs_row_is_silent(
     and no 'abs path not on disk' line prints.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'OLD-SPEC.md').write_text('# Spec\n\n## Delta section\n')
     (folder / 'SPEC.md').write_text('# Spec\n\n## Plain section\n')
-    assert hq.main(['stamp', _SLUG, 'OLD-SPEC.md', '--successor', 'SPEC.md']) == 0
-    assert hq.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Spec']) == 0
+    assert cli.main(['stamp', _SLUG, 'OLD-SPEC.md', '--successor', 'SPEC.md']) == 0
+    assert cli.main(['stamp', _SLUG, 'SPEC.md', '--where', 'Spec']) == 0
     outside = tmp_path / 'outside-note.md'
     outside.write_text('# n\n')
-    assert hq.main(['stamp', _SLUG, str(outside)]) == 0
+    assert cli.main(['stamp', _SLUG, str(outside)]) == 0
     hp = folder / 'HANDOFF.md'
     hp.write_text(hp.read_text().replace('## Now\n', '## Now\nWire Delta into the run.\n'))
     capsys.readouterr()
 
-    assert hq.main(['finish', _SLUG, '--log', 'c1']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'c1']) == 0
 
     out = capsys.readouterr().out
     assert 'collides:' not in out
@@ -2600,18 +2607,18 @@ def test_label_dropping_a_backticked_token_alone_is_advised(
     finish that follows the re-stamp is silent.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n')
-    assert hq.main([
+    assert cli.main([
         'stamp', _SLUG, 'SPEC.md', '--where', 'Spec',
         '--label', 'the `--force` path, s4 spans it']) == 0
     capsys.readouterr()
 
-    assert hq.main([
+    assert cli.main([
         'stamp', _SLUG, 'SPEC.md', '--label', 'the force path now, s4 spans it']) == 0
 
     assert "advisory: label dropped {'`--force`'}: SPEC.md" in capsys.readouterr().out
-    assert hq.main(['finish', _SLUG, '--log', 'c1']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'c1']) == 0
     assert 'label dropped' not in capsys.readouterr().out
 
 
@@ -2629,14 +2636,14 @@ def test_label_losing_only_its_backticks_is_silent_on_both_counts(
     and differ only by the pair of backticks.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n')
-    assert hq.main([
+    assert cli.main([
         'stamp', _SLUG, 'SPEC.md', '--where', 'Spec',
         '--label', 'the `FINX_SURFACE` split']) == 0
     capsys.readouterr()
 
-    assert hq.main([
+    assert cli.main([
         'stamp', _SLUG, 'SPEC.md', '--label', 'the FINX_SURFACE split']) == 0
 
     out = capsys.readouterr().out
@@ -2657,14 +2664,14 @@ def test_label_keeping_a_token_only_inside_a_longer_word_is_a_loss(
     word from the identifier `env`.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'doc.md').write_text('# Doc\n')
-    assert hq.main([
+    assert cli.main([
         'stamp', _SLUG, 'doc.md', '--read-before', 'never',
         '--label', 'the `env` guard']) == 0
     capsys.readouterr()
 
-    assert hq.main([
+    assert cli.main([
         'stamp', _SLUG, 'doc.md', '--read-before', 'never',
         '--label', 'the environment guard rewritten at length']) == 0
 
@@ -2685,14 +2692,14 @@ def test_a_shorter_label_that_also_drops_a_token_prints_both_lines(
     `FINX_SURFACE` still spelled.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'doc.md').write_text('# Doc\n')
-    assert hq.main([
+    assert cli.main([
         'stamp', _SLUG, 'doc.md', '--read-before', 'never',
         '--label', 'the `--force` and `FINX_SURFACE` path']) == 0
     capsys.readouterr()
 
-    assert hq.main([
+    assert cli.main([
         'stamp', _SLUG, 'doc.md', '--read-before', 'never',
         '--label', 'the FINX_SURFACE path']) == 0
 
@@ -2709,14 +2716,14 @@ def test_two_unfiled_items_of_one_kind_get_consecutive_ids(tmp_path, monkeypatch
     Oracle: hand-computed ids in file order.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     _set_cursor(
         folder / 'HANDOFF.md',
         '## Task\n\nDo.\n\n## Unfiled\n'
         '- decision: **First** one.\n'
         '- decision: **Second** two.\n')
 
-    assert hq.main(['finish', _SLUG, '--log', 'c1']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'c1']) == 0
 
     lines = (folder / 'standing.md').read_text().splitlines()
     assert lines == ['- [d01] (c1) **First** one.', '- [d02] (c1) **Second** two.']
@@ -2730,9 +2737,9 @@ def test_first_finish_keeps_one_log_heading(tmp_path, monkeypatch):
     Oracle: exactly one '## Log' line after the first finish.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
 
-    assert hq.main(['finish', _SLUG, '--log', 'c1']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'c1']) == 0
 
     text = (folder / 'HANDOFF.md').read_text()
     assert text.count('\n## Log\n') == 1
@@ -2747,14 +2754,14 @@ def test_a_kind_declared_draft_is_gated_like_a_spec(tmp_path, monkeypatch):
     stamp exits 1.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'plan.txt').write_text('def run(): pass\n')
 
-    assert hq.main(['stamp', _SLUG, 'plan.txt', '--kind', 'draft']) == 0
+    assert cli.main(['stamp', _SLUG, 'plan.txt', '--kind', 'draft']) == 0
     lines = (folder / 'ledger.tsv').read_text().splitlines()
-    row = dict(zip(hq.LEDGER_FIELDS, lines[-1].split('\t')))
+    row = dict(zip(ledger.LEDGER_FIELDS, lines[-1].split('\t')))
     assert (row['kind'], row['status'], row['read_before']) == ('draft', 'live', 'edit')
-    assert hq.main(['stamp', _SLUG, 'plan.txt', '--read-before', 'never']) == 1
+    assert cli.main(['stamp', _SLUG, 'plan.txt', '--read-before', 'never']) == 1
 
 
 def test_a_restamp_declaring_draft_gates_a_row_stamped_other(
@@ -2770,20 +2777,20 @@ def test_a_restamp_declaring_draft_gates_a_row_stamped_other(
     ledger row's read_before field.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'plan.txt').write_text('def run(): pass\n')
     (folder / 'data.txt').write_text('rows\n')
 
     def last_row():
         lines = (folder / 'ledger.tsv').read_text().splitlines()
-        return dict(zip(hq.LEDGER_FIELDS, lines[-1].split('\t')))
+        return dict(zip(ledger.LEDGER_FIELDS, lines[-1].split('\t')))
 
-    assert hq.main(['stamp', _SLUG, 'plan.txt']) == 0
-    assert hq.main(['stamp', _SLUG, 'plan.txt', '--kind', 'draft']) == 0
+    assert cli.main(['stamp', _SLUG, 'plan.txt']) == 0
+    assert cli.main(['stamp', _SLUG, 'plan.txt', '--kind', 'draft']) == 0
     assert (last_row()['kind'], last_row()['read_before']) == ('draft', 'edit')
 
-    assert hq.main(['stamp', _SLUG, 'data.txt', '--read-before', 'edit']) == 0
-    assert hq.main(['stamp', _SLUG, 'data.txt', '--kind', 'notes']) == 0
+    assert cli.main(['stamp', _SLUG, 'data.txt', '--read-before', 'edit']) == 0
+    assert cli.main(['stamp', _SLUG, 'data.txt', '--kind', 'notes']) == 0
     assert (last_row()['kind'], last_row()['read_before']) == ('notes', 'edit')
 
 
@@ -2794,12 +2801,12 @@ def test_help_with_no_topic_lists_every_key(capsys):
     loop, so the agent cannot discover it by running help alone.
     Oracle: the dict's keys, in insertion order, one per output line.
     """
-    rc = hq.main(['help'])
+    rc = cli.main(['help'])
     out = capsys.readouterr().out
     lines = out.splitlines()
     assert rc == 0
-    assert len(lines) == len(hq.HELP_TOPICS)
-    for line, key in zip(lines, hq.HELP_TOPICS):
+    assert len(lines) == len(help_text.HELP_TOPICS)
+    for line, key in zip(lines, help_text.HELP_TOPICS):
         assert line.startswith(f'hq help {key}: ')
 
 
@@ -2812,12 +2819,12 @@ def test_help_with_known_topic_prints_body_and_with_unknown_exits_2(capsys):
     Oracle: the constant itself for the known case; exit 2 and the
     topic list for the unknown case.
     """
-    rc = hq.main(['help', 'anchors'])
+    rc = cli.main(['help', 'anchors'])
     out = capsys.readouterr().out
     assert rc == 0
-    assert out.rstrip('\n') == hq.HELP_TOPICS['anchors']
+    assert out.rstrip('\n') == help_text.HELP_TOPICS['anchors']
 
-    rc = hq.main(['help', 'nope'])
+    rc = cli.main(['help', 'nope'])
     out = capsys.readouterr().out
     assert rc == 2
     assert 'anchors' in out
@@ -2842,10 +2849,10 @@ def test_an_always_row_with_no_anchor_is_refused_with_its_headings(
     the seed tier; the same stamp with --where s1 exits 0.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text('# Spec\n\n## 1. Scope\n\nOne.\n\n## 2. Retry\n')
     capsys.readouterr()
-    assert hq.main(['stamp', _SLUG, 'SPEC.md']) == 1
+    assert cli.main(['stamp', _SLUG, 'SPEC.md']) == 1
     out = capsys.readouterr().out.splitlines()
     assert out == [
         ('hq stamp: refused: SPEC.md always with no anchor - 7 lines read whole at'
@@ -2855,12 +2862,12 @@ def test_an_always_row_with_no_anchor_is_refused_with_its_headings(
         '  ## 2. Retry',
         ]
     rows = (folder / 'ledger.tsv').read_text().splitlines()
-    receipt = dict(zip(hq.LEDGER_FIELDS, rows[-1].split('\t')))
+    receipt = dict(zip(ledger.LEDGER_FIELDS, rows[-1].split('\t')))
     assert (receipt['reason'], receipt['read_before'], receipt['where']) == (
         'refused: SPEC.md always with no anchor', 'always', '-')
-    assert hq.main(['stamp', _SLUG, 'SPEC.md', '--where', 's1']) == 0
+    assert cli.main(['stamp', _SLUG, 'SPEC.md', '--where', 's1']) == 0
     rows = (folder / 'ledger.tsv').read_text().splitlines()
-    assert dict(zip(hq.LEDGER_FIELDS, rows[-1].split('\t')))['where'] == 's1'
+    assert dict(zip(ledger.LEDGER_FIELDS, rows[-1].split('\t')))['where'] == 's1'
 
 
 def test_a_refused_stamp_lists_no_hash_led_body_line(
@@ -2872,13 +2879,13 @@ def test_a_refused_stamp_lists_no_hash_led_body_line(
     Oracle: the file's one real heading, listed by hand.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'SPEC.md').write_text(
         '## 1. Fix the loader crash reported in issue\n'
         '#42 and the follow-up timeout\n'
         'Body.\n')
     capsys.readouterr()
-    assert hq.main(['stamp', _SLUG, 'SPEC.md']) == 1
+    assert cli.main(['stamp', _SLUG, 'SPEC.md']) == 1
     assert capsys.readouterr().out.splitlines()[1:] == [
         '  ## 1. Fix the loader crash reported in issue',
         ]
@@ -2896,27 +2903,30 @@ def test_a_draft_keeps_edit_or_always_and_steps_down_from_an_old_always(
     re-stamped --read-before edit exits 0 and reads edit.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'drafts').mkdir()
     (folder / 'drafts' / 'x.py').write_text('x = 1\n')
-    assert hq.main(['stamp', _SLUG, 'drafts/x.py']) == 0
+    assert cli.main(['stamp', _SLUG, 'drafts/x.py']) == 0
     rows = (folder / 'ledger.tsv').read_text().splitlines()
-    assert dict(zip(hq.LEDGER_FIELDS, rows[-1].split('\t')))['read_before'] == 'edit'
+    assert dict(
+        zip(ledger.LEDGER_FIELDS, rows[-1].split('\t')))['read_before'] == 'edit'
     capsys.readouterr()
-    assert hq.main(['stamp', _SLUG, 'drafts/x.py', '--read-before', 'never']) == 1
+    assert cli.main(['stamp', _SLUG, 'drafts/x.py', '--read-before', 'never']) == 1
     assert capsys.readouterr().out.startswith(
         'hq stamp: refused: R1: draft read_before must stay edit or always'
         ' without --successor or --archive')
     (folder / 'poller.py').write_text('p = 1\n')
-    hq._append_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS, {
+    storage.append_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS, {
         'cycle': '1', 'ts': _NOW, 'path': 'poller.py', 'base': 'folder',
         'kind': 'draft', 'status': 'live', 'read_before': 'always',
-        'successor': '-', 'where': '-', 'sha12': hq._sha12_path(folder / 'poller.py'),
+        'successor': '-', 'where': '-', 'sha12': storage.sha12_path(
+            folder / 'poller.py'),
         'lines': '1', 'reason': '-', 'label': 'old draft',
-        }, '\t'.join(hq.LEDGER_FIELDS))
-    assert hq.main(['stamp', _SLUG, 'poller.py', '--read-before', 'edit']) == 0
+        }, '\t'.join(ledger.LEDGER_FIELDS))
+    assert cli.main(['stamp', _SLUG, 'poller.py', '--read-before', 'edit']) == 0
     rows = (folder / 'ledger.tsv').read_text().splitlines()
-    assert dict(zip(hq.LEDGER_FIELDS, rows[-1].split('\t')))['read_before'] == 'edit'
+    assert dict(
+        zip(ledger.LEDGER_FIELDS, rows[-1].split('\t')))['read_before'] == 'edit'
 
 
 def test_begin_lists_an_unanchored_always_row_from_an_older_cycle(
@@ -2931,21 +2941,21 @@ def test_begin_lists_an_unanchored_always_row_from_an_older_cycle(
     the hand-written line for notes-x.md alone.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (folder / 'notes-x.md').write_text('# X\n\nOne.\n')
     (folder / 'SPEC.md').write_text('# Spec\n\nOne.\n')
     for path, where in (('notes-x.md', '-'), ('SPEC.md', 'Spec')):
-        hq._append_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS, {
+        storage.append_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS, {
             'cycle': '1', 'ts': _NOW, 'path': path, 'base': 'folder',
             'kind': 'other' if where == '-' else 'spec', 'status': 'live',
             'read_before': 'always', 'successor': '-', 'where': where,
-            'sha12': hq._sha12_path(folder / path), 'lines': '3',
+            'sha12': storage.sha12_path(folder / path), 'lines': '3',
             'reason': '-', 'label': '-',
-            }, '\t'.join(hq.LEDGER_FIELDS))
-    hq.main(['finish', _SLUG, '--log', 'c1'])
+            }, '\t'.join(ledger.LEDGER_FIELDS))
+    cli.main(['finish', _SLUG, '--log', 'c1'])
     monkeypatch.setenv('HQ_CYCLE', '2')
     capsys.readouterr()
-    assert hq.main(['begin', _SLUG]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
     lines = capsys.readouterr().out.splitlines()
     assert ('  notes-x.md always with no anchor, 3 lines'
             ' - stamp --where <heading> or --read-before edit') in lines
@@ -2967,14 +2977,14 @@ def test_blocks_print_a_root_path_relative_to_its_base_with_sizes(
     """
     folder = _new_root(tmp_path, monkeypatch)
     root = folder.parent.parent
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     (root / 'src').mkdir()
     (root / 'src' / 'app.md').write_text('# App\n\n## Part\n\nbody\n')
-    assert hq.main([
+    assert cli.main([
         'stamp', _SLUG, str(root / 'src' / 'app.md'), '--kind', 'spec',
         '--where', 'Part']) == 0
-    assert hq.main(['finish', _SLUG, '--log', 'c1']) == 0
-    blocks = hq.split_handoff((folder / 'HANDOFF.md').read_text())['blocks']
+    assert cli.main(['finish', _SLUG, '--log', 'c1']) == 0
+    blocks = markdown.split_handoff((folder / 'HANDOFF.md').read_text())['blocks']
     assert blocks['read'].splitlines() == [
         '## Read first',
         f'root {root}',
@@ -2997,15 +3007,15 @@ def test_standing_by_id_prints_the_body_and_the_superseded_marker(
     hand-written lines for d01 and d02 and the unknown-id line.
     """
     folder = _new_root(tmp_path, monkeypatch)
-    hq.main(['begin', _SLUG])
-    hq.main(['note', _SLUG, 'decision', '--headline', 'Old way', 'Sidecar.'])
-    hq.main(['note', _SLUG, 'decision', '--headline', 'New way', 'In process.'])
-    hq.main(['supersede', _SLUG, 'd01', 'd02'])
+    cli.main(['begin', _SLUG])
+    cli.main(['note', _SLUG, 'decision', '--headline', 'Old way', 'Sidecar.'])
+    cli.main(['note', _SLUG, 'decision', '--headline', 'New way', 'In process.'])
+    cli.main(['supersede', _SLUG, 'd01', 'd02'])
     capsys.readouterr()
-    assert hq.main(['standing', _SLUG, 'd01']) == 0
+    assert cli.main(['standing', _SLUG, 'd01']) == 0
     assert capsys.readouterr().out.splitlines() == [
         '[d01] (c1) **Old way** Sidecar. [superseded by d02 in c1]']
-    assert hq.main(['standing', _SLUG, 'd02', 'zz9']) == 1
+    assert cli.main(['standing', _SLUG, 'd02', 'zz9']) == 1
     assert capsys.readouterr().out.splitlines() == [
         f'hq standing: zz9 not in standing.md - hq standing {_SLUG} lists the ids',
         '[d02] (c1) **New way** In process.',
@@ -3029,23 +3039,23 @@ def test_diff_counts_a_moved_line_in_both_sections_and_names_the_forms(
     with exit 1; a non-number exiting 2.
     """
     folder = _new_root(tmp_path, monkeypatch, cycle='1')
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     _set_cursor(folder / 'HANDOFF.md', '## Now\n- bullet\n## State\n')
-    hq.main(['finish', _SLUG, '--log', 'one'])
+    cli.main(['finish', _SLUG, '--log', 'one'])
     monkeypatch.setenv('HQ_CYCLE', '2')
-    hq.main(['begin', _SLUG])
+    cli.main(['begin', _SLUG])
     _set_cursor(folder / 'HANDOFF.md', '## Now\n## State\n- bullet\n')
-    hq.main(['finish', _SLUG, '--log', 'two'])
+    cli.main(['finish', _SLUG, '--log', 'two'])
     capsys.readouterr()
     for first, second in (('1', '2'), ('c1', 'c2'), ('c01', 'c02')):
-        assert hq.main(['diff', _SLUG, first, second]) == 0, (first, second)
+        assert cli.main(['diff', _SLUG, first, second]) == 0, (first, second)
         assert capsys.readouterr().out.splitlines() == ['## Now  -1', '## State  +1']
-    assert hq.main(['diff', _SLUG, '1', '2', 'now']) == 0
+    assert cli.main(['diff', _SLUG, '1', '2', 'now']) == 0
     assert capsys.readouterr().out.splitlines() == ['## Now  -1', '- - bullet']
-    assert hq.main(['diff', _SLUG, '1', '2', 'bogus']) == 1
+    assert cli.main(['diff', _SLUG, '1', '2', 'bogus']) == 1
     assert capsys.readouterr().out.strip() == (
         'hq diff: no section bogus in c1 or c2 - sections: Now, State')
-    assert hq.main(['diff', _SLUG, 'x', '2']) == 2
+    assert cli.main(['diff', _SLUG, 'x', '2']) == 2
 
 
 def test_when_and_read_resolve_a_token_against_the_root_and_the_pin(
@@ -3066,17 +3076,17 @@ def test_when_and_read_resolve_a_token_against_the_root_and_the_pin(
     (root / 'src' / 'app.py').write_text('a = 1\n')
     (root / 'experiments').mkdir()
     (root / 'experiments' / 'run.py').write_text('r = 1\n')
-    hq.main(['begin', _SLUG])
-    assert hq.main(['work-dir', _SLUG, 'experiments']) == 0
+    cli.main(['begin', _SLUG])
+    assert cli.main(['work-dir', _SLUG, 'experiments']) == 0
     for path in (root / 'src' / 'app.py', root / 'experiments' / 'run.py'):
-        assert hq.main(['stamp', _SLUG, str(path), '--kind', 'draft']) == 0
+        assert cli.main(['stamp', _SLUG, str(path), '--kind', 'draft']) == 0
     capsys.readouterr()
-    assert hq.main(['when', _SLUG, 'src/app.py']) == 0
+    assert cli.main(['when', _SLUG, 'src/app.py']) == 0
     assert capsys.readouterr().out.startswith(f'{root}/src/app.py\t1\tlive\tedit')
-    assert hq.main(['when', _SLUG, 'run.py']) == 0
+    assert cli.main(['when', _SLUG, 'run.py']) == 0
     assert capsys.readouterr().out.startswith(f'{root}/experiments/run.py\t1\tlive\tedit')
-    assert hq.main(['read', _SLUG, 'run.py']) == 0
+    assert cli.main(['read', _SLUG, 'run.py']) == 0
     assert capsys.readouterr().out == 'r = 1\n'
-    assert hq.main(['when', _SLUG, 'nothere.md']) == 1
+    assert cli.main(['when', _SLUG, 'nothere.md']) == 1
     assert capsys.readouterr().out.strip() == (
         f'hq when: nothere.md not in ledger - hq artifacts {_SLUG} lists the rows')

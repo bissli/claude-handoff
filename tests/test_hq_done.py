@@ -5,9 +5,8 @@ import os
 import pathlib
 from typing import Any
 
+from handoff import cli, ledger, storage, threads
 from scripts import handoff_stop
-
-from bin import hq
 
 _SLUG = 'test-slug'
 _OTHER = 'other-slug'
@@ -52,14 +51,14 @@ def _new_root(
 def _cycle(slug: str, log: str = 'work') -> None:
     """Run one full begin/finish cycle on a slug, creating it if absent.
     """
-    assert hq.main(['begin', slug]) == 0
-    assert hq.main(['finish', slug, '--log', log]) == 0
+    assert cli.main(['begin', slug]) == 0
+    assert cli.main(['finish', slug, '--log', log]) == 0
 
 
 def _run(argv: list, capsys) -> 'tuple[int, str]':
-    """Call hq.main and return (rc, stdout).
+    """Call cli.main and return (rc, stdout).
     """
-    rc = hq.main(argv)
+    rc = cli.main(argv)
     return rc, capsys.readouterr().out
 
 
@@ -77,7 +76,7 @@ def test_done_hides_the_folder_from_list_and_done_shows_it(
     _cycle(_OTHER)
     capsys.readouterr()
 
-    assert hq.main(['done', _SLUG]) == 0
+    assert cli.main(['done', _SLUG]) == 0
     capsys.readouterr()
 
     _, open_out = _run(['list'], capsys)
@@ -102,22 +101,22 @@ def test_done_refuses_an_open_cycle_until_finish(
     """
     root = _new_root(tmp_path, monkeypatch)
     folder = root / '.handoff' / _SLUG
-    assert hq.main(['begin', _SLUG]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
     capsys.readouterr()
 
     rc, out = _run(['done', _SLUG], capsys)
     assert rc == 1
-    assert not (folder / hq._DONE_NAME).exists()
+    assert not (folder / storage.DONE_NAME).exists()
     assert 'is still open' in out
     assert f'hq finish {_SLUG}' in out
     assert '--force' not in out
 
     assert (folder / '.hq.lock').exists()
 
-    assert hq.main(['finish', _SLUG, '--log', 'closed']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'closed']) == 0
     rc, _ = _run(['done', _SLUG], capsys)
     assert rc == 0
-    assert (folder / hq._DONE_NAME).exists()
+    assert (folder / storage.DONE_NAME).exists()
 
 
 def test_begin_refuses_a_marked_folder_until_undo(
@@ -132,7 +131,7 @@ def test_begin_refuses_a_marked_folder_until_undo(
     root = _new_root(tmp_path, monkeypatch)
     folder = root / '.handoff' / _SLUG
     _cycle(_SLUG)
-    assert hq.main(['done', _SLUG]) == 0
+    assert cli.main(['done', _SLUG]) == 0
     capsys.readouterr()
 
     rc, out = _run(['begin', _SLUG], capsys)
@@ -142,10 +141,10 @@ def test_begin_refuses_a_marked_folder_until_undo(
 
     rc, out = _run(['done', _SLUG, '--undo'], capsys)
     assert rc == 0
-    assert not (folder / hq._DONE_NAME).exists()
+    assert not (folder / storage.DONE_NAME).exists()
     assert 'reopened' in out
 
-    assert hq.main(['begin', _SLUG]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
     assert (folder / '.hq.lock').exists()
 
 
@@ -161,14 +160,14 @@ def test_a_second_done_keeps_the_first_finish_date(
     root = _new_root(tmp_path, monkeypatch)
     folder = root / '.handoff' / _SLUG
     _cycle(_SLUG)
-    assert hq.main(['done', _SLUG, '--reason', 'shipped']) == 0
-    first = (folder / hq._DONE_NAME).read_bytes()
+    assert cli.main(['done', _SLUG, '--reason', 'shipped']) == 0
+    first = (folder / storage.DONE_NAME).read_bytes()
     capsys.readouterr()
 
     monkeypatch.setenv('HQ_NOW', '2026-12-25T09:00:00')
     rc, out = _run(['done', _SLUG, '--reason', 'shipped twice'], capsys)
     assert rc == 0
-    assert (folder / hq._DONE_NAME).read_bytes() == first
+    assert (folder / storage.DONE_NAME).read_bytes() == first
     assert _NOW in out
 
 
@@ -188,8 +187,8 @@ def test_the_marker_records_the_last_finished_cycle(tmp_path, monkeypatch):
     _cycle(_SLUG)
 
     monkeypatch.setenv('HQ_CYCLE', '9')
-    assert hq.main(['done', _SLUG]) == 0
-    assert hq._read_kv(folder / hq._DONE_NAME)['cycle'] == '2'
+    assert cli.main(['done', _SLUG]) == 0
+    assert storage.read_kv(folder / storage.DONE_NAME)['cycle'] == '2'
 
 
 def test_the_reason_collapses_to_one_line(tmp_path, monkeypatch):
@@ -204,9 +203,9 @@ def test_the_reason_collapses_to_one_line(tmp_path, monkeypatch):
     root = _new_root(tmp_path, monkeypatch)
     folder = root / '.handoff' / _SLUG
     _cycle(_SLUG)
-    assert hq.main(['done', _SLUG, '--reason', 'shipped\ncycle=99  and done']) == 0
+    assert cli.main(['done', _SLUG, '--reason', 'shipped\ncycle=99  and done']) == 0
 
-    state = hq._read_kv(folder / hq._DONE_NAME)
+    state = storage.read_kv(folder / storage.DONE_NAME)
     assert sorted(state) == ['cycle', 'reason', 'slug', 'time']
     assert state['reason'] == 'shipped cycle=99 and done'
     assert state['cycle'] == '1'
@@ -222,13 +221,13 @@ def test_the_marker_is_invisible_to_the_folder_walk(tmp_path, monkeypatch, capsy
     root = _new_root(tmp_path, monkeypatch)
     folder = root / '.handoff' / _SLUG
     _cycle(_SLUG)
-    assert hq.main(['done', _SLUG]) == 0
+    assert cli.main(['done', _SLUG]) == 0
     capsys.readouterr()
 
     _, out = _run(['artifacts', _SLUG], capsys)
-    assert hq._DONE_NAME not in out
+    assert storage.DONE_NAME not in out
     assert 'unstamped' not in out
-    assert [name for name, _ in hq._walk_folder(folder)] == []
+    assert [name for name, _ in ledger.walk_folder(folder)] == []
 
 
 def test_the_stop_hook_leaves_a_marked_folder_alone(
@@ -245,7 +244,7 @@ def test_the_stop_hook_leaves_a_marked_folder_alone(
     _cycle(_SLUG)
     (folder / 'HANDOFF.md').write_text('# Handoff\n\n## Task\n\nEdited.\n')
     for session in ('S1', 'S2'):
-        hq._record_thread(session, _SLUG)
+        threads.record_thread(session, _SLUG)
     capsys.readouterr()
 
     payload = {
@@ -256,7 +255,7 @@ def test_the_stop_hook_leaves_a_marked_folder_alone(
     before = capsys.readouterr().out
     assert 'HANDOFF.md' in json.loads(before)['systemMessage']
 
-    assert hq.main(['done', _SLUG]) == 0
+    assert cli.main(['done', _SLUG]) == 0
     capsys.readouterr()
     assert handoff_stop.report(dict(payload, session_id='S2')) == 0
     assert not capsys.readouterr().out
@@ -274,7 +273,7 @@ def test_an_unparseable_marker_still_refuses_begin(tmp_path, monkeypatch, capsys
     root = _new_root(tmp_path, monkeypatch)
     folder = root / '.handoff' / _SLUG
     _cycle(_SLUG)
-    (folder / hq._DONE_NAME).write_text('')
+    (folder / storage.DONE_NAME).write_text('')
     capsys.readouterr()
 
     rc, out = _run(['begin', _SLUG], capsys)
@@ -299,7 +298,7 @@ def test_undo_clears_an_unparseable_marker_and_says_so(
     root = _new_root(tmp_path, monkeypatch)
     folder = root / '.handoff' / _SLUG
     _cycle(_SLUG)
-    (folder / hq._DONE_NAME).write_text('')
+    (folder / storage.DONE_NAME).write_text('')
     capsys.readouterr()
     _, hidden = _run(['list'], capsys)
     assert _SLUG not in hidden
@@ -308,7 +307,7 @@ def test_undo_clears_an_unparseable_marker_and_says_so(
     assert rc == 0
     assert 'reopened' in out
     assert 'was not marked done' not in out
-    assert not (folder / hq._DONE_NAME).exists()
+    assert not (folder / storage.DONE_NAME).exists()
 
 
 def test_a_directory_under_the_marker_name_names_the_hand_removal(
@@ -324,14 +323,14 @@ def test_a_directory_under_the_marker_name_names_the_hand_removal(
     root = _new_root(tmp_path, monkeypatch)
     folder = root / '.handoff' / _SLUG
     _cycle(_SLUG)
-    (folder / hq._DONE_NAME).mkdir()
+    (folder / storage.DONE_NAME).mkdir()
     capsys.readouterr()
 
     rc, out = _run(['done', _SLUG, '--undo'], capsys)
     assert rc == 1
     assert 'is a directory' in out
     assert 'remove it by hand' in out
-    assert (folder / hq._DONE_NAME).is_dir()
+    assert (folder / storage.DONE_NAME).is_dir()
 
 
 def test_adopt_refuses_a_marked_folder(tmp_path, monkeypatch, capsys):
@@ -350,7 +349,7 @@ def test_adopt_refuses_a_marked_folder(tmp_path, monkeypatch, capsys):
         'Written: 2026-09-01 | Cycle: 2\n\n'
         '## Task\n\nShip it.\n', encoding='utf-8')
 
-    assert hq.main(['done', 'legacy-slug']) == 0
+    assert cli.main(['done', 'legacy-slug']) == 0
     capsys.readouterr()
 
     rc, out = _run(['adopt', 'legacy-slug'], capsys)
@@ -369,11 +368,11 @@ def test_undo_refuses_the_reason_flag(tmp_path, monkeypatch, capsys):
     root = _new_root(tmp_path, monkeypatch)
     folder = root / '.handoff' / _SLUG
     _cycle(_SLUG)
-    assert hq.main(['done', _SLUG, '--reason', 'shipped']) == 0
-    before = (folder / hq._DONE_NAME).read_bytes()
+    assert cli.main(['done', _SLUG, '--reason', 'shipped']) == 0
+    before = (folder / storage.DONE_NAME).read_bytes()
     capsys.readouterr()
 
     rc, out = _run(['done', _SLUG, '--undo', '--reason', 'oops'], capsys)
     assert rc == 2
     assert 'takes no --reason' in out
-    assert (folder / hq._DONE_NAME).read_bytes() == before
+    assert (folder / storage.DONE_NAME).read_bytes() == before

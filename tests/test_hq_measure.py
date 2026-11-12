@@ -8,7 +8,7 @@ import io
 import pathlib
 import time
 
-from bin import hq
+from handoff import cli, progress, storage
 
 _SLUG = 'measure-slug'
 _NOW = '2026-11-10T12:00:00'
@@ -37,7 +37,7 @@ def _run(argv):
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         try:
-            rc = hq.main(argv)
+            rc = cli.main(argv)
         except SystemExit as exc:
             rc = exc.code
     return rc, out.getvalue(), err.getvalue()
@@ -58,7 +58,7 @@ def _cycle(log='work'):
 
 
 def _rows(folder):
-    return hq._read_tsv(folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS)
+    return storage.read_tsv(folder / 'cycles' / 'manifest.tsv', storage.MANIFEST_FIELDS)
 
 
 def _loop(tmp_path, monkeypatch, slug=_SLUG):
@@ -89,7 +89,7 @@ def test_probe_runs_in_the_work_dir_with_its_env(tmp_path, monkeypatch):
         f'printf "%s\\n%s\\n%s\\n" "$(pwd)" "$HQ_MEASURE" "$HQ_TALLY" > {seen}\n'
         "echo 'a=1->0'")
     _cycle()
-    tally = pathlib.Path(hq.__file__).resolve().parent.parent / 'skills' / 'hq-loop'
+    tally = pathlib.Path(__file__).resolve().parent.parent / 'skills' / 'hq-loop'
     assert seen.read_text().splitlines() == [
         str(work.resolve()), '1', str(tally / 'tally.py')]
 
@@ -159,13 +159,14 @@ def test_cap_kills_the_probe_group(tmp_path, monkeypatch):
     Mutation: a kill of the probe pid alone.
     Oracle: a grandchild sleep's pid is gone after the cap.
     """
-    monkeypatch.setattr(hq, 'PROBE_CAP_SECS', 1)
+    monkeypatch.setattr(progress, 'PROBE_CAP_SECS', 1)
     pid_file = tmp_path / 'pid'
     probe = tmp_path / 'hq-measure'
     probe.write_text(
         f'#!/bin/sh\nsleep 30 >/dev/null 2>&1 &\necho $! > {pid_file}\nwait\n')
     probe.chmod(0o755)
-    assert hq.run_probe(probe, tmp_path) == ('probe-failed: ran past 1 s', False, '')
+    assert progress.run_probe(
+        probe, tmp_path) == ('probe-failed: ran past 1 s', False, '')
     stat = pathlib.Path(f'/proc/{pid_file.read_text().strip()}/stat')
     for _ in range(50):
         try:
@@ -186,11 +187,11 @@ def test_a_detached_child_does_not_hold_the_probe(tmp_path, monkeypatch):
     past the cap.
     Oracle: a setsid sleep of 5 s that keeps stdout, under a cap of 1 s.
     """
-    monkeypatch.setattr(hq, 'PROBE_CAP_SECS', 1)
+    monkeypatch.setattr(progress, 'PROBE_CAP_SECS', 1)
     probe = tmp_path / 'hq-measure'
     probe.write_text("#!/bin/sh\nsetsid sleep 5 &\necho 'a=1->0'\n")
     probe.chmod(0o755)
-    assert hq.run_probe(probe, tmp_path) == ('a=1->0', False, 'a=1->0')
+    assert progress.run_probe(probe, tmp_path) == ('a=1->0', False, 'a=1->0')
 
 
 def test_a_bar_in_the_token_line_fails_the_row(tmp_path, monkeypatch):
@@ -283,7 +284,7 @@ def test_exit_three_holds_only_under_its_own_loop(tmp_path, monkeypatch):
         'finish line met: suite green. To go past it, the ruling gives a new'
         ' goal for probes/hq-measure.')
     assert (own / 'hold').read_text() == hold_line + '\n'
-    assert f'{hold_line} {hq._HOLD_TEXT}' in out.splitlines()
+    assert f'{hold_line} {progress.HOLD_TEXT}' in out.splitlines()
 
 
 def test_every_token_at_goal_meets_the_finish_line(tmp_path, monkeypatch):
@@ -410,10 +411,10 @@ def test_open_prints_the_hold_only_for_its_loop(tmp_path, monkeypatch):
         loop_dir = _loop(tmp_path, monkeypatch, slug)
         (loop_dir / 'hold').write_text(hold_line + '\n')
     _, out, _ = _run(['open', _SLUG])
-    assert f'{hold_line} {hq._HOLD_TEXT}' not in out.splitlines()
+    assert f'{hold_line} {progress.HOLD_TEXT}' not in out.splitlines()
     monkeypatch.setenv('HQ_LOOP', str(tmp_path / f'loop-{_SLUG}'))
     _, out, _ = _run(['open', _SLUG])
-    assert f'{hold_line} {hq._HOLD_TEXT}' in out.splitlines()
+    assert f'{hold_line} {progress.HOLD_TEXT}' in out.splitlines()
 
 
 def test_open_prints_no_stall_line_once_the_probe_is_gone(tmp_path, monkeypatch):

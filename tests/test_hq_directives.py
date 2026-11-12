@@ -5,7 +5,7 @@ import io
 import pathlib
 import re
 
-from bin import hq
+from handoff import cli, standing
 
 _SLUG = 'directives'
 _RULE = '- Run the integration suite with --db staging-copy.'
@@ -26,11 +26,11 @@ def _root(tmp_path, monkeypatch):
 
 
 def _run(argv):
-    """Call hq.main, returning (rc, stdout) with SystemExit caught."""
+    """Call cli.main, returning (rc, stdout) with SystemExit caught."""
     out = io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
         try:
-            rc = hq.main(argv)
+            rc = cli.main(argv)
         except SystemExit as exc:
             rc = exc.code
     return rc, out.getvalue()
@@ -177,11 +177,11 @@ def test_a_second_replacement_supersedes_the_first(tmp_path, monkeypatch):
     assert _run([
         'finish', _SLUG, '--log', 'c4',
         '--replace-directives', 'the user lifted it again'])[0] == 0
-    standing = standing_path.read_text()
-    items, not_live = hq._parse_standing(standing)
+    standing_text = standing_path.read_text()
+    items, not_live = standing.parse_standing(standing_text)
     live_ids = [item['id'] for item in items if item['id'] not in not_live]
     assert live_ids == ['d01', 'd04']
-    assert [ln for ln in standing.splitlines() if ' -> ' in ln] == [
+    assert [ln for ln in standing_text.splitlines() if ' -> ' in ln] == [
         '- (c3) d02 -> d03',
         '- (c4) d03 -> d04',
         ]

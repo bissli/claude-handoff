@@ -156,7 +156,7 @@ poetry run mutmut run
 python3 docs/charts.py
 ```
 
-mutmut mutates `bin/hq.py` and the two handoff hooks against the tests `pyproject.toml` selects. Per-session state lives under `~/.claude/cache/claude-handoff/`: `<session>.json` for the gauge, `<session>.handoff.json` for the gate and Stop hooks, `<session>.thread` for the status line, and `hq-reads-<session>.txt` for read receipts. All of it is disposable. `docs/charts.py` regenerates the charts in this README and in `docs/design.md`.
+mutmut mutates the `bin/handoff/` package, through its `src/handoff` symlink, and the two handoff hooks against the tests `pyproject.toml` selects. Per-session state lives under `~/.claude/cache/claude-handoff/`: `<session>.json` for the gauge, `<session>.handoff.json` for the gate and Stop hooks, `<session>.thread` for the status line, and `hq-reads-<session>.txt` for read receipts. All of it is disposable. `docs/charts.py` regenerates the charts in this README and in `docs/design.md`.
 
 ## License
 

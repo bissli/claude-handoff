@@ -49,20 +49,22 @@ import sys
 from typing import Any
 
 try:
-    # pytest and mutmut run from the repo root and import the package.
+    # pytest and mutmut run from the repo root, with src/ on sys.path
+    # (pytest.ini).
+    from handoff import storage
     from scripts import context_budget
-
-    from bin import hq
 except ImportError:
-    # Script mode puts scripts/ on sys.path rather than the plugin root,
-    # so reach each module by its own path. One branch or the other
-    # binds both names, never both branches, so a test patching either
-    # module patches the one the hook holds.
+    # Notes:
+    # - Script mode puts scripts/ on sys.path rather than the plugin
+    #   root, so reach each module by its own path.
+    # - One branch or the other binds context_budget, never both, so a
+    #   test patching it patches the module the hook holds.
+    # - ../src comes before ../bin, since mutmut writes its mutated copy
+    #   there.
     here = pathlib.Path(__file__).resolve().parent
-    sys.path.insert(0, str(here.parent / 'bin'))
-    sys.path.insert(0, str(here))
+    sys.path[:0] = [str(here), str(here.parent / 'src'), str(here.parent / 'bin')]
     import context_budget
-    import hq
+    from handoff import storage
 
 # The README names this path as the switch, so moving it silently
 # disarms every machine that created the file.
@@ -93,12 +95,12 @@ def open_cycle_above(start: pathlib.Path, now: str) -> bool:
       refuses one rather than guessing it is dead.
     """
     for candidate in [start, *start.parents]:
-        folders = candidate / hq.HANDOFF_DIRNAME
+        folders = candidate / storage.HANDOFF_DIRNAME
         if next(folders.glob('*/cycles/manifest.tsv'), None) is None:
             continue
         for lock in folders.glob('*/.hq.lock'):
-            age = hq._lock_age(hq._read_lock(lock.parent), now)
-            if age is None or age < hq._TWO_HOURS:
+            age = storage.lock_age(storage.read_lock(lock.parent), now)
+            if age is None or age < storage.TWO_HOURS:
                 return True
         return False
     return False
@@ -129,11 +131,11 @@ def main() -> int:
                 return 0
             slug = (pathlib.Path(loop_dir) / 'slug').read_text().strip()
             root = os.environ.get('HQ_ROOT') or str(payload.get('cwd') or '')
-            folder = pathlib.Path(root) / hq.HANDOFF_DIRNAME / slug
+            folder = pathlib.Path(root) / storage.HANDOFF_DIRNAME / slug
             if (folder / '.hq.lock').exists():
                 return 0
-            manifest = hq._read_tsv(
-                folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS)
+            manifest = storage.read_tsv(
+                folder / 'cycles' / 'manifest.tsv', storage.MANIFEST_FIELDS)
             mark = int((pathlib.Path(loop_dir) / 'mark').read_text())
             if manifest and int(manifest[-1]['cycle']) > mark:
                 return 0

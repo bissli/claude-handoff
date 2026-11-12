@@ -1,6 +1,6 @@
 """Cycle ownership and the paths finish writes.
 
-The tests use real files and hq.main, with no simulated lock or write
+The tests use real files and cli.main, with no simulated lock or write
 implementation: a foreign session's mutation refused whole, and a path
 finish cannot write refusing it before the first write.
 """
@@ -9,8 +9,7 @@ import contextlib
 import io
 
 import pytest
-
-from bin import hq
+from handoff import cli, storage
 
 _SLUG = 'cycle-isolation'
 _SESSION = 'session-owner'
@@ -21,10 +20,10 @@ _CURSOR = (
 
 
 def _run(argv):
-    """Call hq.main and return its exit code and captured stdout."""
+    """Call cli.main and return its exit code and captured stdout."""
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        rc = hq.main(argv)
+        rc = cli.main(argv)
     return rc, out.getvalue()
 
 
@@ -156,7 +155,7 @@ def test_an_unwritable_path_leaves_finish_unchanged(
     standing = (folder / 'standing.md').read_text(encoding='utf-8')
     assert standing.count('**Keep the bound**') == 1
     assert 'Five tries only.' in standing
-    rows = hq._read_tsv(folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS)
+    rows = storage.read_tsv(folder / 'cycles' / 'manifest.tsv', storage.MANIFEST_FIELDS)
     assert [row['cycle'] for row in rows] == [str(n) for n in range(1, cycle + 1)]
     for name, data in before.items():
         if name.startswith('cycles/c') and name.endswith('.md'):
@@ -181,7 +180,7 @@ def test_begin_keeps_the_history_a_lost_handoff_leaves_behind(
     assert _run(['finish', _SLUG, '--log', 'seed cycle'])[0] == 0
     cycles = folder / 'cycles'
     standing_before = (folder / 'standing.md').read_bytes()
-    manifest_before = hq._read_tsv(cycles / 'manifest.tsv', hq.MANIFEST_FIELDS)
+    manifest_before = storage.read_tsv(cycles / 'manifest.tsv', storage.MANIFEST_FIELDS)
     archives_before = sorted(path.name for path in cycles.glob('c*.md'))
     assert standing_before
     assert manifest_before
@@ -192,6 +191,6 @@ def test_begin_keeps_the_history_a_lost_handoff_leaves_behind(
     _run(['begin', _SLUG])
 
     assert (folder / 'standing.md').read_bytes() == standing_before
-    manifest_after = hq._read_tsv(cycles / 'manifest.tsv', hq.MANIFEST_FIELDS)
+    manifest_after = storage.read_tsv(cycles / 'manifest.tsv', storage.MANIFEST_FIELDS)
     assert manifest_after == manifest_before
     assert sorted(path.name for path in cycles.glob('c*.md')) == archives_before

@@ -11,7 +11,7 @@ import hashlib
 import io
 import pathlib
 
-from bin import hq
+from handoff import carry, cli, help_text, ledger, render, standing, storage
 
 # ---------------------------------------------------------------------------
 # Helpers copied from test_hq_cycle_path.py
@@ -42,7 +42,7 @@ def _run(argv):
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         try:
-            rc = hq.main(argv)
+            rc = cli.main(argv)
         except SystemExit as exc:
             rc = exc.code
     return rc, out.getvalue(), err.getvalue()
@@ -51,7 +51,7 @@ def _run(argv):
 def _strip_write(out):
     """Remove the write topic begin appends, so a check reads begin's own lines.
     """
-    return out.replace(hq.HELP_TOPICS['write'] + '\n', '')
+    return out.replace(help_text.HELP_TOPICS['write'] + '\n', '')
 
 
 def _lock(folder, session, time_str, cycle=1):
@@ -87,7 +87,7 @@ def test_witness_w2_code_uppercase():
     }
     # Tamper standing: change a byte so sha mismatches.
     tampered_sb = b'standing CHANGED!'
-    breaks = hq.witness(prev, lb, tampered_sb)
+    breaks = storage.witness(prev, lb, tampered_sb)
     assert breaks, 'expected a standing break'
     assert breaks[0].startswith('W2:'), (
         f'expected W2: prefix, got {breaks[0]!r}')
@@ -110,7 +110,7 @@ def test_witness_standing_name_case_kills_check():
         'standing_sha': _sha12(sb),
     }
     tampered = b'standing TAMPERED'
-    breaks = hq.witness(prev, lb, tampered)
+    breaks = storage.witness(prev, lb, tampered)
     # Original: W2 fires.  Mutant (STANDING): sha lookup returns '-', skips.
     assert any('W2' in b for b in breaks), (
         'tampered standing must produce a W2 break')
@@ -133,7 +133,7 @@ def test_witness_or_becomes_and_at_dash_sha():
         'standing_sha': '-',
     }
     # No tampering; the '-' sha means 'not yet recorded', so skip.
-    breaks = hq.witness(prev, lb, sb)
+    breaks = storage.witness(prev, lb, sb)
     assert breaks == [], (
         'stored sha of "-" with n>0 must be skipped, not fire a spurious break')
 
@@ -154,7 +154,7 @@ def test_witness_n_zero_skips_check():
         'standing_bytes': '0',
         'standing_sha': '-',
     }
-    breaks = hq.witness(prev, lb, sb)
+    breaks = storage.witness(prev, lb, sb)
     assert breaks == [], (
         'n == 0 must always skip the sha check')
 
@@ -175,7 +175,7 @@ def test_witness_break_stops_w2():
         'standing_sha': _sha12(sb),
     }
     tampered_sb = b'standing TAMPERED!!'
-    breaks = hq.witness(prev, lb, tampered_sb)
+    breaks = storage.witness(prev, lb, tampered_sb)
     assert any('W2' in b for b in breaks), (
         'W2 must fire even when W1 passes')
 
@@ -194,7 +194,7 @@ def test_render_log_missing_repos_uses_dash_default():
     """
     row = {'written': '2026-09-01', 'cycle': '1', 'log': 'seed commit'}
     # No 'repos' key - should use the short '- written: log' format.
-    out = hq.render_log([row], 'slug', n=1)
+    out = render.render_log([row], 'slug', n=1)
     assert 'None' not in out, 'missing repos must not render as None'
     assert out.startswith('- 2026-09-01:'), (
         f'missing repos must use short format, got {out!r}')
@@ -215,7 +215,7 @@ def test_collisions_case_insensitive_match():
     now_text = 'Use the `pipeline` to process data.'
     headings = [('spec.md', 1, '## PIPELINE DATA')]
     rarity = {'pipeline': 0}
-    hits = hq.collisions(now_text, [], headings, rarity)
+    hits = carry.collisions(now_text, [], headings, rarity)
     assert hits, 'case-insensitive: "`pipeline`" must match "PIPELINE DATA"'
     assert 'pipeline' in hits[0]
 
@@ -237,7 +237,7 @@ def test_drain_unfiled_single_space_continuation():
         '- decision: **Fix it** Body here.\n'
         ' extra body line.\n'
     )
-    items, cursor_out, refusal = hq.drain_unfiled(text)
+    items, cursor_out, refusal = standing.drain_unfiled(text)
     assert refusal is None, f'unexpected refusal: {refusal}'
     assert len(items) == 1
     _, headline, body = items[0]
@@ -258,7 +258,7 @@ def test_drain_unfiled_break_misses_second_bullet():
         '  continuation of first.\n'
         '- constraint: **Second** A constraint.\n'
     )
-    items, _, refusal = hq.drain_unfiled(text)
+    items, _, refusal = standing.drain_unfiled(text)
     assert refusal is None
     assert len(items) == 2, (
         f'both bullets must be parsed, got {len(items)}')
@@ -276,7 +276,7 @@ def test_drain_unfiled_cursor_out_trailing_format():
     with exactly one newline.
     """
     text = '## Task\nDo work.\n\n## Unfiled\n- decision: **X** Done.\n'
-    _, cursor_out, refusal = hq.drain_unfiled(text)
+    _, cursor_out, refusal = standing.drain_unfiled(text)
     assert refusal is None
     # cursor_out is the text with ## Unfiled removed; it must end with
     # exactly one newline.
@@ -300,7 +300,7 @@ def test_append_lines_wrong_seek_adds_spurious_newline(tmp_path):
     """
     p = tmp_path / 'f.txt'
     p.write_bytes(b'line one\n')  # 9 bytes; ends with '\n'
-    hq._append_lines(p, ['line two'])
+    storage.append_lines(p, ['line two'])
     content = p.read_text()
     assert content == 'line one\nline two\n', (
         f'file must have no extra blank line, got {content!r}')
@@ -316,7 +316,7 @@ def test_append_lines_seek_past_end_misses_missing_newline(tmp_path):
     """
     p = tmp_path / 'f.txt'
     p.write_bytes(b'line one')  # no trailing newline
-    hq._append_lines(p, ['line two'])
+    storage.append_lines(p, ['line two'])
     content = p.read_text()
     assert '\nline two\n' in content, (
         f'missing newline must be restored before append, got {content!r}')
@@ -332,7 +332,7 @@ def test_append_lines_seek_minus2_misreads_last_byte(tmp_path):
     """
     p = tmp_path / 'f.txt'
     p.write_bytes(b'abc\n')  # last='\n', second-to-last='c'
-    hq._append_lines(p, ['new'])
+    storage.append_lines(p, ['new'])
     content = p.read_text()
     assert content == 'abc\nnew\n', (
         f'no extra newline for file ending with \n, got {content!r}')
@@ -348,14 +348,14 @@ def test_append_lines_inverted_lead_condition(tmp_path):
     # File that ends with '\n': appending must not add extra newline.
     p1 = tmp_path / 'good.txt'
     p1.write_bytes(b'first\n')
-    hq._append_lines(p1, ['second'])
+    storage.append_lines(p1, ['second'])
     assert p1.read_text() == 'first\nsecond\n', (
         'file ending with newline must not gain an extra blank line')
 
     # File missing trailing newline: append must restore it.
     p2 = tmp_path / 'bad.txt'
     p2.write_bytes(b'first')
-    hq._append_lines(p2, ['second'])
+    storage.append_lines(p2, ['second'])
     text2 = p2.read_text()
     assert text2 == 'first\nsecond\n', (
         f'missing newline must be restored, got {text2!r}')
@@ -376,7 +376,7 @@ def test_append_tsv_none_for_missing_field(tmp_path):
     fields = ['a', 'b', 'c']
     header = 'a\tb\tc'
     row = {'a': 'val_a', 'c': 'val_c'}  # 'b' is absent
-    hq._append_tsv(p, fields, row, header)
+    storage.append_tsv(p, fields, row, header)
     content = p.read_text()
     lines = [l for l in content.splitlines() if l.strip()]
     assert len(lines) == 2, 'header + one data row expected'
@@ -402,7 +402,7 @@ def test_read_lock_partition_not_rpartition(tmp_path):
     # Write a lock whose value contains '='; e.g. a base64 token or URL param.
     lock_text = 'session=abc\ntoken=aGVsbG89d29ybGQ=\n'
     (folder / '.hq.lock').write_text(lock_text)
-    result = hq._read_lock(folder)
+    result = storage.read_lock(folder)
     assert result.get('token') == 'aGVsbG89d29ybGQ=', (
         f'partition must keep the value intact, got {result!r}')
 
@@ -419,7 +419,7 @@ def test_extract_terms_backtick_short_token_excluded():
     so a 1-char non-digit token like `a` would be included.
     Oracle: `a` (1 char) must not be in the extracted terms.
     """
-    terms = hq._extract_terms('The `a` prefix marks a label.')
+    terms = carry.extract_terms('The `a` prefix marks a label.')
     assert 'a' not in terms, (
         '1-char backtick token must be excluded (len < 3)')
 
@@ -430,7 +430,7 @@ def test_extract_terms_backtick_3char_included():
     Mutation: '>= 3' -> '> 3' raises the minimum to 4, excluding 'foo'.
     Oracle: `foo` (exactly 3 chars, not digit) must be in the terms.
     """
-    terms = hq._extract_terms('The `foo` prefix is relevant.')
+    terms = carry.extract_terms('The `foo` prefix is relevant.')
     assert 'foo' in terms, (
         '3-char backtick token must be included with >= 3 threshold')
 
@@ -441,7 +441,7 @@ def test_extract_terms_backtick_exactly_3_chars_min():
     Mutation: '>= 3' -> '>= 4' excludes exactly-3-char tokens.
     Oracle: `bar` (3 chars) must be in the result; `xy` (2 chars) must not.
     """
-    terms = hq._extract_terms('Check `bar` and `xy` for matches.')
+    terms = carry.extract_terms('Check `bar` and `xy` for matches.')
     assert 'bar' in terms, '3-char token must pass the >= 3 threshold'
     assert 'xy' not in terms, '2-char token must fail the < 3 threshold'
 
@@ -458,7 +458,7 @@ def test_extract_terms_sentence_start_uses_last_char():
     # before[-1] = 'i' (not in .!?), sentence_start = False -> World included.
     # before[1] = IndexError (len('i') = 1).
     # before[-2] = IndexError as well.
-    terms = hq._extract_terms('i World is great')
+    terms = carry.extract_terms('i World is great')
     assert 'World' in terms, (
         '"World" after "i" is not at sentence-start and must be included')
 
@@ -472,7 +472,7 @@ def test_extract_terms_sentence_start_rstrip_not_lstrip():
     sentence_start is True and 'World' is skipped.
     """
     # After "Done." with a space, "World" is at sentence start -> skip.
-    terms = hq._extract_terms('Done. World is next')
+    terms = carry.extract_terms('Done. World is next')
     # 'World' is CamelCase at sentence start: should be excluded.
     assert 'World' not in terms, (
         '"World" after ". " is at sentence-start and must be excluded')
@@ -486,7 +486,7 @@ def test_extract_terms_prev_char_minus2_differs_from_minus1():
     sentence_start is False and 'World' is not excluded.
     Oracle: 'World' after 'Done.' must be excluded (sentence-start True).
     """
-    terms = hq._extract_terms('Done. World data')
+    terms = carry.extract_terms('Done. World data')
     assert 'World' not in terms, (
         '"World" at sentence start must be excluded')
 
@@ -498,7 +498,7 @@ def test_extract_terms_stopword_or_short_excluded():
     of 4+ chars like 'every' would pass.
     Oracle: 'every' (a stopword of 5 chars) must not appear in terms.
     """
-    terms = hq._extract_terms('We do this every time now')
+    terms = carry.extract_terms('We do this every time now')
     assert 'every' not in terms, (
         '"every" is a stopword and must be excluded by the or-condition')
 
@@ -510,7 +510,7 @@ def test_extract_terms_4char_term_not_excluded():
     Oracle: 'Walk' (4 chars, not a stopword) at non-sentence-start is included.
     """
     # 'Walk' appears after a comma (non-sentence-start) in a sentence.
-    terms = hq._extract_terms('Use the file, Walk through it')
+    terms = carry.extract_terms('Use the file, Walk through it')
     assert 'Walk' in terms, (
         '4-char non-stopword at non-sentence-start must be included')
 
@@ -521,7 +521,7 @@ def test_extract_terms_4char_term_not_excluded_v2():
     Mutation: '< 4' -> '< 5' excludes 4-char terms.
     Oracle: same 'Walk' scenario - must be included with threshold < 4.
     """
-    terms = hq._extract_terms('Use Walk in the code')
+    terms = carry.extract_terms('Use Walk in the code')
     assert 'Walk' in terms, (
         '4-char non-stopword at non-sentence-start must be included')
 
@@ -534,7 +534,7 @@ def test_extract_terms_stopword_case_insensitive():
     Oracle: 'Every' at non-sentence-start is a stopword and must be excluded.
     """
     # 'Every' appears after comma - not sentence start.
-    terms = hq._extract_terms('use comma, Every iteration')
+    terms = carry.extract_terms('use comma, Every iteration')
     assert 'Every' not in terms, (
         '"Every" is a stopword regardless of capitalization')
 
@@ -548,7 +548,7 @@ def test_extract_terms_break_stops_early():
     yield the CamelCase term.
     """
     # 'the' (short/stopword) appears before 'DataPipeline' (valid CamelCase).
-    terms = hq._extract_terms('use the DataPipeline for processing')
+    terms = carry.extract_terms('use the DataPipeline for processing')
     assert 'DataPipeline' in terms, (
         'valid term after a stopword must still be extracted')
 
@@ -564,7 +564,7 @@ def test_dirty_str_clean_uses_lowercase():
     Mutation: ' | clean' -> ' | CLEAN'.
     Oracle: hand-computed result for empty dirty list.
     """
-    result = hq._dirty_str([])
+    result = storage.dirty_str([])
     assert result == ' | clean', (
         f'expected " | clean", got {result!r}')
 
@@ -585,15 +585,15 @@ def test_dangling_successors_and_not_or(tmp_path):
     folder = tmp_path / 'slug'
     folder.mkdir()
     # Live row with successor '-': must not appear.
-    live_row = dict.fromkeys(hq.LEDGER_FIELDS, '-')
+    live_row = dict.fromkeys(ledger.LEDGER_FIELDS, '-')
     live_row.update({'path': 'doc.md', 'status': 'live', 'successor': '-'})
     # Superseded row with a real successor that is absent from disk.
-    sup_row = dict.fromkeys(hq.LEDGER_FIELDS, '-')
+    sup_row = dict.fromkeys(ledger.LEDGER_FIELDS, '-')
     sup_row.update({
         'path': 'old.md', 'status': 'superseded', 'successor': 'new.md',
     })
     live = {'doc.md': live_row, 'old.md': sup_row}
-    result = hq.dangling_successors(folder, live)
+    result = ledger.dangling_successors(folder, live)
     paths = [p for p, _ in result]
     assert 'doc.md' not in paths, (
         'live row with successor="-" must not be dangling')
@@ -617,12 +617,12 @@ def test_folder_state_abs_row_sha_populated(tmp_path, monkeypatch):
     folder = tmp_path / 'slug'
     folder.mkdir()
     # Create the standard structure.
-    (folder / 'ledger.tsv').write_text(hq._LEDGER_HEADER + '\n',
+    (folder / 'ledger.tsv').write_text(ledger.LEDGER_HEADER + '\n',
                                        encoding='utf-8')
     (folder / 'standing.md').write_text('', encoding='utf-8')
     cycles = folder / 'cycles'
     cycles.mkdir()
-    (cycles / 'manifest.tsv').write_text(hq._MANIFEST_HEADER + '\n',
+    (cycles / 'manifest.tsv').write_text(storage.MANIFEST_HEADER + '\n',
                                          encoding='utf-8')
 
     # Create an abs-base file.
@@ -631,7 +631,7 @@ def test_folder_state_abs_row_sha_populated(tmp_path, monkeypatch):
 
     # Stamp the abs row into the ledger.
     abs_key = str(abs_file)
-    row = dict.fromkeys(hq.LEDGER_FIELDS, '-')
+    row = dict.fromkeys(ledger.LEDGER_FIELDS, '-')
     row.update({
         'path': abs_key,
         'status': 'live',
@@ -639,10 +639,10 @@ def test_folder_state_abs_row_sha_populated(tmp_path, monkeypatch):
         'read_before': 'start',
         'kind': 'doc',
     })
-    hq._append_tsv(
-        folder / 'ledger.tsv', hq.LEDGER_FIELDS, row, hq._LEDGER_HEADER)
+    storage.append_tsv(
+        folder / 'ledger.tsv', ledger.LEDGER_FIELDS, row, ledger.LEDGER_HEADER)
 
-    _, _, _, sha_map, _, _, _ = hq._folder_state(folder)
+    _, _, _, sha_map, _, _, _ = ledger.folder_state(folder)
     assert abs_key in sha_map, (
         f'abs-base row sha must be in sha_map; got keys: {list(sha_map)}')
 
@@ -658,23 +658,23 @@ def test_folder_state_folder_row_not_duplicated(tmp_path):
     """
     folder = tmp_path / 'slug'
     folder.mkdir()
-    (folder / 'ledger.tsv').write_text(hq._LEDGER_HEADER + '\n',
+    (folder / 'ledger.tsv').write_text(ledger.LEDGER_HEADER + '\n',
                                        encoding='utf-8')
     (folder / 'standing.md').write_text('', encoding='utf-8')
     cycles = folder / 'cycles'
     cycles.mkdir()
-    (cycles / 'manifest.tsv').write_text(hq._MANIFEST_HEADER + '\n',
+    (cycles / 'manifest.tsv').write_text(storage.MANIFEST_HEADER + '\n',
                                          encoding='utf-8')
     # Place a file in the folder so walk picks it up.
     (folder / 'spec.md').write_text('# Spec\n', encoding='utf-8')
     # Stamp it in the ledger.
-    row = dict.fromkeys(hq.LEDGER_FIELDS, '-')
+    row = dict.fromkeys(ledger.LEDGER_FIELDS, '-')
     row.update({'path': 'spec.md', 'status': 'live', 'kind': 'spec',
                 'read_before': 'start', 'base': 'folder'})
-    hq._append_tsv(
-        folder / 'ledger.tsv', hq.LEDGER_FIELDS, row, hq._LEDGER_HEADER)
+    storage.append_tsv(
+        folder / 'ledger.tsv', ledger.LEDGER_FIELDS, row, ledger.LEDGER_HEADER)
 
-    _, _, _, sha_map, _, _, _ = hq._folder_state(folder)
+    _, _, _, sha_map, _, _, _ = ledger.folder_state(folder)
     # sha_map must contain 'spec.md' exactly once (no duplicate inserts crash).
     assert 'spec.md' in sha_map
 
@@ -694,10 +694,10 @@ def test_reconcile_missing_abs_row_goes_missing(tmp_path):
     folder = tmp_path / 'slug'
     folder.mkdir()
     absent_path = str(tmp_path / 'gone.md')
-    row = dict.fromkeys(hq.LEDGER_FIELDS, '-')
+    row = dict.fromkeys(ledger.LEDGER_FIELDS, '-')
     row.update({'path': absent_path, 'status': 'live', 'base': 'abs'})
     live = {absent_path: row}
-    result = hq._reconcile_missing(folder, live)
+    result = ledger.reconcile_missing(folder, live)
     assert result[absent_path]['status'] == 'missing', (
         'abs-base live row for absent file must be reconciled to missing')
 
@@ -717,13 +717,13 @@ def test_assemble_handoff_skip_entries_excluded(tmp_path):
     folder = tmp_path / 'slug'
     folder.mkdir()
     (folder / 'spec.md').write_text('# Spec\n', encoding='utf-8')
-    (folder / 'ledger.tsv').write_text(hq._LEDGER_HEADER + '\n',
+    (folder / 'ledger.tsv').write_text(ledger.LEDGER_HEADER + '\n',
                                        encoding='utf-8')
     (folder / 'standing.md').write_text('', encoding='utf-8')
 
     walk = [('spec.md', 'spec'), ('conflicted copy', 'skip')]
     live: dict = {}
-    text = hq._assemble_handoff(
+    text = render.assemble_handoff(
         folder,
         cursor_text='## Task\n\n## Now\n\n## Plan\n\n'
                     '## State\n\n## Environment\n\n## Open questions\n',
@@ -746,7 +746,7 @@ def test_assemble_handoff_skip_string_literal_exact(tmp_path):
     """
     folder = tmp_path / 'slug'
     folder.mkdir()
-    (folder / 'ledger.tsv').write_text(hq._LEDGER_HEADER + '\n',
+    (folder / 'ledger.tsv').write_text(ledger.LEDGER_HEADER + '\n',
                                        encoding='utf-8')
     (folder / 'standing.md').write_text('', encoding='utf-8')
     (folder / 'spec.md').write_text('# Spec\n', encoding='utf-8')
@@ -754,7 +754,7 @@ def test_assemble_handoff_skip_string_literal_exact(tmp_path):
     # Walk: one real entry, one skip.
     walk = [('spec.md', 'spec'), ('bad\tname', 'skip')]
     live: dict = {}
-    text = hq._assemble_handoff(
+    text = render.assemble_handoff(
         folder,
         cursor_text='## Task\n\n## Now\n\n## Plan\n\n'
                     '## State\n\n## Environment\n\n## Open questions\n',
@@ -778,19 +778,19 @@ def test_assemble_handoff_read_lines_default_zero(tmp_path):
     """
     folder = tmp_path / 'slug'
     folder.mkdir()
-    (folder / 'ledger.tsv').write_text(hq._LEDGER_HEADER + '\n',
+    (folder / 'ledger.tsv').write_text(ledger.LEDGER_HEADER + '\n',
                                        encoding='utf-8')
     (folder / 'standing.md').write_text('', encoding='utf-8')
     doc = folder / 'doc.md'
     doc.write_text('# Doc\nContent.\n', encoding='utf-8')
 
-    row = dict.fromkeys(hq.LEDGER_FIELDS, '-')
+    row = dict.fromkeys(ledger.LEDGER_FIELDS, '-')
     row.update({'path': 'doc.md', 'status': 'live', 'kind': 'doc',
                 'read_before': 'always', 'base': 'folder', 'lines': '-'})
     live = {'doc.md': row}
     walk = [('doc.md', 'doc')]
     # Must not raise; the 0 default means no span is highlighted.
-    text = hq._assemble_handoff(
+    text = render.assemble_handoff(
         folder,
         cursor_text='## Task\n\n## Now\n\n## Plan\n\n'
                     '## State\n\n## Environment\n\n## Open questions\n',
@@ -1081,7 +1081,7 @@ def test_verb_begin_no_ledger_triggers_creation(tmp_path, monkeypatch):
     # Second begin: must not wipe the ledger.
     rc2, _, _ = _run(['begin', _SLUG])
     assert rc2 == 0
-    rows = hq._read_tsv(folder / 'ledger.tsv', hq.LEDGER_FIELDS)
+    rows = storage.read_tsv(folder / 'ledger.tsv', ledger.LEDGER_FIELDS)
     assert rows, 'ledger must not be wiped on second begin'
 
 
@@ -1254,8 +1254,8 @@ def test_verb_finish_manifest_key_names_exact(tmp_path, monkeypatch):
     assert rc0 == 0
     rc1, _, _ = _run(['finish', _SLUG, '--log', 'first cycle'])
     assert rc1 == 0
-    rows = hq._read_tsv(
-        folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS)
+    rows = storage.read_tsv(
+        folder / 'cycles' / 'manifest.tsv', storage.MANIFEST_FIELDS)
     assert rows, 'manifest must have one row after finish'
     row = rows[0]
     assert row.get('written') not in {'-', '', None}, (
@@ -1300,8 +1300,8 @@ def test_verb_finish_repos_field_non_git(tmp_path, monkeypatch):
     assert rc0 == 0
     rc1, _, _ = _run(['finish', _SLUG, '--log', 'no-git'])
     assert rc1 == 0
-    rows = hq._read_tsv(
-        folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS)
+    rows = storage.read_tsv(
+        folder / 'cycles' / 'manifest.tsv', storage.MANIFEST_FIELDS)
     assert rows[0]['repos'] == '-', (
         f'repos must be "-" when HQ_GIT=0: {rows[0]["repos"]!r}')
 
@@ -1339,8 +1339,8 @@ def test_verb_finish_repos_accumulates_dirty(tmp_path, monkeypatch):
     assert rc0 == 0
     rc1, _, _ = _run(['finish', _SLUG, '--log', 'with-dirty'])
     assert rc1 == 0
-    rows = hq._read_tsv(
-        folder / 'cycles' / 'manifest.tsv', hq.MANIFEST_FIELDS)
+    rows = storage.read_tsv(
+        folder / 'cycles' / 'manifest.tsv', storage.MANIFEST_FIELDS)
     repos = rows[0]['repos']
     assert '@' in repos, f'repos must include branch@sha: {repos!r}'
     assert '+' in repos, f'repos must include dirty count: {repos!r}'

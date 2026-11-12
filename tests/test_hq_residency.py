@@ -9,7 +9,7 @@ drops.
 import pathlib
 from typing import Any
 
-from bin import hq
+from handoff import cli, help_text, ledger, markdown, render, standing, storage
 
 _SLUG = 'test-slug'
 _NOW = '2026-09-09T12:00:00'
@@ -82,7 +82,7 @@ def test_a_constraint_body_past_its_first_sentence_is_held_back():
     """
     first = 'The processor treats a bare retry as a new charge.'
     second = 'Cycle 2 reproduced a double charge at 1,400 ms.'
-    lines = hq.render_standing(
+    lines = render.render_standing(
         [_item('c07', 'c', 'Never retry without the key', f'{first} {second}')],
         set(), 'demo', whole_ids={'c07'}).splitlines()
     assert lines == [
@@ -109,7 +109,7 @@ def test_a_constraint_body_with_no_sentence_end_stays_resident_whole():
         'read the quirks note section four before changing any retry path, '
         'and the runbook step eleven which repeats that section word for '
         'word and is the one an operator opens')
-    lines = hq.render_standing(
+    lines = render.render_standing(
         [_item('c01', 'c', 'Read the quirks note first', body)],
         set(), 'demo', whole_ids={'c01'}).splitlines()
     assert len(body) == 167
@@ -132,7 +132,7 @@ def test_an_edit_label_is_resident_to_the_cap_and_names_hq_when():
     """
     label = ' '.join(['word'] * 60)
     assert len(label) == 299
-    lines = hq.render_artifacts(
+    lines = render.render_artifacts(
         [('notes/n.md', 'notes')],
         {'notes/n.md': _row(label=label)},
         'demo', {'notes/n.md'}).splitlines()
@@ -140,7 +140,7 @@ def test_an_edit_label_is_resident_to_the_cap_and_names_hq_when():
     assert row == (
         f'notes/n.md  notes  edit  c1  {label[:119]}'
         '  +180c - hq when demo notes/n.md')
-    assert hq.resident_label(label) == label[:119]
+    assert render.resident_label(label) == label[:119]
 
 
 def test_a_label_whose_only_space_is_early_keeps_the_whole_width():
@@ -154,9 +154,9 @@ def test_a_label_whose_only_space_is_early_keeps_the_whole_width():
     characters, not the 3 before its only space.
     """
     label = 'abc ' + 'x' * 236
-    assert hq.resident_label(label) == label[:hq._LABEL_RESIDENT]
-    boundary = 'y' * (hq._LABEL_RESIDENT // 2) + ' ' + 'z' * 120
-    assert hq.resident_label(boundary) == boundary[:hq._LABEL_RESIDENT]
+    assert render.resident_label(label) == label[:render._LABEL_RESIDENT]
+    boundary = 'y' * (render._LABEL_RESIDENT // 2) + ' ' + 'z' * 120
+    assert render.resident_label(boundary) == boundary[:render._LABEL_RESIDENT]
 
 
 def test_open_stays_quiet_on_a_label_the_render_capped(tmp_path, monkeypatch, capsys):
@@ -172,20 +172,20 @@ def test_open_stays_quiet_on_a_label_the_render_capped(tmp_path, monkeypatch, ca
     folder = _folder(tmp_path, monkeypatch)
     (folder / 'notes').mkdir()
     (folder / 'notes' / 'n.md').write_text('# N\n\nbody\n', encoding='utf-8')
-    assert hq.main(['begin', _SLUG]) == 0
-    assert hq.main([
+    assert cli.main(['begin', _SLUG]) == 0
+    assert cli.main([
         'stamp', _SLUG, 'notes/n.md', '--read-before', 'edit',
         '--label', ' '.join(['word'] * 60)]) == 0
-    assert hq.main(['finish', _SLUG, '--log', 'one']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'one']) == 0
     # A row seeded 'never' collapses to a count and gives the guard
     # nothing to compare, so the capped line has to be on the block.
-    art = hq.split_handoff(
+    art = markdown.split_handoff(
         (folder / 'HANDOFF.md').read_text())['blocks']['artifacts']
     assert '+180c - hq when' in art
     capsys.readouterr()
     monkeypatch.setenv('HQ_SESSION', 'session-xyz')
-    assert hq.main(['open', _SLUG]) == 0
-    out = capsys.readouterr().out.replace(hq.HELP_TOPICS['read'] + '\n', '')
+    assert cli.main(['open', _SLUG]) == 0
+    out = capsys.readouterr().out.replace(help_text.HELP_TOPICS['read'] + '\n', '')
     assert 'LEDGER BEHIND' not in out
 
 
@@ -203,26 +203,26 @@ def test_standing_filters_select_and_a_named_id_outranks_them(
     '11', so a containment test returns both where equality returns one.
     """
     folder = _folder(tmp_path, monkeypatch)
-    assert hq.main(['begin', _SLUG]) == 0
-    assert hq.main([
+    assert cli.main(['begin', _SLUG]) == 0
+    assert cli.main([
         'note', _SLUG, 'constraint', '--headline', 'Never log the token',
         'Not even at debug level.']) == 0
-    assert hq.main([
+    assert cli.main([
         'note', _SLUG, 'decision', '--headline', 'Refresh in process',
         'One caller, and the latency is fine.']) == 0
-    assert hq.main([
+    assert cli.main([
         'note', _SLUG, 'dead-end', '--headline', 'Event hooks',
         'A hook cannot retry the request.']) == 0
-    assert hq.main(['finish', _SLUG, '--log', 'one']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'one']) == 0
     monkeypatch.setenv('HQ_CYCLE', '11')
-    assert hq.main(['begin', _SLUG]) == 0
-    assert hq.main([
+    assert cli.main(['begin', _SLUG]) == 0
+    assert cli.main([
         'note', _SLUG, 'constraint', '--headline', 'Never reuse a nonce',
         'The verifier caches each nonce it accepts.']) == 0
     capsys.readouterr()
 
     def ids(argv):
-        assert hq.main(['standing', _SLUG] + argv) == 0
+        assert cli.main(['standing', _SLUG] + argv) == 0
         out = capsys.readouterr().out
         return [ln[1:ln.index(']')] for ln in out.splitlines() if ln.startswith('[')]
 
@@ -248,9 +248,9 @@ def test_standing_refuses_a_grep_that_is_not_a_pattern(tmp_path, monkeypatch, ca
     move clause in the printed line.
     """
     _folder(tmp_path, monkeypatch)
-    assert hq.main(['begin', _SLUG]) == 0
+    assert cli.main(['begin', _SLUG]) == 0
     capsys.readouterr()
-    assert hq.main(['standing', _SLUG, '--grep', '[']) == 2
+    assert cli.main(['standing', _SLUG, '--grep', '[']) == 2
     out = capsys.readouterr().out
     assert 'hq standing: --grep is not a regular expression' in out
     assert ' - fix the pattern' in out
@@ -269,21 +269,21 @@ def test_finish_prints_the_payload_delta_against_the_last_cycle(
     printed numbers.
     """
     _folder(tmp_path, monkeypatch, cycle=None)
-    assert hq.main(['begin', _SLUG]) == 0
-    assert hq.main(['finish', _SLUG, '--log', 'one']) == 0
+    assert cli.main(['begin', _SLUG]) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'one']) == 0
     first = capsys.readouterr().out
     assert 'tok since c' not in first
-    assert hq.main(['begin', _SLUG]) == 0
-    assert hq.main([
+    assert cli.main(['begin', _SLUG]) == 0
+    assert cli.main([
         'note', _SLUG, 'constraint', '--headline', 'Never log the token',
         'Not even at debug level.']) == 0
-    assert hq.main(['finish', _SLUG, '--log', 'two']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'two']) == 0
     middle = capsys.readouterr().out
-    assert hq.main(['begin', _SLUG]) == 0
-    assert hq.main([
+    assert cli.main(['begin', _SLUG]) == 0
+    assert cli.main([
         'note', _SLUG, 'constraint', '--headline', 'Never reuse a nonce',
         'The verifier caches every nonce it has accepted.']) == 0
-    assert hq.main(['finish', _SLUG, '--log', 'three']) == 0
+    assert cli.main(['finish', _SLUG, '--log', 'three']) == 0
     second = capsys.readouterr().out
 
     def tokens(text):
@@ -310,25 +310,25 @@ def test_a_superseded_item_leaves_the_block_and_stays_reachable_by_id(
     successor.
     """
     _folder(tmp_path, monkeypatch)
-    assert hq.main(['begin', _SLUG]) == 0
-    assert hq.main([
+    assert cli.main(['begin', _SLUG]) == 0
+    assert cli.main([
         'note', _SLUG, 'constraint', '--headline', 'Never reuse a nonce',
         'The verifier caches each nonce it accepts.']) == 0
-    assert hq.main([
+    assert cli.main([
         'note', _SLUG, 'constraint', '--headline', 'Never reuse a key',
         'The signer caches each key it accepts.']) == 0
-    assert hq.main(['supersede', _SLUG, 'c01', 'c02']) == 0
+    assert cli.main(['supersede', _SLUG, 'c01', 'c02']) == 0
     capsys.readouterr()
 
     items = [
         _item('c01', 'c', 'Never reuse a nonce', 'The verifier caches it.'),
         _item('c02', 'c', 'Never reuse a key', 'The signer caches it.'),
         ]
-    block = hq.render_standing(items, {'c01'}, _SLUG, whole_ids={'c02'})
+    block = render.render_standing(items, {'c01'}, _SLUG, whole_ids={'c02'})
     assert 'c01' not in block
     assert '[c02]' in block
 
-    assert hq.main(['standing', _SLUG, 'c01']) == 0
+    assert cli.main(['standing', _SLUG, 'c01']) == 0
     out = capsys.readouterr().out
     assert '[c01]' in out
     assert 'superseded by c02' in out
@@ -354,12 +354,12 @@ def test_every_non_live_artifact_count_names_a_command_that_runs_as_printed(
     rows = {}
     for status, path in at_status.items():
         rows[path] = _row(path=path, status=status, label=f'{status} row')
-        hq._append_tsv(
-            folder / 'ledger.tsv', hq.LEDGER_FIELDS, rows[path],
-            hq._LEDGER_HEADER)
+        storage.append_tsv(
+            folder / 'ledger.tsv', ledger.LEDGER_FIELDS, rows[path],
+            ledger.LEDGER_HEADER)
     capsys.readouterr()
 
-    block = hq.render_artifacts([], rows, _SLUG, set())
+    block = render.render_artifacts([], rows, _SLUG, set())
     counted = [
         ln for ln in block.splitlines() if ln.startswith(tuple(at_status))]
     assert len(counted) == len(at_status)
@@ -368,7 +368,7 @@ def test_every_non_live_artifact_count_names_a_command_that_runs_as_printed(
         status = line.split()[0]
         argv = line.split('- ', 1)[1].split()
         assert '<' not in ' '.join(argv)
-        assert hq.main(argv[1:]) == 0
+        assert cli.main(argv[1:]) == 0
         out = capsys.readouterr().out
         assert at_status[status] in out
         for other, other_path in at_status.items():
@@ -390,23 +390,23 @@ def test_a_held_decision_body_names_a_command_that_returns_it(
     """
     folder = _folder(tmp_path, monkeypatch)
     body = 'One caller keeps it simple. Latency is fine.'
-    assert hq.main(['begin', _SLUG]) == 0
-    assert hq.main([
+    assert cli.main(['begin', _SLUG]) == 0
+    assert cli.main([
         'note', _SLUG, 'decision', '--headline', 'Refresh in process',
         body]) == 0
     capsys.readouterr()
 
-    items, sup = hq._parse_standing((folder / 'standing.md').read_text())
+    items, sup = standing.parse_standing((folder / 'standing.md').read_text())
     whole_ids = {item['id'] for item in items}
     line = next(
-        ln for ln in hq.render_standing(items, sup, _SLUG, whole_ids).splitlines()
+        ln for ln in render.render_standing(items, sup, _SLUG, whole_ids).splitlines()
         if ln.startswith('[d01]'))
     resident, suffix = line.split('  +', 1)
     assert suffix == f'{len(body)}c - hq standing {_SLUG} d01'
 
     argv = line.split('- ', 1)[1].split()
     assert '<' not in ' '.join(argv)
-    assert hq.main(argv[1:]) == 0
+    assert cli.main(argv[1:]) == 0
     assert capsys.readouterr().out.strip() == f'{resident} {body}'
 
 
@@ -422,17 +422,17 @@ def test_supersede_refuses_a_replacement_that_is_not_live(
     because a single supersession always leaves c02 visible.
     """
     folder = _folder(tmp_path, monkeypatch)
-    assert hq.main(['begin', _SLUG]) == 0
-    assert hq.main([
+    assert cli.main(['begin', _SLUG]) == 0
+    assert cli.main([
         'note', _SLUG, 'constraint', '--headline', 'Never retry',
         'Retry reopens the charge window.']) == 0
-    assert hq.main([
+    assert cli.main([
         'note', _SLUG, 'constraint', '--headline', 'Always confirm',
         'Confirmation closes the charge window.']) == 0
-    assert hq.main(['supersede', _SLUG, 'c01', 'c02']) == 0
+    assert cli.main(['supersede', _SLUG, 'c01', 'c02']) == 0
     capsys.readouterr()
-    hq.main(['supersede', _SLUG, 'c02', 'c01'])
+    cli.main(['supersede', _SLUG, 'c02', 'c01'])
     capsys.readouterr()
-    assert hq.main(['standing', _SLUG]) == 0
+    assert cli.main(['standing', _SLUG]) == 0
     out = capsys.readouterr().out
     assert any(ln.startswith('[c') for ln in out.splitlines())
