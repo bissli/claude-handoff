@@ -63,7 +63,8 @@ probe measures. No alarm keys on how long a session runs.
 | Spend in subagents         | 500 agent tool calls in one cycle ring a bell |
 
 `--max-cycles` (default 10) counts every written cycle of the run,
-with or without a probe, and never resets.
+with or without a probe, and never resets. A probe file that is not
+executable counts as no probe (Measure probe).
 
 ### Parks
 
@@ -105,6 +106,17 @@ reachable.
    - With a measure: what reads what value when done, the smallest
      gain that counts as progress, and whether one run takes more
      than 60 seconds.
+   - Stall hold: whether the loop may hold a run no one watches, as
+     in "the migration runs overnight and must not wait on me". A
+     thread that must never hold runs with no probe, or with its
+     probe turned off (Measure probe). Tell the user the cost: no
+     hold at the finish line, no `summary:` row in `hq arc`, and
+     work that has died, such as a migration that lost its database
+     connection, spends cycles with no bell until `--max-cycles`
+     ends the run, so `--max-cycles` covers the night and no more.
+     Every park under Pane lines but the hold still stops the loop,
+     so the grants and the permission rules of step 5 cover the
+     whole run.
    - Grants: each step that would weaken security or stability and
      that the loop may take unasked, such as a push, a deploy or a
      delete. Without a grant, the session ends its turn on that
@@ -145,6 +157,12 @@ stores the row it composes ahead of the typed `--log` text, and prints
 `stall: <n>`, or `stall: -` for an unmeasured row before the first
 measured one. A thread with no probe never stalls, and `hq finish`
 never refuses on the measure.
+
+`chmod -x` turns the measure off and keeps the file, and `chmod +x`
+turns it back on, each from the next `hq finish`. A hold that
+already stands still takes its ruling (Hold). The stall keeps its
+count while the measure is off, so a thread turned off at 3 holds at
+the first cycle without progress after `chmod +x`.
 
 The `--log` text stays plain: `hq finish` strips a leading `summary:`
 or `stall review:` from it.
