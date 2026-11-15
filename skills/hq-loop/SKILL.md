@@ -298,22 +298,12 @@ user for the driver pane's last lines or the `hq loop:` line.
 
 For a dialog, read the trace log,
 `${XDG_STATE_HOME:-~/.local/state}/claude-handoff/<slug>.log`, which
-outlives the loop. Each line holds the UTC time, the session id, the
-event, the agent (`main` or a subagent id) and one of two tails:
-
-- `PermissionRequest`: the tool name and its input as JSON, cut at
-  2000 characters. This line names the command to allow (Setup step
-  5).
-- `Notification`: the `<type>` of the pane line, and the dialog's
-  text.
-
-A tool permission dialog writes both lines. Where no
-`PermissionRequest` line names the command, read the session's
-transcript at the time of the `Notification` line.
-`bypassPermissions` mode still shows a dialog for an `ask` rule, an
-`rm` of a critical path, AskUserQuestion and an MCP elicitation. The
-log also holds a dialog that left no pane line (No line). Quote no
-log line into the handoff: a command can carry a token.
+outlives the loop. Where no `PermissionRequest` line names the
+command, read the session's transcript at the time of the
+`Notification` line. `bypassPermissions` mode still shows a dialog
+for an `ask` rule, an `rm` of a critical path, AskUserQuestion and an
+MCP elicitation. Quote no log line into the handoff: a command can
+carry a token.
 
 ### Pane lines
 
