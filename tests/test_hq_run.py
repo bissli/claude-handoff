@@ -1542,7 +1542,7 @@ def test_end_under_a_dialog_waits_for_work_to_resume(tmp_path):
 
 def test_launch_guards(tmp_path):
     """Verify launch dies on a leftover lock, and once it starts, hands
-    claude the slug and a settings file that hooks all six events.
+    claude the slug and a settings file that hooks all seven events.
 
     Mutation: the lock guard dropped; a Loop-directive or manifest guard
     restored; the slug file left unwritten; or a hook event left out of
@@ -1585,7 +1585,7 @@ def test_launch_guards(tmp_path):
     hooks = json.loads((out / 'settings.json').read_text())['hooks']
     assert sorted(hooks) == sorted([
         'Stop', 'StopFailure', 'Notification', 'UserPromptSubmit',
-        'SessionStart', 'PostToolUse'])
+        'SessionStart', 'PostToolUse', 'PermissionRequest'])
 
 
 def test_launch_prints_the_end_reason(tmp_path):
@@ -1632,7 +1632,8 @@ def _hook(loop_dir: pathlib.Path, payload: dict) -> str:
     ----------
     loop_dir : pathlib.Path
         The loop directory; it doubles as HQ_ROOT, so a thread folder
-        goes under its ``.handoff``.
+        goes under its ``.handoff``, and its ``state`` subfolder is
+        XDG_STATE_HOME, so the trace log lands under it.
     payload : dict
         The hook's JSON input.
 
@@ -1644,7 +1645,10 @@ def _hook(loop_dir: pathlib.Path, payload: dict) -> str:
     proc = subprocess.run(
         [str(ROOT / 'bin' / 'hq-loop'), 'hook', str(loop_dir)],
         input=json.dumps(payload), capture_output=True, text=True,
-        env={**os.environ, 'HQ_ROOT': str(loop_dir)}, timeout=30)
+        env={
+            **os.environ, 'HQ_ROOT': str(loop_dir),
+            'XDG_STATE_HOME': str(loop_dir / 'state')},
+        timeout=30)
     assert (proc.returncode, proc.stderr) == (0, '')
     return proc.stdout
 
@@ -1682,6 +1686,52 @@ def test_hook_fields_by_event(tmp_path):
         'PostToolUse a7f S1 0 0',
         'Stop - S1 0 0',
         'UserPromptSubmit - S1 0 0']
+
+
+def test_trace_logs_the_dialog_and_its_command(tmp_path):
+    """Verify a permission request and a notification each append one
+    trace line naming the tool and its full input, and the hook prints
+    nothing at the request.
+
+    Mutation: tool_input or message left out of the trace line; the
+    input written raw, so a newline in a command splits the line; a
+    subagent's request logged as main; a Stop traced; any output at
+    PermissionRequest, which Claude Code reads as a decision; or the
+    umask dropped, so other users can read a logged token.
+    Oracle: hand-written lines for three payloads, the timestamp field
+    matched by pattern; mode 0600 under a 022 umask.
+    """
+    (tmp_path / 'slug').write_text('auth-refresh\n')
+    umask_orig = os.umask(0o022)
+    try:
+        out = _hook(tmp_path, {
+            'hook_event_name': 'PermissionRequest', 'session_id': 'S1',
+            'tool_name': 'Bash',
+            'tool_input': {'command': 'ls /var/x\necho done'}})
+    finally:
+        os.umask(umask_orig)
+    assert out == ''
+    _hook(tmp_path, {
+        'hook_event_name': 'PermissionRequest', 'session_id': 'S1',
+        'agent_id': 'a7f', 'tool_name': 'Write',
+        'tool_input': {'file_path': '/etc/hosts'}})
+    _hook(tmp_path, {
+        'hook_event_name': 'Notification', 'session_id': 'S1',
+        'notification_type': 'permission_prompt',
+        'message': 'Claude needs your permission to use Bash'})
+    _hook(tmp_path, {
+        'hook_event_name': 'Stop', 'session_id': 'S1',
+        'last_assistant_message': 'Done.'})
+    log = tmp_path / 'state' / 'claude-handoff' / 'auth-refresh.log'
+    assert log.stat().st_mode & 0o777 == 0o600
+    lines = log.read_text().splitlines()
+    stamp = r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ '
+    assert [re.sub(f'^{stamp}', '', line) for line in lines] == [
+        'S1 PermissionRequest main Bash {"command":"ls /var/x\\necho done"}',
+        'S1 PermissionRequest a7f Write {"file_path":"/etc/hosts"}',
+        ('S1 Notification main permission_prompt'
+         ' "Claude needs your permission to use Bash"')]
+    assert all(re.match(stamp, line) for line in lines)
 
 
 def test_tasks_leave_out_monitors_and_shells(tmp_path):

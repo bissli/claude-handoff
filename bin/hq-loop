@@ -23,6 +23,8 @@ TAIL="The loop driver typed this line. It answers no question. If a security or 
 NUDGE_TEXT="Take the next workable step now. A finished step does not end the turn. When nothing is workable and the thread waits on a file or a job, start a background monitor on it with a timeout of ten minutes or more, unless one runs. Otherwise make no tool call. Then say in one line, ending on a period, what the thread waits on, or that every Plan item is done, and end the turn. $TAIL"
 RETRY_TEXT="hq finish did not pass, and this session still holds the handoff lock. Read the message hq finish printed, fix what it names, and run hq finish again. Pass --replace-directives only when the user has said so in this session. Otherwise restore the Directives section. $TAIL"
 BUDGET_STATE_DIR="$HOME/.claude/cache/claude-handoff"
+# Outside the repo, because a logged command can carry a token inline.
+TRACE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/claude-handoff"
 
 die() {
     echo "hq loop: $*" >&2
@@ -34,14 +36,18 @@ die() {
 # would collapse it. A monitor lists as type shell, and an idle
 # teammate stays listed as running, so none of the three counts as a
 # task that keeps the session busy.
-# The one jq call prints five lines: the event line, the event name,
-# the last nonblank line of the reply, the prompt read as a ruling, and
-# the count of monitor and shell tasks and session crons.
+# The one jq call prints six lines: the event line, the event name,
+# the last nonblank line of the reply, the prompt read as a ruling, the
+# count of monitor and shell tasks and session crons, and the trace
+# line.
+# The hook prints nothing at a PermissionRequest, so the dialog shows
+# as it would with no hook.
 hook() {
-    local dir=$1 line='' event='' last='' ruling='' jobs='' slug
+    local dir=$1 line='' event='' last='' ruling='' jobs='' trace='' slug
     {
         IFS= read -r line && IFS= read -r event &&
-            IFS= read -r last && IFS= read -r ruling && IFS= read -r jobs
+            IFS= read -r last && IFS= read -r ruling && IFS= read -r jobs &&
+            IFS= read -r trace
     } < <(jq -r --arg tail "$TAIL" '
         ([.hook_event_name,
           (if .hook_event_name == "PostToolUse"
@@ -65,10 +71,21 @@ hook() {
            else "rule " + ((split("\n") | first // "")[:160]) end),
         ([.background_tasks | arrays | .[]
           | select(.type | IN("monitor", "shell"))] | length)
-        + ([.session_crons | arrays | .[]] | length)
+        + ([.session_crons | arrays | .[]] | length),
+        (if .hook_event_name | IN("PermissionRequest", "Notification")
+         then [(now | todate), (.session_id // "-"), .hook_event_name,
+               ((.agent_id | strings | select(. != "")) // "main"),
+               (.tool_name // .notification_type // "-"),
+               ((.tool_input // .message // "") | tojson | .[:2000])]
+              | map(tostring) | join(" ")
+         else "" end)
         ' 2>/dev/null) || true
     [[ -z $line ]] || printf '%s\n' "$line" >>"$dir/events" || true
     slug=$(cat "$dir/slug" 2>/dev/null) || slug=
+    if [[ -n $trace && -n $slug ]]; then
+        (umask 077 && mkdir -p "$TRACE_DIR" &&
+            printf '%s\n' "$trace" >>"$TRACE_DIR/$slug.log") || true
+    fi
     case $event in
         Stop)
             printf '%s\n' "$last" >"$dir/last" || true
@@ -520,6 +537,7 @@ launch() {
             Stop: [{hooks: [{type: "command", command: $c}]}],
             StopFailure: [{hooks: [{type: "command", command: $c}]}],
             Notification: [{hooks: [{type: "command", command: $c}]}],
+            PermissionRequest: [{hooks: [{type: "command", command: $c}]}],
             UserPromptSubmit: [{hooks: [{type: "command", command: $c}]}],
             SessionStart: [{hooks: [{type: "command", command: $c}]}],
             PostToolUse: [{hooks: [{type: "command", command: $c},
