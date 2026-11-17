@@ -41,10 +41,13 @@ session` and the loop rule. The rule outranks the reading steps, and
 the session follows it as printed:
 
 - The session asks only about a step the user did not ask for that
-  would weaken security or stability, as the last line of the turn,
-  ending on `?`. It decides every other question, including a choice
-  the work turns up, by the Directives where one applies and on the
-  evidence where none does, and leaves none to the user.
+  would weaken security or stability. Once nothing else is workable,
+  it also asks the user to run a call the loop denied that a step
+  cannot go on without. Either question is the last line of the
+  turn, ending on `?`. The session decides every other question,
+  including a choice the work turns up, by the Directives where one
+  applies and on the evidence where none does, and leaves none to
+  the user.
 - A finished step never ends the turn. With nothing workable, the
   session starts a background monitor on the file or job it waits on,
   says in one line what it waits on, and ends the turn.
@@ -141,12 +144,21 @@ reachable.
    - The thread has no `.hq.lock` and no `.hq.done`.
    - The user's shell is inside a tmux pane at least 12 lines tall,
      with `tmux`, `jq` and bash 4 or later.
-   - A permission dialog parks the loop until the user answers it.
-     `hq loop` adds only a hooks settings file, so this session's
-     permission mode says nothing about the loop's. Either every
-     command the thread uses matches a `permissions.allow` rule in
-     the settings claude loads, or `HQ_CLAUDE_CMD` names a claude
-     command line in a mode that never prompts. The user picks.
+   - The loop denies each call that would open a permission dialog,
+     and the session sees the denial. The session works another Plan
+     item and, with none workable, asks the user to run the call. In
+     `bypassPermissions` mode alone, it may first rewrite the call
+     into a form Claude Code can check. AskUserQuestion and
+     ExitPlanMode still park the loop on a dialog, and so does each
+     request after 3 denials in a session. A `waits` park after a
+     denial rings. `hq loop` adds only a hooks settings file, so
+     this session's permission mode says nothing about the loop's.
+     The mode and the allow list decide what runs unasked: in
+     default mode with no allow list, the loop denies nearly every
+     Bash call. Either every command the thread uses matches a
+     `permissions.allow` rule in the settings claude loads, or
+     `HQ_CLAUDE_CMD` names a claude command line in a mode that
+     never prompts. The user picks.
 
 ## Measure probe
 
@@ -298,32 +310,55 @@ user for the driver pane's last lines or the `hq loop:` line.
 
 For a dialog, read the trace log,
 `${XDG_STATE_HOME:-~/.local/state}/claude-handoff/<slug>.log`, which
-outlives the loop. Where no `PermissionRequest` line names the
-command, read the session's transcript at the time of the
-`Notification` line. `bypassPermissions` mode still shows a dialog
-for an `ask` rule, an `rm` of a critical path, AskUserQuestion and an
-MCP elicitation. Quote no log line into the handoff: a command can
+outlives the loop. Quote no log line into the handoff: a command can
 carry a token.
+
+- A `PermissionRequest` line for a tool other than AskUserQuestion
+  and ExitPlanMode, with no `permission_prompt` line after it, marks
+  a denial. The session's transcript at that time shows what the
+  session did next, and settles the rare dialog the user answered
+  before its notification.
+- A `permission_prompt` line after such a line marks a dialog the
+  loop left: the session had 3 denials, `jq` failed, or the driver
+  had removed its hook.
+- Where no `PermissionRequest` line names the command, read the
+  transcript at the time of the `Notification` line.
+- `bypassPermissions` mode still shows a dialog for AskUserQuestion,
+  ExitPlanMode, an MCP elicitation and a request past the 3 denials.
+- A driver that dies by SIGKILL leaves its hook in place. The hook
+  goes on denying, up to 3 requests a session, until claude exits.
 
 ### Pane lines
 
-The lines group by outcome. All but the waits ring the bell.
+The lines group by outcome. All but the waits ring the bell, and a
+wait after a denial rings too.
 
 Asks:
 
 - `<slug> asks: <last line>`: the turn ended on `?`. The user answers
-  in the claude pane. A grant in Directives keeps that question from
-  coming again, except for a step no grant covers (Setup step 2).
-- `claude is waiting for you (<type>)`: the user answers the dialog.
-  Until a prompt or a tool call follows, the driver types nothing.
-  Setup step 5 names the lasting fix.
+  in the claude pane. A grant in Directives keeps a security or
+  stability question from coming again, except for a step no grant
+  covers (Setup step 2). The user answers a question about a denied
+  call by running the call, as `! <command>` in the claude pane or
+  in a shell, and replying. An allow rule, a mode set through
+  `HQ_CLAUDE_CMD` or a rewrite of the call settles it for good, and
+  no grant changes what the loop denies. After this line the driver
+  types nothing, a write included, until a prompt or a new session
+  follows, so a `!` command is safe in between.
+- `claude is waiting for you (<type>)`: AskUserQuestion,
+  ExitPlanMode, an MCP elicitation, a teammate's request or a dialog
+  the loop left (Audit). The user answers it. Until a prompt or a
+  tool call follows, the driver types nothing. For a dialog the loop
+  left, Setup step 5 names the lasting fix.
 
 Waits:
 
 - `<slug> waits: <last line>`: nothing is workable, every Plan item
   is done, or a background task of the session runs. The user's
   prompt starts the next turn, as does the task's report or the end
-  of a monitor the session started.
+  of a monitor the session started. After a denial in the session
+  this line rings, since the session may wait on the user to run the
+  denied call.
 - `waits on the lock of <session>`: another session holds an open
   cycle on the thread. Finish it there, or run `hq begin <slug>
   --force` once that session is dead. Once the lock is gone, the
@@ -358,8 +393,8 @@ so the driver keeps typing.
 
 No line:
 
-- No typing either: a denied dialog or an Escape ended the turn. Any
-  prompt starts the next one.
+- No typing either: a dialog the user rejected or an Escape ended
+  the turn. Any prompt starts the next one.
 - A turn that never ends: one tool call never returns, and no bound
   reads it. The user interrupts it, and the command takes its own
   timeout.

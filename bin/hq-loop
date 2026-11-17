@@ -17,10 +17,14 @@ DEBOUNCE=2
 EXIT_TIMEOUT=20
 RETRY_CAP=2
 AGENT_CAP=500
+DENY_CAP=3
 # The hook reads a prompt that ends on TAIL as the driver's own line,
 # so it never becomes a stall ruling.
-TAIL="The loop driver typed this line. It answers no question. If a security or stability question is still open, end on it again, as the last line, with ? as the last character."
+TAIL="The loop driver typed this line. It answers no question. If a security or stability question is still open, or a denied call blocks every workable step, end on that question or on a request to run the call, as the last line, with ? as the last character."
 NUDGE_TEXT="Take the next workable step now. A finished step does not end the turn. When nothing is workable and the thread waits on a file or a job, start a background monitor on it with a timeout of ten minutes or more, unless one runs. Otherwise make no tool call. Then say in one line, ending on a period, what the thread waits on, or that every Plan item is done, and end the turn. $TAIL"
+DENY_TAIL="Never reach the same file, URL or command through another tool. If the step cannot go on without this call, stop that step. A subagent returns this message and the denied call to its caller. The main session works another Plan item. When none is workable, it ends the turn asking the user to run the call, with any secret in it written as <secret>, and with ? as the last character."
+DENY_REWRITE="hq loop denied this call: no one is watching this session to answer a permission dialog. A rewrite may only make the same calls easier to check: split a command into separate Bash calls, and name each path literally. Keep every removal (rm, find -delete) in its own Bash call whose targets are literal paths. Never move a command into a script file or into another language. $DENY_TAIL"
+DENY_NO_RETRY="hq loop denied this call: no one is watching this session to answer a permission dialog. Do not retry this call in another form. $DENY_TAIL"
 RETRY_TEXT="hq finish did not pass, and this session still holds the handoff lock. Read the message hq finish printed, fix what it names, and run hq finish again. Pass --replace-directives only when the user has said so in this session. Otherwise restore the Directives section. $TAIL"
 BUDGET_STATE_DIR="$HOME/.claude/cache/claude-handoff"
 # Outside the repo, because a logged command can carry a token inline.
@@ -36,19 +40,23 @@ die() {
 # would collapse it. A monitor lists as type shell, and an idle
 # teammate stays listed as running, so none of the three counts as a
 # task that keeps the session busy.
-# The one jq call prints six lines: the event line, the event name,
+# The one jq call prints seven lines: the event line, the event name,
 # the last nonblank line of the reply, the prompt read as a ruling, the
-# count of monitor and shell tasks and session crons, and the trace
-# line.
-# The hook prints nothing at a PermissionRequest, so the dialog shows
-# as it would with no hook.
+# count of monitor and shell tasks and session crons, the trace line,
+# and the answer to a PermissionRequest.
+# No one watches a loop session to answer a dialog, so the hook denies
+# every permission request except AskUserQuestion and ExitPlanMode, up
+# to DENY_CAP per session. Past the cap the dialog shows as it would
+# with no hook.
 hook() {
-    local dir=$1 line='' event='' last='' ruling='' jobs='' trace='' slug
+    local dir=$1 line='' event='' last='' ruling='' jobs='' trace=''
+    local answer='' src slug count
     {
         IFS= read -r line && IFS= read -r event &&
             IFS= read -r last && IFS= read -r ruling && IFS= read -r jobs &&
-            IFS= read -r trace
-    } < <(jq -r --arg tail "$TAIL" '
+            IFS= read -r trace && IFS= read -r answer
+    } < <(jq -r --arg tail "$TAIL" --arg rewrite "$DENY_REWRITE" \
+        --arg noretry "$DENY_NO_RETRY" '
         ([.hook_event_name,
           (if .hook_event_name == "PostToolUse"
            then ((.agent_id | strings | select(. != "")) // "main")
@@ -78,8 +86,23 @@ hook() {
                (.tool_name // .notification_type // "-"),
                ((.tool_input // .message // "") | tojson | .[:2000])]
               | map(tostring) | join(" ")
+         else "" end),
+        (if .hook_event_name == "PermissionRequest"
+            and (.tool_name | IN("AskUserQuestion", "ExitPlanMode") | not)
+         then {hookSpecificOutput: {hookEventName: "PermissionRequest",
+               decision: {behavior: "deny",
+                 message: (if .permission_mode == "bypassPermissions"
+                           then $rewrite else $noretry end)}}}
+              | tojson
          else "" end)
         ' 2>/dev/null) || true
+    read -r _ src _ <<<"$line"
+    if [[ -n $answer ]]; then
+        count=$({ wc -l <"$dir/denials"; } 2>/dev/null) || count=0
+        if ((count < DENY_CAP)) && echo >>"$dir/denials"; then
+            printf '%s\n' "$answer"
+        fi
+    fi
     [[ -z $line ]] || printf '%s\n' "$line" >>"$dir/events" || true
     slug=$(cat "$dir/slug" 2>/dev/null) || slug=
     if [[ -n $trace && -n $slug ]]; then
@@ -92,6 +115,8 @@ hook() {
             printf '%s\n' "$jobs" >"$dir/jobs" || true
             ;;
         SessionStart)
+            # A compact keeps the denial count, since its cycle goes on.
+            [[ $src == compact ]] || : >"$dir/denials" || true
             awk -F'\t' 'NR > 1 && NF { c = $1 } END { print c + 0 }' \
                 "${HQ_ROOT:-.}/.handoff/$slug/cycles/manifest.tsv" \
                 >"$dir/mark" 2>/dev/null || echo 0 >"$dir/mark"
@@ -116,7 +141,7 @@ drive() {
     local folder=".handoff/$slug"
     local event src sid='' ev_sid tasks endsq rc wait_secs due
     local launch_cycle base turn=0 tools=0 dialog=0 sent=-1 retries=0
-    local stop_sent=0 compacts=0 agent_calls=0 park=''
+    local stop_sent=0 compacts=0 agent_calls=0 park='' asked=0
     local stop_tasks=0 stop_endsq=0 read_due=0 stop_due=0 tick_due
     local ending='' end_due=0 quiet_due=0 rest
 
@@ -220,8 +245,11 @@ drive() {
             tmux send-keys -t "$target" Enter
     }
 
+    # A ! command the user runs while a question is open starts a turn
+    # with no prompt event, and a line typed after it would clear the
+    # reply the user is writing. A prompt or a new session clears asked.
     type_line() {
-        ((turn == 0 && dialog == 0)) || return 1
+        ((turn == 0 && dialog == 0 && asked == 0)) || return 1
         if ! send_line "$1"; then
             park_with type alert "could not type into the claude pane"
             return 1
@@ -271,6 +299,8 @@ drive() {
 
     cycle_end() {
         local cycle=$1
+        # finish types /exit, which would clear the user's reply.
+        ((asked)) && return 0
         if [[ -e $dir/stop ]]; then
             finish "stopped after cycle $cycle as requested"
             return 0
@@ -296,6 +326,7 @@ drive() {
             return 0
         fi
         if ((stop_endsq)); then
+            asked=1
             park_with question alert "$slug asks: $last"
             return 0
         fi
@@ -354,7 +385,13 @@ drive() {
             type_line "$NUDGE_TEXT" || true
             return 0
         fi
-        park_with waits say "$slug waits: $last"
+        # After a denial the session may wait on the user to run the
+        # call, even when its last line does not ask.
+        if [[ -s $dir/denials ]]; then
+            park_with waits alert "$slug waits: $last"
+        else
+            park_with waits say "$slug waits: $last"
+        fi
         return 0
     }
 
@@ -397,7 +434,7 @@ drive() {
                 park_with error alert "claude stopped on an API error: $src"
                 ;;
             UserPromptSubmit)
-                turn=1 tools=0 dialog=0 park='' stop_due=0
+                turn=1 tools=0 dialog=0 asked=0 park='' stop_due=0
                 ;;
             PostToolUse)
                 if [[ $src == main ]]; then
@@ -414,7 +451,7 @@ drive() {
                 park='' stop_due=0
                 case $src in
                     startup | clear | resume)
-                        turn=0 dialog=0
+                        turn=0 dialog=0 asked=0
                         read_due=$((SECONDS + DEBOUNCE + 1))
                         # A clear the user types moves the base too, or
                         # the next Stop clears the fresh session again.

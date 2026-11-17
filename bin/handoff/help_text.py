@@ -316,8 +316,10 @@ Cursor rules:
   decision. A headline that only points elsewhere does not count.
 - Anything still awaiting the user, a question or an unapproved
   plan, goes under Open questions. The next read stops there. Under
-  hq loop, only a security or stability question about a step the
-  user did not ask for stops it.
+  hq loop, only two questions stop it: a security or stability
+  question about a step the user did not ask for, and a request for
+  the user to run a call the loop denied that a step cannot go on
+  without.
 - An item recorded with note or under ## Unfiled is not repeated in
   State, because the Standing block carries it. A line that cites
   evidence ids stays, since uncited evidence leaves the block.

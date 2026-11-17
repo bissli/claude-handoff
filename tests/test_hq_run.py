@@ -528,6 +528,85 @@ def test_a_dialog_holds_typing_until_work_resumes(tmp_path):
         drive.close()
 
 
+def test_a_question_holds_typing_until_the_user_prompts(tmp_path):
+    """Verify a turn that ends on ? stops all typing until a prompt, so a
+    ! command's turn that ends on a period draws no nudge.
+
+    Mutation: the asked gate dropped from type_line, or never cleared at
+    UserPromptSubmit.
+    Oracle: a question, then a tool call and a period Stop: no line; a
+    prompt, a tool call and a period Stop: the nudge.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        drive.emit('PostToolUse main S1 0 0')
+        drive.stop(endsq=1, last='Run the call?')
+        assert _wait_for(lambda: drive.rang('auth-refresh asks: Run the call?') == 1)
+        drive.emit('PostToolUse main S1 0 0')
+        drive.stop(last='Recorded.')
+        time.sleep(QUIET)
+        assert drive.typed() == [READ]
+        drive.emit('UserPromptSubmit - S1 0 0')
+        drive.emit('PostToolUse main S1 0 0')
+        drive.stop(last='Recorded.')
+        assert _wait_for(lambda: len(drive.typed()) == 2)
+        assert drive.typed()[1] == _loop_text('NUDGE_TEXT')
+    finally:
+        drive.close()
+
+
+def test_a_question_holds_the_stop_until_the_user_prompts(tmp_path):
+    """Verify a written cycle with the Stop file does not end the loop
+    while a question waits on the user's reply.
+
+    Mutation: the asked guard dropped from cycle_end, so the ! command's
+    turn types /exit over the reply.
+    Oracle: a question, then a tool call and a period Stop: the driver
+    runs on with nothing typed; a prompt and a period Stop: END.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        (drive.driver_dir / 'stop').write_text('')
+        drive.write_manifest([_manifest_row(1)])
+        drive.stop(endsq=1, last='Run the call?')
+        assert _wait_for(lambda: drive.rang('auth-refresh asks: Run the call?') == 1)
+        drive.emit('PostToolUse main S1 0 0')
+        drive.stop(last='Recorded.')
+        time.sleep(QUIET)
+        assert drive.driver.poll() is None
+        assert drive.typed() == [READ]
+        drive.emit('UserPromptSubmit - S1 0 0')
+        drive.stop(last='Recorded.')
+        drive.driver.wait(timeout=20)
+        assert drive.said()[-1] == '[1/10] stopped after cycle 1 as requested'
+        assert drive.typed() == [READ, '/exit']
+    finally:
+        drive.close()
+
+
+def test_waits_after_a_denial_rings(tmp_path):
+    """Verify a waits park rings once the session has had a denial, and
+    stays quiet before one.
+
+    Mutation: the denials check dropped, or read as the wrong file.
+    Oracle: the same idle Stop twice, with no denials file and then
+    with one denial line.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        drive.stop()
+        assert _wait_for(lambda: '[1/10] auth-refresh waits: Waiting.' in drive.said())
+        assert drive.rang('auth-refresh waits') == 0
+        (drive.driver_dir / 'denials').write_text('\n')
+        drive.stop()
+        assert _wait_for(lambda: drive.rang('auth-refresh waits: Waiting.') == 1)
+    finally:
+        drive.close()
+
+
 def test_idle_prompt_is_no_dialog(tmp_path):
     """Verify an idle_prompt notice neither rings nor holds typing.
 
@@ -1340,11 +1419,12 @@ def test_drive_retries_a_refused_finish_under_its_own_lock(tmp_path):
 def test_drive_waits_on_a_question_asked_under_its_own_lock(tmp_path):
     """Verify a session that ends on a question while it holds its lock
     gets a bell and no retry text, with a stop pending as well, and
-    gets the retry once it stops asking.
+    gets the retry once the user answers and the next turn stops asking.
 
     Mutation: the endsq check dropped from the own-lock path, so the
-    retry text answers a question the loop leaves to the user; or the
-    stop file made to answer the question.
+    retry text answers a question the loop leaves to the user; the stop
+    file made to answer the question; or the asked gate never cleared at
+    a prompt.
     Oracle: a stub tmux that records each call - the lines typed and
     the bells after a question Stop, a question Stop with the stop file
     present, and a Stop with no question.
@@ -1360,6 +1440,7 @@ def test_drive_waits_on_a_question_asked_under_its_own_lock(tmp_path):
         assert _wait_for(lambda: drive.rang('asks: Rotate it?') == 2)
         time.sleep(QUIET)
         assert drive.typed() == [READ]
+        drive.emit('UserPromptSubmit - S1 0 0')
         drive.stop()
         assert _wait_for(lambda: len(drive.typed()) == 2)
         assert 'hq finish' in drive.typed()[1]
@@ -1618,11 +1699,14 @@ def test_launch_prints_the_end_reason(tmp_path):
 
 
 def _loop_text(name: str) -> str:
-    """The value bin/hq-loop assigns to name, with $TAIL expanded.
+    """The value bin/hq-loop assigns to name, with $TAIL and $DENY_TAIL
+    expanded.
     """
     script = (ROOT / 'bin' / 'hq-loop').read_text()
     values = dict(re.findall(r'^([A-Z_]+)="(.*)"$', script, re.MULTILINE))
-    return values[name].replace('$TAIL', values['TAIL'])
+    return (
+        values[name].replace('$TAIL', values['TAIL'])
+        .replace('$DENY_TAIL', values['DENY_TAIL']))
 
 
 def _hook(loop_dir: pathlib.Path, payload: dict) -> str:
@@ -1690,27 +1774,24 @@ def test_hook_fields_by_event(tmp_path):
 
 def test_trace_logs_the_dialog_and_its_command(tmp_path):
     """Verify a permission request and a notification each append one
-    trace line naming the tool and its full input, and the hook prints
-    nothing at the request.
+    trace line naming the tool and its full input.
 
     Mutation: tool_input or message left out of the trace line; the
     input written raw, so a newline in a command splits the line; a
-    subagent's request logged as main; a Stop traced; any output at
-    PermissionRequest, which Claude Code reads as a decision; or the
-    umask dropped, so other users can read a logged token.
+    subagent's request logged as main; a Stop traced; or the umask
+    dropped, so other users can read a logged token.
     Oracle: hand-written lines for three payloads, the timestamp field
     matched by pattern; mode 0600 under a 022 umask.
     """
     (tmp_path / 'slug').write_text('auth-refresh\n')
     umask_orig = os.umask(0o022)
     try:
-        out = _hook(tmp_path, {
+        _hook(tmp_path, {
             'hook_event_name': 'PermissionRequest', 'session_id': 'S1',
             'tool_name': 'Bash',
             'tool_input': {'command': 'ls /var/x\necho done'}})
     finally:
         os.umask(umask_orig)
-    assert out == ''
     _hook(tmp_path, {
         'hook_event_name': 'PermissionRequest', 'session_id': 'S1',
         'agent_id': 'a7f', 'tool_name': 'Write',
@@ -1732,6 +1813,74 @@ def test_trace_logs_the_dialog_and_its_command(tmp_path):
         ('S1 Notification main permission_prompt'
          ' "Claude needs your permission to use Bash"')]
     assert all(re.match(stamp, line) for line in lines)
+
+
+def _deny(message_name: str) -> dict:
+    """The deny answer whose message is the bin/hq-loop constant named.
+    """
+    return {'hookSpecificOutput': {
+        'hookEventName': 'PermissionRequest',
+        'decision': {'behavior': 'deny', 'message': _loop_text(message_name)}}}
+
+
+def test_hook_denies_every_request_but_a_question_or_plan_exit(tmp_path):
+    """Verify the hook denies a request with the text its mode picks, and
+    leaves AskUserQuestion and ExitPlanMode to their dialogs.
+
+    Mutation: either exemption dropped, allow printed, the
+    mode test inverted or widened to any mode but default, or tojson
+    left out, so the answer spans lines.
+    Oracle: hand-written deny dicts around the composed constants.
+    """
+    out = _hook(tmp_path, {
+        'hook_event_name': 'PermissionRequest', 'session_id': 'S1',
+        'permission_mode': 'bypassPermissions',
+        'tool_name': 'AskUserQuestion', 'tool_input': {'questions': []}})
+    assert out == ''
+    out = _hook(tmp_path, {
+        'hook_event_name': 'PermissionRequest', 'session_id': 'S1',
+        'permission_mode': 'plan', 'tool_name': 'ExitPlanMode',
+        'tool_input': {'plan': 'Step one.'}})
+    assert out == ''
+    out = _hook(tmp_path, {
+        'hook_event_name': 'PermissionRequest', 'session_id': 'S1',
+        'permission_mode': 'bypassPermissions', 'tool_name': 'Bash',
+        'tool_input': {'command': 'rm -rf "$(cat /tmp/x)"\necho "done"'}})
+    assert out.count('\n') == 1
+    assert json.loads(out) == _deny('DENY_REWRITE')
+    out = _hook(tmp_path, {
+        'hook_event_name': 'PermissionRequest', 'session_id': 'S1',
+        'permission_mode': 'default', 'agent_id': 'a7f',
+        'tool_name': 'Write', 'tool_input': {'file_path': '/etc/hosts'}})
+    assert json.loads(out) == _deny('DENY_NO_RETRY')
+    out = _hook(tmp_path, {
+        'hook_event_name': 'PermissionRequest', 'session_id': 'S1',
+        'tool_name': 'Bash', 'tool_input': {'command': 'ls'}})
+    assert json.loads(out) == _deny('DENY_NO_RETRY')
+
+
+def test_denial_cap_resets_at_clear_and_keeps_at_compact(tmp_path):
+    """Verify the hook answers three requests per session, and only a
+    SessionStart other than compact restarts the count.
+
+    Mutation: an off-by-one in the cap, the reset missing at clear or run
+    at compact, or the count read outside its stderr group, which a
+    missing denials file turns into stderr.
+    Oracle: hand-counted answers for each request in order.
+    """
+    request = {
+        'hook_event_name': 'PermissionRequest', 'session_id': 'S1',
+        'tool_name': 'Bash', 'tool_input': {'command': 'ls'}}
+    answered = [_hook(tmp_path, request) != '' for _ in range(4)]
+    _hook(tmp_path, {
+        'hook_event_name': 'SessionStart', 'session_id': 'S1',
+        'source': 'compact'})
+    answered.append(_hook(tmp_path, request) != '')
+    _hook(tmp_path, {
+        'hook_event_name': 'SessionStart', 'session_id': 'S1',
+        'source': 'clear'})
+    answered.append(_hook(tmp_path, request) != '')
+    assert answered == [True, True, True, False, False, True]
 
 
 def test_tasks_leave_out_monitors_and_shells(tmp_path):
