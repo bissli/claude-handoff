@@ -39,7 +39,9 @@ STALL_PARK = 4
 
 HOLD_TEXT = (
     'The loop holds: take no Plan step and start no monitor, and end the'
-    ' turn on a period.')
+    ' turn on a period. Answering each .inbox request is the one step a'
+    ' hold allows. Where the loop denies a call an answer needs, end the'
+    ' turn on ? asking the user to run it.')
 
 
 LOOP_RULE = """\
@@ -65,9 +67,10 @@ where none does. State each decision and its reason, and leave none of
 them to anyone else. Then execute Now, unless the loop holds. A
 finished step never ends the turn. End a turn only at the context
 notice, on either question, or when nothing is workable. When nothing is
-workable and the thread waits on a file or a job, start a background
-monitor on it with a timeout of ten minutes or more, unless one runs
-or the loop holds. Otherwise make no tool call. Then say in one line,
+workable and the thread waits on a job or on a file outside .inbox/,
+start a background monitor on it with a timeout of ten minutes or
+more, unless one runs or the loop holds. The loop driver watches
+.inbox/. Otherwise make no tool call. Then say in one line,
 ending on a period, what the thread waits on, or that every Plan item
 is done, and end the turn. A peer's silence never closes or parks a
 Plan item. Run hq done only at the user's own /handoff done: only the

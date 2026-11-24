@@ -21,7 +21,8 @@ DENY_CAP=3
 # The hook reads a prompt that ends on TAIL as the driver's own line,
 # so it never becomes a stall ruling.
 TAIL="The loop driver typed this line. It answers no question. If a security or stability question is still open, or a denied call blocks every workable step, end on that question or on a request to run the call, as the last line, with ? as the last character."
-NUDGE_TEXT="Take the next workable step now. A finished step does not end the turn. When nothing is workable and the thread waits on a file or a job, start a background monitor on it with a timeout of ten minutes or more, unless one runs. Otherwise make no tool call. Then say in one line, ending on a period, what the thread waits on, or that every Plan item is done, and end the turn. $TAIL"
+NUDGE_TEXT="Take the next workable step now. A finished step does not end the turn. When nothing is workable and the thread waits on a job or on a file outside .inbox/, start a background monitor on it with a timeout of ten minutes or more, unless one runs. The loop driver watches .inbox/. Otherwise make no tool call. Then say in one line, ending on a period, what the thread waits on, or that every Plan item is done, and end the turn. $TAIL"
+INBOX_TEXT="A peer filed a message in this thread's .inbox/. Answer each request there, and read each reply. $TAIL"
 DENY_TAIL="Never reach the same file, URL or command through another tool. If the step cannot go on without this call, stop that step. A subagent returns this message and the denied call to its caller. The main session works another Plan item. When none is workable, it ends the turn asking the user to run the call, with any secret in it written as <secret>, and with ? as the last character."
 DENY_REWRITE="hq loop denied this call: no one is watching this session to answer a permission dialog. A rewrite may only make the same calls easier to check: split a command into separate Bash calls, and name each path literally. Keep every removal (rm, find -delete) in its own Bash call whose targets are literal paths. Never move a command into a script file or into another language. $DENY_TAIL"
 DENY_NO_RETRY="hq loop denied this call: no one is watching this session to answer a permission dialog. Do not retry this call in another form. $DENY_TAIL"
@@ -286,7 +287,7 @@ drive() {
     # A report that arrives after the write would force a second write.
     type_toward_write() {
         if ((stop_tasks > 0)); then
-            park_with waits say "$slug waits: $last"
+            park_with report say "$slug waits: $last"
             return 1
         fi
         type_line "$1"
@@ -295,6 +296,34 @@ drive() {
     type_write() {
         type_toward_write "/handoff write $slug" || return 1
         sent=$((sent < 0 ? 0 : sent))
+    }
+
+    # Notes:
+    # - ctime, because mv and a sync tool such as Dropbox keep a
+    #   file's mtime.
+    # - inbox-next is touched before the find and moved over
+    #   inbox-seen only after the wake types, so a file filed during
+    #   the wake is newer than the new marker.
+    # - The wake clears the input box, so a key pressed in the last
+    #   minute puts it off to a later tick.
+    inbox_wake() {
+        local only=() found active now
+        ((turn == 0)) || return 0
+        [[ $park == hold || $park == waits ]] || return 0
+        [[ -e $folder/.hq.lock || -e $dir/ruling ]] && return 0
+        [[ $park == hold ]] && only=('!' -name 're-*')
+        touch "$dir/inbox-next"
+        found=$(find "$folder/.inbox" -maxdepth 1 -type f ! -name '.*' \
+            ${only[@]+"${only[@]}"} -cnewer "$dir/inbox-seen" -print -quit \
+            2>/dev/null) || true
+        [[ -n $found ]] || return 0
+        now=$(date +%s)
+        for active in $(tmux list-clients -t "$target" \
+            -F '#{client_activity}' 2>/dev/null || true); do
+            ((now - active < 60)) && return 0
+        done
+        type_line "$INBOX_TEXT" || return 0
+        mv -f "$dir/inbox-next" "$dir/inbox-seen"
     }
 
     cycle_end() {
@@ -397,6 +426,8 @@ drive() {
 
     launch_cycle=$(thread_cycle)
     base=$launch_cycle
+    # A refused first read would leave the inbox with no marker.
+    touch "$dir/inbox-seen"
 
     tick_due=$((SECONDS + TICK_SECS))
     while alive; do
@@ -490,7 +521,9 @@ drive() {
         else
             if ((read_due > 0 && SECONDS >= read_due)); then
                 read_due=0 turn=0
-                type_line "/handoff read $slug" || true
+                if type_line "/handoff read $slug"; then
+                    touch "$dir/inbox-seen"
+                fi
             fi
             if ((stop_due > 0 && SECONDS >= stop_due)); then
                 stop_due=0
@@ -515,6 +548,9 @@ drive() {
                     fi
                     if ((rest)); then
                         stop_decisions
+                    fi
+                    if [[ -z $ending ]]; then
+                        inbox_wake
                     fi
                 fi
             fi

@@ -370,6 +370,8 @@ class _Drive:
             f'    kill "$(cat {pid_path})" 2>/dev/null ;;\n'
             'esac\n'
             f'case "$*" in send-keys*-l*) [ -e {tmp_path}/send-fails ] && exit 1 ;; esac\n'
+            f'case "$*" in send-keys*-l*) [ -x {tmp_path}/on-send ] && {tmp_path}/on-send ;; esac\n'
+            f'case "$*" in list-clients*) [ -e {tmp_path}/activity ] && cat {tmp_path}/activity ;; esac\n'
             'exit 0\n')
         (bin_dir / 'tmux').chmod(0o755)
         self.folder = tmp_path / '.handoff' / 'auth-refresh'
@@ -1016,6 +1018,128 @@ def test_hold_alone_says_once_per_park(tmp_path):
         time.sleep(11)
         assert drive.said().count('[1/10] stall: held at 4.') == 1
         assert drive.typed() == [READ]
+    finally:
+        drive.close()
+
+
+INBOX = 'beta-auth-20260101T000000000000000Z.md'
+
+
+def test_inbox_request_wakes_a_hold_and_a_reply_does_not(tmp_path):
+    """Verify at a hold a reply wakes nothing, a request wakes the session
+    once, and the moved marker keeps the next hold park asleep.
+
+    Mutation: the re-* filter dropped at hold, the marker left in place
+    after the wake, or the hold left out of the wake parks.
+    Oracle: a reply then a request filed after the read; the typed lines
+    counted across a tick after each.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        (drive.driver_dir / 'hold').write_text('stall: held at 4.\n')
+        drive.stop()
+        assert _wait_for(lambda: '[1/10] stall: held at 4.' in drive.said())
+        inbox = drive.folder / '.inbox'
+        inbox.mkdir()
+        (inbox / f're-{INBOX}').write_text('answer\n')
+        time.sleep(6)
+        assert drive.typed() == [READ]
+        (inbox / INBOX).write_text('ask\n')
+        assert _wait_for(lambda: len(drive.typed()) == 2)
+        assert drive.typed()[1] == _loop_text('INBOX_TEXT')
+        drive.stop()
+        time.sleep(QUIET + 6)
+        assert len(drive.typed()) == 2
+    finally:
+        drive.close()
+
+
+def test_inbox_wakes_waits_on_a_renamed_reply_and_no_other_park(tmp_path):
+    """Verify a reply renamed in with an old mtime wakes a waits park,
+    and a request wakes neither an error park nor a session that waits
+    on a task before its write.
+
+    Mutation: -newer in place of -cnewer, or a park other than hold and
+    the final waits let through, such as the write-bound waits.
+    Oracle: os.utime to 2001 before the rename; a StopFailure park, and
+    a budget band with a task running.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        drive.emit('StopFailure overloaded S1 0 0')
+        assert _wait_for(lambda: drive.rang('API error') == 1)
+        inbox = drive.folder / '.inbox'
+        inbox.mkdir()
+        (inbox / INBOX).write_text('ask\n')
+        time.sleep(6)
+        assert drive.typed() == [READ]
+        drive.set_band('S1', 0)
+        drive.stop(tasks=1, last='Writing soon.')
+        assert _wait_for(lambda: '[1/10] auth-refresh waits: Writing soon.' in drive.said())
+        (inbox / INBOX).unlink()
+        (inbox / f'{INBOX}.2').write_text('ask again\n')
+        time.sleep(6)
+        assert drive.typed() == [READ]
+        (inbox / f'{INBOX}.2').unlink()
+        (drive.budget_dir / 'S1.json').unlink()
+        drive.stop(last='Waiting on beta.')
+        assert _wait_for(lambda: '[1/10] auth-refresh waits: Waiting on beta.' in drive.said())
+        staged = tmp_path / f're-{INBOX}'
+        staged.write_text('answer\n')
+        os.utime(staged, (978307200, 978307200))
+        staged.rename(inbox / f're-{INBOX}')
+        assert _wait_for(lambda: len(drive.typed()) == 2)
+        assert drive.typed()[1] == _loop_text('INBOX_TEXT')
+    finally:
+        drive.close()
+
+
+def test_inbox_marker_moves_only_on_a_typed_wake(tmp_path):
+    """Verify a missing .inbox/ keeps the driver running, key activity
+    and a refused type leave the marker alone, and a file filed while
+    the wake types wakes the next park.
+
+    Mutation: the || true dropped from the find, the activity guard
+    dropped, the marker moved before type_line, or inbox-seen touched
+    after the wake in place of moving inbox-next over it.
+    Oracle: the marker's mtime around each refusal; an on-send stub
+    that files a second request while the wake line types.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        drive.stop()
+        assert _wait_for(lambda: '[1/10] auth-refresh waits: Waiting.' in drive.said())
+        time.sleep(6)
+        assert drive.driver.poll() is None
+        marker = drive.driver_dir / 'inbox-seen'
+        seen = marker.stat().st_mtime_ns
+        (tmp_path / 'activity').write_text(f'{int(time.time())}\n')
+        inbox = drive.folder / '.inbox'
+        inbox.mkdir()
+        (inbox / INBOX).write_text('ask\n')
+        time.sleep(6)
+        assert drive.typed() == [READ]
+        assert marker.stat().st_mtime_ns == seen
+        # The stub logs the refused line before it fails.
+        (tmp_path / 'send-fails').write_text('')
+        (tmp_path / 'activity').write_text(f'{int(time.time()) - 120}\n')
+        assert _wait_for(lambda: drive.rang('could not type') == 1)
+        assert marker.stat().st_mtime_ns == seen
+        (tmp_path / 'send-fails').unlink()
+        on_send = tmp_path / 'on-send'
+        on_send.write_text(
+            f'#!/bin/sh\nrm -f {on_send}\necho ask > {inbox}/{INBOX}.2\n')
+        on_send.chmod(0o755)
+        drive.stop()
+        assert _wait_for(lambda: len(drive.typed()) == 3)
+        assert (inbox / f'{INBOX}.2').exists()
+        assert _wait_for(lambda: marker.stat().st_mtime_ns > seen)
+        drive.stop()
+        assert _wait_for(lambda: len(drive.typed()) == 4)
+        assert drive.typed()[1:] == [_loop_text('INBOX_TEXT')] * 3
     finally:
         drive.close()
 
@@ -1991,6 +2115,22 @@ def test_session_start_writes_the_mark(tmp_path):
         'hook_event_name': 'SessionStart', 'source': 'clear',
         'session_id': 'S2'})
     assert (tmp_path / 'mark').read_text() == '7\n'
+
+
+def test_the_inbox_wake_is_never_a_ruling(tmp_path):
+    """Verify the hook classes the driver's inbox wake line skip, so a
+    wake at a hold leaves the hold in place.
+
+    Mutation: INBOX_TEXT typed without $TAIL at its end.
+    Oracle: the hook's ruling file, absent after the wake line.
+    """
+    (tmp_path / 'slug').write_text('auth-refresh\n')
+    (tmp_path / 'hold').write_text('stall: held at 4 (no measured gain).\n')
+    out = _hook(tmp_path, {
+        'hook_event_name': 'UserPromptSubmit', 'session_id': 'S1',
+        'prompt': _loop_text('INBOX_TEXT')})
+    assert out == ''
+    assert not (tmp_path / 'ruling').exists()
 
 
 def test_a_held_prompt_becomes_the_ruling(tmp_path):

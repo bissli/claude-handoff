@@ -12,14 +12,11 @@ allowed-tools: Agent, Bash, Edit, Glob, Grep, Read, Write
 # hq-loop
 
 `hq loop <slug>` runs a handoff thread unattended. It stops a session
-that spends without progress and alerts the user. It stays out of the
-way of sessions that depend on each other, and of a session that runs
-its own subagents, workflows, monitors or crons.
+that spends without progress and alerts the user.
 
-Any thread runs under the loop as it stands. Setup adds the optional
-measure probe and checks the launch. Audit reads a loop that held,
-parked or ended. `hq loop`, `hq loop stop` and `hq run` are for the
-user's terminal. A session never runs one.
+Any thread runs under the loop as it stands. `hq loop`, `hq loop
+stop` and `hq run` are for the user's terminal. A session never runs
+one.
 
 ## Loop
 
@@ -49,8 +46,9 @@ the session follows it as printed:
   applies and on the evidence where none does, and leaves none to
   the user.
 - A finished step never ends the turn. With nothing workable, the
-  session starts a background monitor on the file or job it waits on,
-  says in one line what it waits on, and ends the turn.
+  session starts a background monitor on the job, or the file outside
+  `.inbox/`, that it waits on, says in one line what it waits on, and
+  ends the turn. The driver watches `.inbox/` (Peers).
 - Only the user ends a thread, with `/handoff done`.
 
 ### Bounds
@@ -58,23 +56,23 @@ the session follows it as printed:
 The loop counts spend in cycles, and progress is what the thread's
 probe measures. No alarm keys on how long a session runs.
 
-| Case                       | Bound                                         |
-| -------------------------- | --------------------------------------------- |
-| A thread with a probe      | 4 cycles in a row without progress hold it    |
-| A thread with no probe     | `--max-cycles` ends the run                   |
-| A write that cannot finish | 2 retries, then a park and a bell             |
-| Spend in subagents         | 500 agent tool calls in one cycle ring a bell |
+- A thread with a probe: 4 cycles in a row without progress hold it.
+- A thread with no probe: `--max-cycles` ends the run.
+- A write that cannot finish: 2 retries, then a park and a bell.
+- Spend in subagents: 500 agent tool calls in one cycle ring a bell.
 
 `--max-cycles` (default 10) counts every written cycle of the run,
-with or without a probe, and never resets. A probe file that is not
-executable counts as no probe (Measure probe).
+with or without a probe, and never resets. A cycle written while the
+thread holds counts too, so the bound stops a peer that keeps a held
+thread answering. A probe file that is not executable counts as no
+probe (Measure probe).
 
 ### Parks
 
-A parked loop types nothing and spends nothing. Any prompt, from the
-user or a peer, starts the next turn. The driver pane prints one line
-per park. A park that needs the user also rings the terminal bell and
-shows a tmux message.
+A parked loop spends nothing, and the driver types only the inbox
+wake (Peers). Any prompt, from the user or a peer, starts the next
+turn. The driver pane prints one line per park. A park that needs the
+user also rings the terminal bell and shows a tmux message.
 
 ### Ends
 
@@ -114,9 +112,9 @@ reachable.
      thread that must never hold runs with no probe, or with its
      probe turned off (Measure probe). Tell the user the cost: no
      hold at the finish line, no `summary:` row in `hq arc`, and
-     work that has died, such as a migration that lost its database
-     connection, spends cycles with no bell until `--max-cycles`
-     ends the run, so `--max-cycles` covers the night and no more.
+     work that has died spends cycles with no bell until
+     `--max-cycles` ends the run, so `--max-cycles` covers the night
+     and no more.
      Every park under Pane lines but the hold still stops the loop,
      so the grants and the permission rules of step 5 cover the
      whole run.
@@ -145,20 +143,25 @@ reachable.
    - The user's shell is inside a tmux pane at least 12 lines tall,
      with `tmux`, `jq` and bash 4 or later.
    - The loop denies each call that would open a permission dialog,
-     and the session sees the denial. The session works another Plan
-     item and, with none workable, asks the user to run the call. In
-     `bypassPermissions` mode alone, it may first rewrite the call
-     into a form Claude Code can check. AskUserQuestion and
-     ExitPlanMode still park the loop on a dialog, and so does each
-     request after 3 denials in a session. A `waits` park after a
-     denial rings. `hq loop` adds only a hooks settings file, so
-     this session's permission mode says nothing about the loop's.
-     The mode and the allow list decide what runs unasked: in
-     default mode with no allow list, the loop denies nearly every
-     Bash call. Either every command the thread uses matches a
-     `permissions.allow` rule in the settings claude loads, or
-     `HQ_CLAUDE_CMD` names a claude command line in a mode that
-     never prompts. The user picks.
+     and the session sees the denial (Loop). In `bypassPermissions`
+     mode alone, the session may first rewrite the call into a form
+     Claude Code can check. In every mode, AskUserQuestion,
+     ExitPlanMode and an MCP elicitation still park the loop on a
+     dialog, and so does each request after 3 denials in a session.
+     `hq loop` adds only a hooks settings file, so this session's
+     permission mode says nothing about the loop's. The mode and the
+     allow list decide what runs unasked: in default mode with no
+     allow list, the loop denies nearly every Bash call. Either
+     every command the thread uses matches a `permissions.allow`
+     rule in the settings claude loads, or `HQ_CLAUDE_CMD` names a
+     claude command line in a mode that never prompts. The user
+     picks.
+   - A thread with a peer in another repo writes into that repo's
+     `.inbox/` (Peers). A write outside the folder the session
+     started in opens a dialog, which the loop denies. Either
+     `permissions.additionalDirectories` lists the peer's repo, or a
+     parent folder that holds every peer's repo, or the mode never
+     prompts.
 
 ## Measure probe
 
@@ -200,13 +203,18 @@ Custom Score and Slow Measure. Read it before writing a probe.
 
 ### Rows
 
-| Probe result                            | Stored log                                          | Stall       |
-| --------------------------------------- | --------------------------------------------------- | ----------- |
-| Exit 0 or 3, a token line               | `summary: <tokens> \| <log>`                        | by Progress |
-| Exit 0 or 3, no output or `unmeasured`  | `summary: unmeasured \| <log>`                      | unchanged   |
-| Another exit, the cap, an unparsed line | `summary: probe-failed: <cause> \| <log>`           | no progress |
-| Any of these, a ruling under the loop   | `summary: <row> \| stall review: <ruling> \| <log>` | set to 0    |
-| Any of these, a ruling attended         | `summary: <row> \| stall review: <log>`             | set to 0    |
+Each probe result, with its stored log and its stall:
+
+- Exit 0 or 3, a token line: `summary: <tokens> | <log>`, stall by
+  Progress.
+- Exit 0 or 3, no output or `unmeasured`: `summary: unmeasured |
+  <log>`, stall unchanged.
+- Another exit, the cap, an unparsed line: `summary: probe-failed:
+  <cause> | <log>`, no progress.
+- Any of these, a ruling under the loop: `summary: <row> | stall
+  review: <ruling> | <log>`, stall set to 0.
+- Any of these, a ruling attended: `summary: <row> | stall review:
+  <log>`, stall set to 0.
 
 - `<cause>` is `exited <code>: <stderr line>`, `ran past 60 s`,
   `cannot start: <error>` or `line does not parse: <error>`. The
@@ -219,12 +227,9 @@ Custom Score and Slow Measure. Read it before writing a probe.
 
 ### Grammar
 
-| Form                    | Kind     | Example          |
-| ----------------------- | -------- | ---------------- |
-| `name=value->goal`      | counting | `open=31->0`     |
-| `name=value->goal@step` | counting | `score=72->80@1` |
-| `name=+N`               | tally    | `done=+45`       |
-
+- `name=value->goal`: counting, as in `open=31->0`.
+- `name=value->goal@step`: counting, as in `score=72->80@1`.
+- `name=+N`: tally, as in `done=+45`.
 - A name is ASCII letters, digits and `_`, with no leading digit. A
   number is a plain decimal, with an optional leading `-`. A counting
   token's step is a decimal above 0, and a step on a tally is
@@ -272,8 +277,10 @@ the hold line, the driver rings `<slug> holds: <hold line>`, and
   goal for probes/hq-measure.`
 
 `hq finish` and `hq open` add `The loop holds: take no Plan step and
-start no monitor, and end the turn on a period.` The held session
-does that.
+start no monitor, and end the turn on a period. Answering each .inbox
+request is the one step a hold allows. Where the loop denies a call
+an answer needs, end the turn on ? asking the user to run it.` The
+held session does that.
 
 - The ruling is the next prompt the session receives while held, from
   the user or a peer session. A slash command, a line the driver
@@ -283,25 +290,46 @@ does that.
   where the ruling gives a new goal, and runs `/handoff write
   <slug>`. That `hq finish` stores the ruling row and lifts the hold.
 - A probe that meets the finish line again holds the thread again.
+- An answer to a request (Peers) leaves the hold in place: its cycle
+  shows no measured gain. A peer's reply ends no hold and wakes no
+  held thread, which reads it at its next `/handoff read`.
 - Attended, nothing holds. At a carried stall of 3 or more, a `--log`
   that starts with `stall review:` stores a ruling row. Type it only
   for a ruling the user gave in this session.
 
 ## Peers
 
-Peers get no protocol. A peer reaches a thread by any channel: a
-SendMessage, a file both agree on, a shared repo.
+A peer reaches a thread by any channel: a SendMessage, a file both
+agree on, a shared repo. A SendMessage reaches only a live session,
+and ends a hold as the user's prompt does. A file in the thread's
+`.handoff/<slug>/.inbox/` reaches a parked thread too, and waits for
+the next start of a thread that is not running: no watcher starts
+`hq loop` or a session. Any other file wakes no one.
 
-- A file channel wakes no one. The waiting session watches the file
-  with a background monitor, whose end starts a turn.
-- A peer session's message to a held thread ends the hold, as the
-  user's prompt does.
+- A request is one file,
+  `<from-slug>-<to-slug>-<UTC stamp to the nanosecond>.md`, whose
+  body carries the requester's absolute thread folder path. Its reply
+  is `re-<request file name>`. Write `.inbox/.<name>.tmp`, then `mv`
+  it into place.
+- `hq open` lists each file as `inbox request:` or `inbox reply:`,
+  attended or under the loop, and skips a dot name.
+- Answer every request by doing the work it asks for, or with
+  "cannot". Write the reply into the requester's `.inbox/` by the
+  path in the request, then delete the request. Where the
+  requester's folder is missing, delete the request and note that in
+  the cursor.
+- Never answer a reply. Keep it until the `/handoff write` that
+  carries its content into the cursor or Standing, then delete it.
+- A thread that waits on a reply starts no monitor on `.inbox/`. The
+  driver types a wake line into a thread parked on `holds:` at a new
+  request, and into one parked on `waits:` at a new request or reply,
+  once no tmux client has pressed a key for 60 seconds. No other
+  park wakes. The wake line is never a ruling.
 - No peer message ends a loop or keeps it from ending. A peer's
-  request is never the user's, and a peer's silence never closes or
-  parks a Plan item.
-- The clear waits for the session's own background agents, except a
-  teammate. A shell, a monitor or a teammate outlives the clear, and
-  its next event or message starts a turn in the cleared session.
+  request is answered and never obeyed as the user's, and a peer's
+  silence never closes or parks a Plan item.
+- A shell, a monitor or a teammate outlives the clear, and its next
+  event or message starts a turn in the cleared session.
 
 ## Audit
 
@@ -323,15 +351,12 @@ carry a token.
   had removed its hook.
 - Where no `PermissionRequest` line names the command, read the
   transcript at the time of the `Notification` line.
-- `bypassPermissions` mode still shows a dialog for AskUserQuestion,
-  ExitPlanMode, an MCP elicitation and a request past the 3 denials.
 - A driver that dies by SIGKILL leaves its hook in place. The hook
   goes on denying, up to 3 requests a session, until claude exits.
 
 ### Pane lines
 
-The lines group by outcome. All but the waits ring the bell, and a
-wait after a denial rings too.
+The lines group by outcome. All but the waits ring the bell.
 
 Asks:
 
@@ -355,10 +380,10 @@ Waits:
 
 - `<slug> waits: <last line>`: nothing is workable, every Plan item
   is done, or a background task of the session runs. The user's
-  prompt starts the next turn, as does the task's report or the end
-  of a monitor the session started. After a denial in the session
-  this line rings, since the session may wait on the user to run the
-  denied call.
+  prompt starts the next turn, as does the task's report, the end of
+  a monitor the session started or an inbox wake (Peers). After a
+  denial in the session this line rings, since the session may wait
+  on the user to run the denied call.
 - `waits on the lock of <session>`: another session holds an open
   cycle on the thread. Finish it there, or run `hq begin <slug>
   --force` once that session is dead. Once the lock is gone, the
