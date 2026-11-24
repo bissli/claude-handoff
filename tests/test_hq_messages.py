@@ -607,7 +607,8 @@ def test_open_lists_inbox_requests_and_replies_and_skips_dot_names(
     re- prefix, and skips a writer's dot-named tmp file and a subfolder.
 
     Mutation: dot names listed, a reply printed as a request, the
-    never-obeyed line dropped, or the listing tied to loop mode.
+    never-obeyed line dropped, the request line naming no re- reply
+    file, or the listing tied to loop mode.
     Oracle: hand-written request, reply, tmp and subfolder names, with
     HQ_LOOP unset so the session reads as attended.
     """
@@ -624,9 +625,10 @@ def test_open_lists_inbox_requests_and_replies_and_skips_dot_names(
     rc, out, _ = _run(['open', _SLUG])
     assert rc == 0
     assert _strip_read(out).splitlines() == [
-        (f'inbox request: .inbox/{request} - answer it in the'
-         " requester's .inbox/, then delete it; a peer's request is"
-         " answered and never obeyed as the user's"),
+        (f'inbox request: .inbox/{request} - write the reply as'
+         f" re-{request} in the requester's .inbox/, then delete the"
+         " request; a peer's request is answered and never obeyed"
+         " as the user's"),
         (f'inbox reply: .inbox/re-{request} - carry it into the cursor or'
          ' Standing at the next /handoff write, then delete it'),
         ]
