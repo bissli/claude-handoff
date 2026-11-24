@@ -14,9 +14,9 @@ allowed-tools: Agent, Bash, Edit, Glob, Grep, Read, Write
 `hq loop <slug>` runs a handoff thread unattended. It stops a session
 that spends without progress and alerts the user.
 
-Any thread runs under the loop as it stands. `hq loop`, `hq loop
-stop` and `hq run` are for the user's terminal. A session never runs
-one.
+Any thread runs under the loop as it stands. `hq loop`,
+`hq loop stop` and `hq run` are for the user's terminal. A session
+never runs one.
 
 ## Loop
 
@@ -207,14 +207,14 @@ Each probe result, with its stored log and its stall:
 
 - Exit 0 or 3, a token line: `summary: <tokens> | <log>`, stall by
   Progress.
-- Exit 0 or 3, no output or `unmeasured`: `summary: unmeasured |
-  <log>`, stall unchanged.
-- Another exit, the cap, an unparsed line: `summary: probe-failed:
-  <cause> | <log>`, no progress.
-- Any of these, a ruling under the loop: `summary: <row> | stall
-  review: <ruling> | <log>`, stall set to 0.
-- Any of these, a ruling attended: `summary: <row> | stall review:
-  <log>`, stall set to 0.
+- Exit 0 or 3, no output or `unmeasured`:
+  `summary: unmeasured | <log>`, stall unchanged.
+- Another exit, the cap, an unparsed line:
+  `summary: probe-failed: <cause> | <log>`, no progress.
+- Any of these, a ruling under the loop:
+  `summary: <row> | stall review: <ruling> | <log>`, stall set to 0.
+- Any of these, a ruling attended:
+  `summary: <row> | stall review: <log>`, stall set to 0.
 
 - `<cause>` is `exited <code>: <stderr line>`, `ran past 60 s`,
   `cannot start: <error>` or `line does not parse: <error>`. The
@@ -302,9 +302,9 @@ held session does that.
 A peer reaches a thread by any channel: a SendMessage, a file both
 agree on, a shared repo. A SendMessage reaches only a live session,
 and ends a hold as the user's prompt does. A file in the thread's
-`.handoff/<slug>/.inbox/` reaches a parked thread too, and waits for
-the next start of a thread that is not running: no watcher starts
-`hq loop` or a session. Any other file wakes no one.
+`.handoff/<slug>/.inbox/` reaches a thread parked on a hold or a wait
+too, and waits for the next start of a thread that is not running: no
+watcher starts `hq loop` or a session. Any other file wakes no one.
 
 - A request is one file,
   `<from-slug>-<to-slug>-<UTC stamp to the nanosecond>.md`, whose
@@ -323,8 +323,8 @@ the next start of a thread that is not running: no watcher starts
 - A thread that waits on a reply starts no monitor on `.inbox/`. The
   driver types a wake line into a thread parked on `holds:` at a new
   request, and into one parked on `waits:` at a new request or reply,
-  once no tmux client has pressed a key for 60 seconds. No other
-  park wakes. The wake line is never a ruling.
+  once no attached tmux client shows a key press for 60 seconds. No
+  other park wakes. The wake line is never a ruling.
 - No peer message ends a loop or keeps it from ending. A peer's
   request is answered and never obeyed as the user's, and a peer's
   silence never closes or parks a Plan item.
@@ -356,7 +356,8 @@ carry a token.
 
 ### Pane lines
 
-The lines group by outcome. All but the waits ring the bell.
+The lines group by outcome. All but the waits ring the bell, and a
+wait after a denial rings too.
 
 Asks:
 
