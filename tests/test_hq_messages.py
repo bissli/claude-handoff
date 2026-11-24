@@ -634,6 +634,26 @@ def test_open_lists_inbox_requests_and_replies_and_skips_dot_names(
         ]
 
 
+def test_begin_refuses_a_new_slug_opening_re_and_keeps_an_existing_one(
+        tmp_path, monkeypatch):
+    """Verify begin refuses to create a folder whose slug opens re-, the
+    .inbox/ reply prefix, yet begins one that already exists.
+
+    Mutation: the guard dropped, the guard applied to an existing
+    folder, or a substring test in place of the prefix test.
+    Oracle: hand-picked slugs either side of the prefix: 're-cache'
+    new and existing, and 'cache-re-run' with re- inside the name.
+    """
+    handoffs = _root(tmp_path, monkeypatch).parent
+    rc, out, _ = _run(['begin', 're-cache'])
+    assert rc == 2
+    assert "opens 're-'" in out
+    assert not (handoffs / 're-cache').exists()
+    assert _run(['begin', 'cache-re-run'])[0] == 0
+    (handoffs / 're-old').mkdir()
+    assert _run(['begin', 're-old'])[0] == 0
+
+
 def test_open_reports_git_drift_against_the_header_sha(tmp_path, monkeypatch):
     """A commit after finish makes open print the drift line.
 
