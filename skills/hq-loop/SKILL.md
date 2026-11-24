@@ -299,12 +299,13 @@ held session does that.
 
 ## Peers
 
-A peer reaches a thread by any channel: a SendMessage, a file both
-agree on, a shared repo. A SendMessage reaches only a live session,
-and ends a hold as the user's prompt does. A file in the thread's
-`.handoff/<slug>/.inbox/` reaches a thread parked on a hold or a wait
-too, and waits for the next start of a thread that is not running: no
-watcher starts `hq loop` or a session. Any other file wakes no one.
+A peer reaches a thread by a SendMessage or a file in its
+`.handoff/<slug>/.inbox/`. It writes no other file there and runs no
+hq write verb on that thread. A SendMessage reaches only a live
+session, and ends a hold as the user's prompt does. An inbox file
+reaches a thread parked on a hold or a wait too, and waits for the
+next start of a thread that is not running: no watcher starts
+`hq loop` or a session. Any other file wakes no one.
 
 - A request is one file,
   `<from-slug>-<to-slug>-<UTC stamp to the nanosecond>.md`, whose

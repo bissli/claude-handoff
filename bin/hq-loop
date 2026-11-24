@@ -300,7 +300,8 @@ drive() {
 
     # Notes:
     # - ctime, because mv and a sync tool such as Dropbox keep a
-    #   file's mtime.
+    #   file's mtime. -newercm, since BSD -cnewer reads the
+    #   marker's ctime, which the mv below resets.
     # - inbox-next is touched before the find and moved over
     #   inbox-seen only after the wake types, so a file filed during
     #   the wake is newer than the new marker.
@@ -314,7 +315,7 @@ drive() {
         [[ $park == hold ]] && only=('!' -name 're-*')
         touch "$dir/inbox-next"
         found=$(find "$folder/.inbox" -maxdepth 1 -type f ! -name '.*' \
-            ${only[@]+"${only[@]}"} -cnewer "$dir/inbox-seen" -print -quit \
+            ${only[@]+"${only[@]}"} -newercm "$dir/inbox-seen" -print -quit \
             2>/dev/null) || true
         [[ -n $found ]] || return 0
         now=$(date +%s)

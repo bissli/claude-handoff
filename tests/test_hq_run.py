@@ -1060,7 +1060,7 @@ def test_inbox_wakes_waits_on_a_renamed_reply_and_no_other_park(tmp_path):
     and a request wakes neither an error park nor a session that waits
     on a task before its write.
 
-    Mutation: -newer in place of -cnewer, or a park other than hold and
+    Mutation: -newer in place of -newercm, or a park other than hold and
     the final waits let through, such as the write-bound waits.
     Oracle: os.utime to 2001 before the rename; a StopFailure park, and
     a budget band with a task running.
