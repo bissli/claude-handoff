@@ -1,32 +1,15 @@
 # claude-handoff
 
-**A Claude Code plugin that says, in session and while there is still room, when a conversation has grown expensive enough to hand off, and ships the `/handoff` skill that hands it off.**
+**A Claude Code plugin that carries one task across many sessions.**
 
-Claude Code re-sends the whole conversation on every API call, so each turn costs more than the one before it. At the end of each turn the plugin reads the session transcript and warns once the context has grown a fixed work budget past the cycle's first call. `/handoff` writes the session's state to `.handoff/<slug>/`, and a fresh session reads it back and resumes.
+Each session ends in a handoff written to `.handoff/<slug>/`, and the next session reads it back and resumes where the last one stopped. The plugin tells the session when to hand off, `hq` keeps the thread's record intact from cycle to cycle, and `hq loop` runs the cycle unattended.
 
 ```
-218K/262K  Opus 5.5 myproject
-265K/262K handoff now  Opus 5.5 myproject
-310K/262K  Opus 5.5 myproject
+/handoff write auth-refresh    session 1 writes the thread, then is killed
+/handoff read auth-refresh     session 2 picks it up and works the plan
+...
+hq loop auth-refresh           or let the loop type both, cycle after cycle
 ```
-
-## The problem
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/resend-dark.svg">
-  <img alt="Stacked columns of tokens sent per turn. Each turn adds about 17K new tokens on top of everything before it, and the whole stack is re-sent every turn, reaching about 270K by turn 12." src="docs/resend-light.svg">
-</picture>
-
-Each turn adds about 17K tokens and re-sends everything before it.
-
-Prompt caching makes the re-read cheap: a cached token costs a twentieth of a fresh one on Opus 5.5 and a fortieth on Fable 5.1. It does nothing about the count of tokens re-read, which grows every turn. The cost of a turn climbs in a straight line, so the cost of a session climbs as its square.
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/session-cost-dark.svg">
-  <img alt="Cumulative cost of a 40-turn session, growing 17K a turn. On Opus 5.5, running on reaches $28 while handing off at 352K holds it to $14. On Fable 5.1, running on reaches $35 while handing off at 282K holds it to $15." src="docs/session-cost-light.svg">
-</picture>
-
-Forty turns growing 17K a turn. Running on costs $28 on Opus 5.5 and $35 on Fable 5.1. Handing off at the target holds it to $14 and $15.
 
 ## Install
 
@@ -35,19 +18,22 @@ Forty turns growing 17K a turn. Running on costs $28 on Opus 5.5 and $35 on Fabl
 /plugin install claude-handoff@claude-handoff
 ```
 
-The first command registers the repo as a plugin marketplace. The second installs the hooks, the `/handoff` and `/hq-loop` skills, and the `hq` command. The plugin needs `python3` 3.11 or later on `PATH`. The status line takes one manual step ([Status line](#status-line)), and so does `hq run` from a terminal ([Terminal launch](#terminal-launch)).
+The first command registers the repo as a plugin marketplace. The second installs the hooks, the `/handoff` and `/hq-loop` skills, and the `hq` command. The plugin needs `python3` 3.11 or later on `PATH`. The [status line](#status-line) and the [terminal commands](#terminal-commands) each take one manual step.
 
-## Usage
+## Threads
 
-The Stop hook prints each of these once, as the session crosses the line:
+A thread is one task and its folder at the project root:
 
-> Context 283K, at the 277K handoff point for this cycle, growing 20K a turn - a good point to run /handoff.
+```
+.handoff/auth-refresh/
+  HANDOFF.md      the cursor: task, next step, plan, state, open questions
+  ledger.tsv      append-only record of the thread's artifacts
+  standing.md     append-only decisions, constraints, dead ends, evidence
+  cycles/         each finished HANDOFF.md verbatim
+  specs/ drafts/ notes/ outputs/   what the thread made, by kind
+```
 
-> Context 310K, 33K past the 277K handoff point, where a handoff begun there would have finished. Every further turn raises the cost of each call of work. Run /handoff.
-
-The second also sends a desktop notification through the terminal.
-
-`/handoff` with no verb decides between write and read by content. A session holding anything a fresh session needs that the repo does not hold writes. A session that has only looked something up reads. Where the verb or the target is ambiguous, it lists the candidates and stops.
+Each session in a thread is one cycle. The session reads the cursor, works the plan, and near the handoff point writes the cursor again and exits. Decisions and evidence go into `standing.md` and stay there, so a thread twenty cycles old still knows why it chose what it chose.
 
 | Command                 | Action                                       |
 | ----------------------- | -------------------------------------------- |
@@ -60,43 +46,42 @@ The second also sends a desktop notification through the terminal.
 | `/handoff done <slug>`  | end the thread; `--undo` reopens it          |
 | `/handoff --check`      | write with the reviewer pass                 |
 
-A check, or a write the user calls with `--check`, ends with a reviewer pass: a fresh agent reads the file cold and reports what a resuming session could not act on. After the write, the session is killed and a fresh one runs the printed `resume:` line.
-
-A thread's folder, `.handoff/<slug>/`, holds:
-
-```
-HANDOFF.md      the cursor: task, next step, plan, state, open questions
-ledger.tsv      append-only record of the thread's artifacts
-standing.md     append-only decisions, constraints, dead ends, evidence
-cycles/         each finished HANDOFF.md verbatim
-specs/ drafts/ notes/ outputs/   what the thread made, by kind
-```
+`/handoff` with no verb writes when the session holds anything a fresh session needs that the repo does not hold, and reads when it has only looked something up. Where the verb or the target is ambiguous, it lists the candidates and stops. A check, or a write called with `--check`, ends with a reviewer pass: a fresh agent reads the file cold and reports what a resuming session could not act on. After a write, the session is killed and a fresh one runs the printed `resume:` line.
 
 `hq`, which the plugin puts on the agent's `PATH`, writes the ledger and the standing items, renders the generated blocks of `HANDOFF.md`, and refuses the edits that lose work across cycles. `hq help` lists its reference topics, and `hq <verb> --help` each verb's flags. `.handoff/` goes in the project's `.gitignore` where handoffs stay untracked.
 
-### Terminal launch
+## Unattended runs
 
-`hq run <slug>` starts `claude "/handoff <slug>"` at the project root. The plugin puts `hq` on the agent's `PATH` alone, so a shell reaches it through a function in `~/.bashrc`. The function runs the `hq` on `PATH` where there is one, so an agent session keeps the plugin's own, and the newest installed version otherwise. `bin/hq-completion.bash` gives Tab completion of the verb, then of the open slugs in the current repo:
+`hq run <slug>` starts `claude "/handoff <slug>"` at the project root.
 
-```bash
-unalias hq 2>/dev/null
-hq() {
-    local bin
-    bin=$(type -P hq) || bin=$(ls -d ~/.claude/plugins/cache/claude-handoff/claude-handoff/*/bin/hq | sort -V | tail -1)
-    "$bin" "$@"
-}
-source "$(ls -d ~/.claude/plugins/cache/claude-handoff/claude-handoff/*/bin/hq-completion.bash | sort -V | tail -1)"
-```
+`hq loop <slug>` runs a thread over many cycles with no one typing. Inside a tmux pane it starts claude and opens a driver pane below it. The driver types `/handoff read <slug>`, and when the context notice asks for a write it types `/handoff write <slug>`, then `/clear`, then the read again.
 
-`hq loop <slug>` runs a thread over many cycles with no one typing. Inside a tmux pane, it starts claude at the project root and opens a small driver pane below it. The driver types `/handoff read <slug>`. When the context notice asks for a write, it types `/handoff write <slug>`, then `/clear`, then the read again. Any thread can run under it. The loop counts spend in written cycles, and four bounds catch a runaway session: `--max-cycles` (default 10) ends the run after that many written cycles, a write still unfinished after two retries parks the loop and rings, subagent tool calls ring once when they reach 500 in one cycle, and a thread with a measure probe holds after four cycles without progress. No bound keys on how long a session runs. When the session stops with nothing left to do, the loop parks: it types nothing and names the reason in the driver pane. A question the session ends on, a permission dialog the loop left open, a wait after a denied call, an API error and a hold ring the terminal bell, and tmux shows its `!` flag on a loop window that is not the session's current window. Any other wait, on a file, a job, the session's own background task or another session's lock, prints a line and rings nothing. A wait on a lock more than two hours old rings once, and the driver never takes that lock. Any prompt, from the user or a peer session, starts the next turn. At a permission request for any tool but AskUserQuestion and ExitPlanMode, the loop's hook denies the call and tells the session why, so no dialog waits for someone to answer it. Under `bypassPermissions` the session may rewrite the call only to make it easier for Claude Code to check, such as one command per Bash call with literal paths. A subagent reports the denial to its caller, and the main session works another Plan item or asks the user to run the call. After three denials in a session, or a few more when subagents ask at once, the next request shows its dialog, which holds the loop until someone answers it. AskUserQuestion and ExitPlanMode always show theirs. The allow list, or a mode set through `HQ_CLAUDE_CMD`, still decides what runs unasked, so an unattended run needs every command the thread uses in the allow list, or claude started in a mode that never prompts. Some dialogs show in every mode, such as an `ask` rule or an `rm` of a critical path, and the hook denies those too. The loop appends each permission request, with its tool and full input, and each notification, with its text, to `${XDG_STATE_HOME:-~/.local/state}/claude-handoff/<slug>.log`. The log outlives the loop and sits outside the repo, because a command can carry a token. The session asks only when a step the user did not ask for would weaken security or stability: it changes who or what can reach or act on a system (a password, key, token, permission, tool approval or network rule), reveals a secret, or could lose data someone needs or break a system someone relies on, beyond what a revert restores. It also asks, once nothing else is workable, for the user to run a call the loop denied that a step cannot go on without. The user runs the call, as `! <command>` in the claude pane or in a shell, and replies. After a question the driver types nothing until a prompt or a new session, so a `!` command is safe in between. A request from another Claude session counts as one the user did not make. A step the Directives ask for counts as one the user asked for, so a grant written there at setup goes ahead, unless it changes who or what can reach or act on a system. It decides every other question itself, including a choice the work turns up, by the thread's Directives where one applies and on the evidence where none does. It leaves no such question to the user, and the next handoff files each decision by step 2 of `hq help write`. The loop ends when the thread is marked done, after the one more handoff `hq loop stop <slug>` asks for, at `--max-cycles`, or when the driver loses its event stream. Each of these ends closes claude, prints `hq loop: <reason>` and rings. A claude that exits on its own ends the loop with no reason line. The loop needs bash 4 or later, `tmux` and `jq`.
+- **Bounds.** `--max-cycles` (default 10) ends the run. A write still unfinished after two retries parks the loop, 500 subagent tool calls in one cycle ring, and a thread with a measure probe holds after four cycles without progress.
+- **Parks.** A session with nothing left to do parks the loop. A question, an open dialog, an API error or a hold rings the terminal bell. Any prompt starts the next turn.
+- **Permissions.** The loop's hook denies a permission dialog and tells the session why, up to three a session, so no dialog waits for someone to answer it. The allow list still decides what runs unasked.
+- **Questions.** The session asks the user only before a step that weakens security or stability. It decides every other question itself and files the decision at the next handoff.
+- **Peers.** Threads send each other requests through `.handoff/<slug>/.inbox/`, and a thread parked on a hold or a wait wakes at one.
 
-The measure is an opt-in add-on. The `/hq-loop <slug>` skill writes `.handoff/<slug>/probes/hq-measure` with the user from its templates. `hq finish` runs the probe once per cycle and stores what it measured in the cycle's summary row. After four cycles in a row without measured progress, or when the probe reports the finish line met, the loop holds the thread and rings. A held session takes no Plan step. The next prompt, the user's or a peer's, is the ruling, and the next handoff records it. A thread with no probe never stalls.
+The loop needs bash 4 or later, `tmux` and `jq`. The `/hq-loop` skill sets a thread up for the loop, adds the optional measure probe, and diagnoses a loop that stalls. [Unattended runs](docs/loop.md) holds the full rules.
 
-`HQ_CLAUDE_CMD` replaces `claude` as the command both verbs start, split as a shell splits it. `hq run` adds `/handoff <slug>` as the last argument, and `hq loop` adds `--settings <file>`. A shell function named `claude` is out of reach of a child process, so a wrapper defined that way takes `HQ_CLAUDE_CMD="bash -ic 'claude \"\$@\"' bash"`, which reads `~/.bashrc` on each run.
+## Handoff point
 
-### The handoff point
+Claude Code re-sends the whole conversation on every API call, so each turn costs more than the one before it and a session's cost climbs as the square of its length. A handoff restarts the climb from a small context.
 
-The warning sits at F + W: F is the billed context of the cycle's first call, and W is the work budget, 200,000 tokens unless `HQ_WORK_BUDGET` names another count. Every cycle gets the same room for work, however large its resume. The point never sits closer than one handoff write to the context where Claude Code compacts on its own. `scripts/budget.py` holds the rule. [Design](docs/design.md) covers the cost model, the rule, the detection rules, and the nudge.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/session-cost-dark.svg">
+  <img alt="Cumulative cost of a 40-turn session, growing 17K a turn. On Opus 5.5, running on reaches $28 while handing off 200K past each cycle's first call holds it to $11. On Fable 5.1, running on reaches $35 while handing off holds it to $14." src="docs/session-cost-light.svg">
+</picture>
+
+The handoff point sits at F + W: F is the billed context of the cycle's first call, and W is the work budget, 200,000 tokens unless `HQ_WORK_BUDGET` names another count. Every cycle gets the same room for work, however large its resume. The point never sits closer than one handoff write to the context where Claude Code compacts on its own. [Design](docs/design.md) covers the cost model, the rule, and the detection rules.
+
+The Stop hook prints each of these once, as the session crosses the line:
+
+> Context 275K, at the 269K handoff point for this cycle - a good point to run /handoff.
+
+> Context 302K, 33K past the 269K handoff point, where a handoff begun there would have finished. Every further turn raises the cost of each call of work. Run /handoff.
+
+The second also sends a desktop notification through the terminal.
 
 ## Status line
 
@@ -111,7 +96,29 @@ A plugin cannot set the status line, so this block goes into `~/.claude/settings
 }
 ```
 
-The glob follows the installed copy across upgrades, and `sort -V` picks the newest version. For a git clone, the command names `/path/to/clone/scripts/statusline.py` instead. The line shows the context against the handoff point, both in tokens. It reads both thresholds from the file the Stop hook writes each turn, so the gauge and the warning agree, and it shows no gauge before the session's first Stop. It turns amber at the handoff point and red one handoff write past it. Once the session enters a handoff thread, the thread's slug follows the directory: `myproject:login-timeout`.
+```
+218K/269K  Opus 5.5 myproject
+275K/269K handoff now  Opus 5.5 myproject:auth-refresh
+302K/269K  Opus 5.5 myproject:auth-refresh
+```
+
+The line shows the context against the handoff point. It reads both thresholds from the file the Stop hook writes each turn, so the gauge and the warning agree. It turns amber at the point and red one handoff write past it, and shows no gauge before the session's first Stop. Once the session enters a thread, the slug follows the project name. The glob follows the installed copy across upgrades. For a git clone, the command names `/path/to/clone/scripts/statusline.py` instead.
+
+## Terminal commands
+
+The plugin puts `hq` on the agent's `PATH` alone, so a shell reaches `hq run` and `hq loop` through a function in `~/.bashrc`. The function runs the `hq` on `PATH` where there is one, so an agent session keeps the plugin's own, and the newest installed version otherwise. `bin/hq-completion.bash` completes the verb, then the open slugs in the current repo:
+
+```bash
+unalias hq 2>/dev/null
+hq() {
+    local bin
+    bin=$(type -P hq) || bin=$(ls -d ~/.claude/plugins/cache/claude-handoff/claude-handoff/*/bin/hq | sort -V | tail -1)
+    "$bin" "$@"
+}
+source "$(ls -d ~/.claude/plugins/cache/claude-handoff/claude-handoff/*/bin/hq-completion.bash | sort -V | tail -1)"
+```
+
+`HQ_CLAUDE_CMD` replaces `claude` as the command both verbs start ([Driver](docs/loop.md#driver)).
 
 ## Hooks
 

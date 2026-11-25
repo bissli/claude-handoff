@@ -11,6 +11,11 @@ one turn = context x cache-read price x calls per turn
          = context / 1M x cache-read $/M x 8.8
 ```
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="resend-dark.svg">
+  <img alt="Stacked columns of tokens sent per turn. Each turn adds about 17K new tokens on top of everything before it, and the whole stack is re-sent every turn, reaching about 270K by turn 12." src="resend-light.svg">
+</picture>
+
 Prompt caching is what makes this affordable. A cached token costs a twentieth of a fresh one on Opus 5.5 and a fortieth on Fable 5.1.
 
 <picture>
@@ -34,14 +39,14 @@ One turn at cache-read prices, and what the same turn costs without the cache:
 | 500K    | $0.88    | $17.60        | $1.10     | $44.00        |
 | 1M      | $1.76    | $35.20        | $2.20     | $88.00        |
 
-Per-turn cost climbs in a straight line, so a session's total climbs as its square: each turn costs more than the one before it. A handoff resets the line. The session below starts at the 69K floor, grows 17K a turn, and restarts at 72K after each handoff. A handoff write spends about two of the forty turns, so the held column also buys a little less finished work.
+Per-turn cost climbs in a straight line, so a session's total climbs as its square: each turn costs more than the one before it. A handoff resets the line. The session below hands off 200K past each cycle's first call, starts at the 69K floor, grows 17K a turn, and restarts at 72K after each handoff. A handoff write spends about two of the forty turns, so the held column also buys a little less finished work.
 
-| 40 turns on | hand off at target | run on | held vs run on |
-| ----------- | ------------------: | ------: | --------------: |
-| Opus 5.5    | $14                | $28    | -52%           |
-| Fable 5.1   | $15                | $35    | -57%           |
+| 40 turns on | hand off at F + W | run on | held vs run on |
+| ----------- | -----------------: | ------: | --------------: |
+| Opus 5.5    | $11               | $28    | -61%           |
+| Fable 5.1   | $14               | $35    | -61%           |
 
-The cache and the handoff cut different halves of the bill. On the Fable 5.1 run-on session, the cache turns a would-be $1,410 into $35. The handoff turns the $35 into $15.
+The cache and the handoff cut different halves of the bill. On the Fable 5.1 run-on session, the cache turns a would-be $1,410 into $35. The handoff turns the $35 into $14.
 
 ## Handoff point
 
@@ -68,7 +73,7 @@ Band 0 is the handoff point. Band 1 sits Ww past it, where a handoff begun at ba
 ## Defaults
 
 | default                                 | value   |
-| --------------------------------------- | ------: |
+| --------------------------------------- | -------: |
 | work budget W                           | 200,000 |
 | context a handoff write adds            | 29,000  |
 | billed context after a restart in place | 123,000 |
@@ -94,13 +99,13 @@ The Stop hook's warning reaches the terminal and never the agent. While `~/.clau
 
 ## Glossary
 
-| term             | meaning                                                                                     |
-| ---------------- | ------------------------------------------------------------------------------------------- |
-| turn             | one prompt plus everything Claude does before waiting again                                 |
-| call             | one API request; each tool use is one, about 9 per turn                                     |
-| billed context   | `cache_read + cache_creation + uncached_input` on the last call                             |
-| cycle            | a session's calls from its first, or from a restart in place, to the handoff that ends it   |
-| floor            | F, the billed context of a cycle's first call                                               |
-| handoff point    | F + W, capped one handoff write short of compaction; the gauge's denominator and band 0     |
-| escalation       | band 1, one handoff write past the handoff point                                            |
-| restart in place | a drop in billed context inside one session, such as `/clear`, that rearms the bands         |
+| term             | meaning                                                                                   |
+| ---------------- | ----------------------------------------------------------------------------------------- |
+| turn             | one prompt plus everything Claude does before waiting again                               |
+| call             | one API request; each tool use is one, about 9 per turn                                   |
+| billed context   | `cache_read + cache_creation + uncached_input` on the last call                           |
+| cycle            | a session's calls from its first, or from a restart in place, to the handoff that ends it |
+| floor            | F, the billed context of a cycle's first call                                             |
+| handoff point    | F + W, capped one handoff write short of compaction; the gauge's denominator and band 0   |
+| escalation       | band 1, one handoff write past the handoff point                                          |
+| restart in place | a drop in billed context inside one session, such as `/clear`, that rearms the bands      |

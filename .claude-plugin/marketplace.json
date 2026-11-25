@@ -7,7 +7,7 @@
     {
       "name": "claude-handoff",
       "source": "./",
-      "description": "Warns in-session, while there is still room, that a Claude Code conversation should be handed off, and ships the /handoff skill that writes and reads the handoff"
+      "description": "Carries one task across many Claude Code sessions: each session hands off to .handoff/<slug>/ at a work budget, the next resumes, and hq loop runs the cycle unattended"
     }
   ]
 }

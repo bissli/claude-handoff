@@ -406,16 +406,16 @@ def chart_resend(t: Theme) -> str:
     return svg_doc(300, body)
 
 
-def session_costs(tier: str, target_k: float | None) -> list[float]:
+def session_costs(tier: str, work_budget_k: float | None) -> list[float]:
     """Cumulative cost of a simulated 40-turn session.
 
     Parameters
     ----------
     tier : str
         Key of ``CACHE_READ_PER_MTOK``.
-    target_k : float or None
-        Hand off when context reaches this many thousand tokens; None
-        never hands off.
+    work_budget_k : float or None
+        Hand off when context reaches the cycle's first context plus
+        this many thousand tokens; None never hands off.
 
     Returns
     -------
@@ -428,15 +428,16 @@ def session_costs(tier: str, target_k: float | None) -> list[float]:
       turn, and restarts at 72K (floor plus handoff file) after a
       handoff.
     """
-    context_k = 69.0
+    context_k = cycle_floor_k = 69.0
     totals: list[float] = []
     total = 0.0
     for _ in range(40):
         total += dollars_per_turn(context_k * 1000, tier)
         totals.append(total)
         context_k += 17
-        if target_k is not None and context_k >= target_k:
-            context_k = 72.0
+        if (work_budget_k is not None
+            and context_k >= cycle_floor_k + work_budget_k):
+            context_k = cycle_floor_k = 72.0
     return totals
 
 
@@ -446,10 +447,8 @@ def chart_session_cost(t: Theme) -> str:
     y0, y1 = 72.0, 300.0
     px_per_dollar = (y1 - y0) / 40
     panels = (
-        ('Opus 5.5  (hand off at 352K)', 56.0, 330.0, 'opus-5-5', 352.3,
-         t.blue),
-        ('Fable 5.1  (hand off at 282K)', 450.0, 724.0, 'fable-5-1', 281.8,
-         t.orange),
+        ('Opus 5.5', 56.0, 330.0, 'opus-5-5', t.blue),
+        ('Fable 5.1', 450.0, 724.0, 'fable-5-1', t.orange),
         )
 
     def sy(dollars: float) -> float:
@@ -459,10 +458,10 @@ def chart_session_cost(t: Theme) -> str:
         text_el(56, 24, 'A 40-turn session, both ways', t.primary, 13.5,
                 weight='600'),
         text_el(56, 42,
-                'cumulative cost growing 17K a turn: run on, or hand off at '
-                'the target', t.muted, 11.5),
+                'cumulative cost growing 17K a turn: run on, or hand off '
+                "200K past each cycle's first call", t.muted, 11.5),
         ]
-    for title, px0, px1, tier, target_k, color in panels:
+    for title, px0, px1, tier, color in panels:
         px_per_turn = (px1 - px0) / 40
 
         def sx(turn: float, panel_x0: float = px0,
@@ -476,7 +475,7 @@ def chart_session_cost(t: Theme) -> str:
                             anchor='middle') for turn in (0, 10, 20, 30, 40))
 
         run_on = session_costs(tier, None)
-        held = session_costs(tier, target_k)
+        held = session_costs(tier, 200.0)
         for series, color_used in ((run_on, t.gray), (held, color)):
             points = [(sx(0), sy(0.0))]
             points += [(sx(i + 1), sy(v)) for i, v in enumerate(series)]
