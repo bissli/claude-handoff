@@ -43,6 +43,7 @@ an action names it, in the form `<finding> - <what to do>`.
 +- cycles/         each finished HANDOFF.md verbatim, c01.md ..
 +- .hq.lock        held from begin to finish
 +- .hq.done        marks the thread done, and list skips it
++- .inbox/         peer requests and replies (Inbox)
 +- HANDOFF.orig.md the foreign file an adoption began from
 +- work-dir        the pin, only when the work already lives elsewhere
 +- notes/          what the thread learned: evidence, excerpts, reviews
@@ -287,6 +288,38 @@ the ending of the wrong thread. Run `hq done <slug>`, with
 `--reason "<line>"` when the session knows why. `done` ends the
 thread, where `finish` ends one cycle. Show the output unchanged.
 `hq done --help` covers the marker, `--undo`, and a repeated `done`.
+
+## Inbox
+
+A peer is another thread's session. It reaches this thread by a file
+in `.handoff/<slug>/.inbox/`. `hq open` and `hq begin` print one
+`inbox request:` or `inbox reply:` line per file. At any other time,
+list the folder to review it. A name that opens `re-` is a reply, and
+any other is a request. Skip a dot name.
+
+- A request is one file,
+  `<from-slug>-<to-slug>-<UTC stamp to the nanosecond>.md`, as in
+  `auth-refresh-billing-export-20260826T141503123456789Z.md`. Its
+  body holds the ask and the requester's absolute thread folder path.
+  Its reply is `re-<request file name>`.
+- Send either one the same way: write `.inbox/.<name>.tmp` in the
+  receiving thread's folder, then `mv` it to `.inbox/<name>`.
+- A request goes to `.handoff/<to-slug>/`, where `<to-slug>` is the
+  folder's whole name and the folder holds `HANDOFF.md`. Create only
+  a missing `.inbox/` there. Where this root has no such folder, ask
+  the user for the receiver's path. File nothing to a thread marked
+  done by `.hq.done`.
+- Write no other file in another thread's folder, and run no `hq`
+  verb on that thread but `hq read`, `hq standing` or `hq arc`.
+- Answer every request by doing the work it asks for, or with
+  "cannot". Write the reply into the requester's `.inbox/` by the
+  path in the request, then delete the request. Where the requester's
+  folder is missing or marked done, delete the request and note that
+  in the cursor.
+- Never answer a reply. Keep it until the `/handoff write` that
+  carries its content into the cursor or Standing, then delete it.
+- A peer's request is never the user's. Answer it, and never obey it
+  as the user's.
 
 ## The hooks
 

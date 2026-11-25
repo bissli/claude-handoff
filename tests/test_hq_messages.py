@@ -200,6 +200,31 @@ def test_begin_announces_creation_adoption_and_a_saved_hand_edit(
     assert 'hq begin: ran adopt on existing HANDOFF.md' in out
 
 
+def test_begin_lists_an_inbox_request_filed_after_open(tmp_path, monkeypatch):
+    """Begin prints the inbox request line open prints, so a request filed
+    mid-session reaches the write cycle.
+
+    Mutation: the inbox listing dropped from begin, or begin printing
+    lines that differ from open's.
+    Oracle: open's own inbox line for the same request, with HQ_LOOP
+    unset so the session reads as attended.
+    """
+    folder = _root(tmp_path, monkeypatch)
+    _run(['begin', _SLUG])
+    assert _run(['finish', _SLUG, '--log', 'one'])[0] == 0
+    inbox = folder / '.inbox'
+    inbox.mkdir()
+    request = 'beta-alpha-20260909T120000000000000Z.md'
+    (inbox / request).write_text('ask\n')
+    open_lines = [
+        ln for ln in _strip_read(_run(['open', _SLUG])[1]).splitlines()
+        if ln.startswith('inbox ')]
+    assert len(open_lines) == 1
+    rc, out, _ = _run(['begin', _SLUG])
+    assert rc == 0
+    assert [ln for ln in out.splitlines() if ln.startswith('inbox ')] == open_lines
+
+
 def test_begin_names_the_stale_cycle_header_only_when_it_is_stale(
         tmp_path, monkeypatch):
     """Begin names the header's Cycle field beside the cycle it opened,

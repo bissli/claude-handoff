@@ -125,6 +125,9 @@ def _take_lock(
                 ' - fold anything wanted back into the cursor')
 
     _print_worklist(folder, anch)
+    # A peer message filed after open reaches the session here.
+    for line in threads.inbox_lines(folder):
+        print(line)
     # The writing rules reach the agent when it writes, a subagent that
     # never loaded the skill included.
     print(help_text.HELP_TOPICS['write'])
