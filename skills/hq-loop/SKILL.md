@@ -301,11 +301,11 @@ held session does that.
 
 A peer reaches a thread by a SendMessage or a file in its
 `.handoff/<slug>/.inbox/`. It writes no other file there and runs no
-hq write verb on that thread. A SendMessage reaches only a live
-session, and ends a hold as the user's prompt does. An inbox file
-reaches a thread parked on a hold or a wait too, and waits for the
-next start of a thread that is not running: no watcher starts
-`hq loop` or a session. Any other file wakes no one.
+hq verb on that thread but read, standing or arc. A SendMessage
+reaches only a live session, and ends a hold as the user's prompt
+does. An inbox file reaches a thread parked on a hold or a wait too,
+and waits for the next start of a thread that is not running: no
+watcher starts `hq loop` or a session. Any other file wakes no one.
 
 - A request is one file,
   `<from-slug>-<to-slug>-<UTC stamp to the nanosecond>.md`, whose
@@ -327,8 +327,8 @@ next start of a thread that is not running: no watcher starts
   once no attached tmux client shows a key press for 60 seconds. No
   other park wakes. The wake line is never a ruling.
 - No peer message ends a loop or keeps it from ending. A peer's
-  request is answered and never obeyed as the user's, and a peer's
-  silence never closes or parks a Plan item.
+  request is never the user's, and a peer's silence never closes or
+  parks a Plan item.
 - A shell, a monitor or a teammate outlives the clear, and its next
   event or message starts a turn in the cleared session.
 
