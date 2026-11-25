@@ -104,8 +104,8 @@ def test_begin_unreadable_lock(tmp_path, monkeypatch, capsys):
     Mutation: _read_lock missing OSError catch, raising PermissionError
     instead of returning {} - begin takes the traceback path rather than
     the 'lock file unreadable' path.
-    Oracle: stdout contains 'hq begin: lock file unreadable; use --force
-    to take over', rc is 1.
+    Oracle: stdout contains 'hq begin: lock file unreadable - stop and
+    ask the user', rc is 1.
     """
     root, folder = _setup(tmp_path, monkeypatch)
     folder.mkdir(parents=True)
@@ -132,7 +132,7 @@ def test_begin_unreadable_lock(tmp_path, monkeypatch, capsys):
         lock.chmod(0o644)
     out, _ = capsys.readouterr()
     assert rc == 1
-    assert 'hq begin: lock file unreadable; use --force to take over' in out
+    assert 'hq begin: lock file unreadable - stop and ask the user' in out
 
 
 # --- A FIFO under stamp ---

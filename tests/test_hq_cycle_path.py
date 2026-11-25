@@ -477,7 +477,9 @@ def test_an_unreadable_lock_is_refused_until_force(tmp_path, monkeypatch):
     lock_path.write_text('garbage with no key value pair\n')
     rc, out, _ = _run(['begin', _SLUG])
     assert (rc, out.strip()) == (
-        1, 'hq begin: lock file unreadable; use --force to take over')
+        1, ('hq begin: lock file unreadable - stop and ask the user, and'
+            ' use --force to take over only when the user confirms the session'
+            ' holding it is dead'))
     assert lock_path.read_text() == 'garbage with no key value pair\n'
 
     lock_path.write_text(
@@ -485,7 +487,9 @@ def test_an_unreadable_lock_is_refused_until_force(tmp_path, monkeypatch):
         'time=whenever\ncycle=1\n')
     rc, out, _ = _run(['begin', _SLUG])
     assert (rc, out.strip()) == (
-        1, 'hq begin: lock file unreadable; use --force to take over')
+        1, ('hq begin: lock file unreadable - stop and ask the user, and'
+            ' use --force to take over only when the user confirms the session'
+            ' holding it is dead'))
 
     rc, out, _ = _run(['begin', _SLUG, '--force'])
     assert rc == 0

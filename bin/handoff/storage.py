@@ -558,20 +558,17 @@ def lock_refusal(folder: pathlib.Path, anch: dict, force: bool, verb: str) -> st
         return ''
     age = lock_age(lock, anch['now'])
     if verb == 'begin':
-        if age is None:
-            return 'hq begin: lock file unreadable; use --force to take over'
-        if age < TWO_HOURS:
-            return (
-                f'hq begin: lock held by {lock.get("session")} on'
-                f' {lock.get("host")} since {lock.get("time")};'
-                ' use --force to take over')
-        return ''
-    takeover = f'run hq begin {folder.name} --force to take over'
+        takeover = 'use --force to take over'
+    else:
+        takeover = f'run hq begin {folder.name} --force to take over'
+    stop = f' - stop and ask the user, and {takeover} only when the user'
     if age is None:
-        return f'hq {verb}: lock file unreadable; {takeover}'
+        return (
+            f'hq {verb}: lock file unreadable{stop}'
+            ' confirms the session holding it is dead')
     if age < TWO_HOURS:
         return (
             f'hq {verb}: lock held by {lock.get("session")} on'
-            f' {lock.get("host")} since {lock.get("time")};'
-            f' {takeover}')
+            f' {lock.get("host")} since {lock.get("time")}{stop}'
+            ' confirms that session is dead')
     return ''

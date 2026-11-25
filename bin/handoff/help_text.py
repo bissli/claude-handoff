@@ -205,6 +205,60 @@ hq open prints these reading steps after its findings. Each binds.
   hq standing <slug> <id>. Where the thread started, how it got
   here, or where it stands overall goes to hq arc <slug> first.
   Answer from it, and read further only for a fact it lacks.""",
+    'review': """\
+hq help review - the reviewer pass and the Skeptic's brief
+
+hq begin --check and hq open --housekeeping print this pass. It runs
+at /handoff check, and on a write only when the user's call carries
+--check. The agent never runs it unasked.
+
+With the file on disk, and before finish, spawn one subagent, the
+Skeptic, at the tier the host's skill names, and hand it the brief
+below. It returns one numbered item per finding, '<n>. <finding>'.
+Re-check each finding in the write session, then stop. Run the
+command a finding gives once its re-check holds. Never loop back to
+the Skeptic. A question it raises for the user goes under
+## Open questions. Do not stop for it.
+
+The Skeptic's brief:
+
+  finish renders the header line and the blocks after this pass, so
+  they are a cycle behind. A stale or absent sha, cycle, id, row, or
+  label there is never a finding. Never open ledger.tsv or
+  standing.md.
+
+  1. From the file alone, fill five slots: the task, the next action,
+     why it is next, how to verify it, and what to ask the user. An
+     empty slot is a finding, except 'none' in the last slot.
+  2. For each always row hq artifacts <slug> prints, open its span
+     with hq read <slug> <path>. Report any point where the Now step
+     contradicts it.
+  3. Read a standing id the cursor cites with hq standing <slug>
+     <id>, never from the block.
+  4. Name each cursor line the next session does not act on. The
+     next session acts on a line when it executes, checks, obeys, or
+     answers it, or needs it to understand such a line. It does not
+     act on history, a done Plan item, an open item's detail beyond
+     its done condition, a closed approach, a superseded item, or a
+     ruling already applied or recorded in a Standing item. A line
+     that cites evidence ids is one it acts on. One finding covers a
+     run of adjacent lines of one kind, and gives the section, the
+     first and last words, and the reason. Never name a line the Now
+     step, an open Plan item, or an open question depends on, nor an
+     environment fact the Now step or an open Plan item uses.
+  5. Last, name a live decision that only records a step - a commit,
+     a verdict, one site's reading, or a spike's answer - such as
+     'Crash repaired (3f2a9c1)' or '4be01c2 verify PASS', a live
+     decision about a thread hq list --done lists, and a live
+     artifact row for done work the cursor does not name: a past
+     cycle's probe or output directory, or a spike or verify file
+     whose verdict a Standing item or another file holds. Confirm
+     each with hq standing <slug> <id> or hq artifacts <slug>. Give
+     the id or path and the fix, hq supersede <slug> <id> --reason
+     "<why>" or hq stamp <slug> <path> --archive --reason "<why>".
+     Never name a decision the cursor cites or whose ruling still
+     holds, an always or edit row, or a row the Now step or an open
+     Plan item uses.""",
     'rules': """\
 hq help rules - what the script refuses and why
 
@@ -270,11 +324,7 @@ Each binds this cycle. Run the steps in order.
 
 1. hq begin <slug> takes the lock and prints the work list, whose
    'cycle N begun by <session> on <host>' line names the cycle. Act
-   on each work-list item in steps 2 and 3. A note, stamp, or
-   supersede refusal ending 'run hq begin <slug> --force to take
-   over' means another session holds the lock. Stop and tell the
-   user, and run that only when the user confirms that session is
-   dead.
+   on each work-list item in steps 2 and 3.
 2. Run one hq note per item settled this session that a later cycle
    must follow or know, or one --batch call for all of them. A call
    that settles only this step goes in the finish --log line, and in
@@ -299,8 +349,8 @@ Each binds this cycle. Run the steps in order.
    below the marker alone.
 5. The reviewer pass, the Skeptic, runs at /handoff check, and on a
    write only when the user's call carries --check. On any other
-   write, skip this step. The skill's Reviewer pass section holds
-   the brief. Each finding that survives the re-check becomes a
+   write, skip this step. hq help review holds the pass and the
+   brief. Each finding that survives the re-check becomes a
    note, a stamp, a supersede, or a cursor edit in this cycle.
    Return to step 2 for it. A cursor line a surviving finding names
    moves out by the cursor rules below.

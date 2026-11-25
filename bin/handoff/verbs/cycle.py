@@ -41,7 +41,8 @@ def _take_lock(
     anch : dict
         Anchors for this invocation; supplies session, host, time, cycle.
     argv : argparse.Namespace
-        Parsed flags; ``--force`` takes over any lock.
+        Parsed flags; ``--force`` takes over any lock, and ``--check``
+        appends the review topic after the write topic.
     seeded_handoff : bool
         True where this run seeded HANDOFF.md itself, which skips the
         rescue copy.
@@ -127,6 +128,8 @@ def _take_lock(
     # The writing rules reach the agent when it writes, a subagent that
     # never loaded the skill included.
     print(help_text.HELP_TOPICS['write'])
+    if getattr(argv, 'check', False):
+        print(help_text.HELP_TOPICS['review'])
     return 0
 
 

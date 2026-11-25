@@ -1,8 +1,10 @@
 """Print-behavior tests for the topic banners appended by begin and open.
 
-begin appends HELP_TOPICS['write'] after its work list on success only.
-open appends HELP_TOPICS['read'] just before returning when HANDOFF.md
-exists and --not-carried is not active.
+begin appends HELP_TOPICS['write'] after its work list on success only,
+and HELP_TOPICS['review'] after it under --check. open appends
+HELP_TOPICS['read'] just before returning when HANDOFF.md exists and
+--not-carried is not active, and HELP_TOPICS['review'] after it under
+--housekeeping.
 """
 
 import contextlib
@@ -98,6 +100,46 @@ def test_open_clean_folder_prints_only_read_topic(tmp_path, monkeypatch):
     rc, out, _ = _run(['open', _SLUG])
     assert rc == 0
     assert out == help_text.HELP_TOPICS['read'] + '\n'
+
+
+def test_begin_check_alone_appends_the_review_topic(tmp_path, monkeypatch):
+    """Begin --check prints the review topic after the write topic; a
+    plain begin prints none.
+
+    Mutation: the review print dropped, gated on the wrong flag, placed
+    ahead of the write topic, or left unconditional so every write gets
+    the Skeptic brief the agent must never run unasked.
+    Oracle: a plain begin ends with the write topic and holds no review
+    text; begin --check ends with write topic then review topic.
+    """
+    _root(tmp_path, monkeypatch)
+    write = help_text.HELP_TOPICS['write']
+    review = help_text.HELP_TOPICS['review']
+    rc, out, _ = _run(['begin', _SLUG])
+    assert rc == 0
+    assert out.endswith(write + '\n')
+    assert review not in out
+    rc, out, _ = _run(['begin', _SLUG, '--check'])
+    assert rc == 0
+    assert out.endswith(write + '\n' + review + '\n')
+
+
+def test_open_housekeeping_alone_appends_the_review_topic(tmp_path, monkeypatch):
+    """Open --housekeeping prints the review topic after the read topic;
+    a plain open prints none.
+
+    Mutation: the review print dropped, gated on the wrong flag, or left
+    unconditional so a resuming read gets the Skeptic brief.
+    Oracle: whole stdout of each open on a clean finished cycle.
+    """
+    _root(tmp_path, monkeypatch)
+    _run(['begin', _SLUG])
+    _run(['finish', _SLUG, '--log', 'c1'])
+    read = help_text.HELP_TOPICS['read']
+    rc, out, _ = _run(['open', _SLUG])
+    assert (rc, out) == (0, read + '\n')
+    rc, out, _ = _run(['open', _SLUG, '--housekeeping'])
+    assert (rc, out) == (0, read + '\n' + help_text.HELP_TOPICS['review'] + '\n')
 
 
 def test_open_with_finding_prints_finding_before_read_topic(tmp_path, monkeypatch):

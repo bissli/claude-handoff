@@ -363,7 +363,6 @@ def test_every_message_prefix_the_skill_quotes_is_still_printed():
     """
     constants = [full for full, _ in _texts()]
     quoted = re.findall(r'`(hq \w+: [^`]+)`', _norm(SKILL.read_text()))
-    assert len(quoted) >= 2, quoted
     for span in quoted:
         prefix = _norm(re.split(r'<|\.\.\.', span)[0]).rstrip(' :;')
         assert len(prefix) >= 8, span
@@ -420,28 +419,6 @@ def test_every_refusal_string_in_the_script_carries_its_move():
         full for full, longest in builders
         if not _TAIL.search(full) and longest not in corpus]
     assert missing == [], missing
-
-
-def test_the_lock_stop_stays_in_the_skill():
-    """The two lock refusals, and the --force clause, are quoted in the
-    skill itself.
-
-    Mutation: the user-confirmation rule trimmed out of the skill during
-    a length pass. The printed line ends `use --force to take over` with
-    no condition, so an agent acting on the line alone takes over a live
-    session's cycle; the restraint has to precede the line, and these
-    prints pass a name, so the print test never sees them.
-    Oracle: every package string piece holding `--force`, against the
-    whitespace-normalized skill.
-    """
-    skill_text = _norm(SKILL.read_text())
-    pieces = [
-        p for full, parts in _texts() if len(full) <= 100
-        for p in parts if 'use --force' in p]
-    assert len(pieces) >= 2, pieces
-    assert [p for p in pieces if p.strip() not in skill_text] == []
-    assert 'hq begin: lock file unreadable' in skill_text
-    assert 'hq begin: lock held by' in skill_text
 
 
 def test_every_reviewer_seat_names_the_host_tier_before_a_literal_model():

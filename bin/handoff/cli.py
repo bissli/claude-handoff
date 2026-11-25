@@ -94,7 +94,11 @@ def build_parser() -> argparse.ArgumentParser:
         'line this session writes belongs to it.\n'
         "--worked makes the handoff this session's worked thread, so its\n"
         'finish moves Last worked: pass it when the session did the\n'
-        "thread's task without hq open. Filing into a thread never passes it."
+        "thread's task without hq open. Filing into a thread never passes it.\n"
+        '--force takes over a lock another session holds: pass it only on\n'
+        "the user's word that the session is dead.\n"
+        '--check prints hq help review after the write topic: pass it at\n'
+        '/handoff check and on a write the user called with --check.'
     )
     beg = sub.add_parser(
         'begin',
@@ -103,6 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
     beg.add_argument('slug')
     beg.add_argument('--force', action='store_true')
     beg.add_argument('--worked', action='store_true')
+    beg.add_argument('--check', action='store_true')
 
     _stamp_epilog = (
         'The path is relative to the handoff folder: ./SPEC.md and\n'
@@ -261,7 +266,8 @@ def build_parser() -> argparse.ArgumentParser:
         'cycle that the file on disk, standing.md, a live label, and the\n'
         'stamped siblings no longer carry, and writes nothing.\n'
         "--housekeeping reads the thread without making it the session's\n"
-        "worked thread, so its finish keeps the thread's Last worked date."
+        "worked thread, so its finish keeps the thread's Last worked date,\n"
+        'and prints hq help review after the read topic.'
     )
     op = sub.add_parser(
         'open',

@@ -22,7 +22,8 @@ def verb_open(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
         Current ``branch``, ``sha``, ``cycle`` and ``session``.
     argv : argparse.Namespace
         Parsed arguments. ``not_carried`` limits the output to the carry
-        listing.
+        listing. ``housekeeping`` appends the ``hq help review`` text
+        after the read topic.
 
     Returns
     -------
@@ -309,4 +310,6 @@ def verb_open(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> int
             hold_line = (own_loop / 'hold').read_text(encoding='utf-8').strip()
             print(f'{hold_line} {progress.HOLD_TEXT}')
     print(help_text.HELP_TOPICS['read'])
+    if getattr(argv, 'housekeeping', False):
+        print(help_text.HELP_TOPICS['review'])
     return 0

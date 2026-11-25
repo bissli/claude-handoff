@@ -65,6 +65,32 @@ def _lock(folder, session, time_str, cycle=1):
         f'time={time_str}\ncycle={cycle}\n')
 
 
+def test_every_lock_refusal_tells_the_agent_to_stop_and_ask(tmp_path, monkeypatch):
+    """Each verb's young-lock and unreadable-lock refusal carries the stop.
+
+    Mutation: the stop clause dropped from either refusal shape, or from
+    the non-begin branch, so an agent acting on the line alone runs
+    --force and takes over a live session's cycle.
+    Oracle: lock_refusal for begin, note, stamp, and supersede against a
+    lock 1h59m old and one with no parseable time.
+    """
+    folder = _root(tmp_path, monkeypatch)
+    anch = {'session': _SESSION, 'now': '2026-09-09T12:00:00'}
+    stop = ' - stop and ask the user, and '
+    for verb in ('begin', 'note', 'stamp', 'supersede'):
+        takeover = ('use --force to take over' if verb == 'begin'
+                    else f'run hq begin {_SLUG} --force to take over')
+        _lock(folder, 'other-session', '2026-09-09T10:01:00')
+        assert storage.lock_refusal(folder, anch, False, verb) == (
+            f'hq {verb}: lock held by other-session on other-host since'
+            f' 2026-09-09T10:01:00{stop}{takeover} only when the user'
+            ' confirms that session is dead')
+        _lock(folder, 'other-session', 'whenever')
+        assert storage.lock_refusal(folder, anch, False, verb) == (
+            f'hq {verb}: lock file unreadable{stop}{takeover} only when'
+            ' the user confirms the session holding it is dead')
+
+
 def _spec(folder, text='# Spec\n\n## 1. Scope\n\nOne.\n'):
     (folder / 'SPEC.md').write_text(text)
 
@@ -216,7 +242,8 @@ def test_begin_refuses_a_young_lock_and_names_a_takeover(tmp_path, monkeypatch):
     assert rc == 1
     assert out.strip() == (
         'hq begin: lock held by other-session on other-host since'
-        ' 2026-09-09T10:01:00; use --force to take over')
+        ' 2026-09-09T10:01:00 - stop and ask the user, and use --force'
+        ' to take over only when the user confirms that session is dead')
     _lock(folder, 'other-session', '2026-09-09T09:59:00', cycle=2)
     rc, out, _ = _run(['begin', _SLUG])
     assert rc == 0

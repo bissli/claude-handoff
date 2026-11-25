@@ -199,10 +199,10 @@ Wire refresh_token() into poll() at scripts/auth.py:88, in the 401 branch.
 
 ### Write path
 
-Run `hq begin <slug>`. It takes the lock and prints the work list,
-then the steps, command forms, and rules of `hq help write`. Run the
-printed steps in order. Each binds this cycle. The last one runs
-`hq finish`:
+Run `hq begin <slug>`, and add `--check` when the user's call carries
+it. `begin` takes the lock and prints the work list, then the steps,
+command forms, and rules of `hq help write`. Run the printed steps in
+order. Each binds this cycle. The last one runs `hq finish`:
 
 ```
 hq begin auth-refresh
@@ -210,79 +210,24 @@ hq finish auth-refresh \
   --log "token store and refresh endpoint written"
 ```
 
-A lock refusal (exit 1) means another session is inside a cycle
-under two hours old. The two refusals are `hq begin: lock held by
-<session> on <host> since <time>; use --force to take over` and
-`hq begin: lock file unreadable; use --force to take over`. Stop
-and tell the user. Run `begin --force` only when the user confirms
-that session is dead. `note`, `stamp`, and `supersede` print the
-same two refusals under their own names, ending `run hq begin
-<slug> --force to take over`. Stop the same way, and run that only
-on the same confirmation. `begin` takes over a lock older than two
-hours without `--force`.
-
 ### Reviewer pass
 
 The pass is step 5 of `hq help write`, and the agent never runs it
-unasked. With the file on disk, and before `finish`, spawn the
-Skeptic below.
-It returns one numbered item per finding, `<n>. <finding>`. Re-check
-each finding in the write session, then stop. Run the command a
-finding gives once its re-check holds. Never loop back to the
-Skeptic. A question it raises for the user goes under `## Open
-questions`. Do not stop for it.
+unasked. `hq help review` holds the pass and the Skeptic's brief.
+`hq begin <slug> --check` and `hq open <slug> --housekeeping` print
+it. The pass spawns the Skeptic at the tier this skill names:
 
 - Skeptic (Agent tool, at the executing tier the host's agent rules
   name, else type `general-purpose` with model `sonnet`). Use the
   judging tier, or model `opus` where the host names none, only when
   the Now step's correctness turns on a span the Skeptic must read
-  code to settle. Name the tier and the reason before launching. Its
-  brief:
-
-  `finish` renders the header line and the blocks after this pass, so
-  they are a cycle behind. A stale or absent sha, cycle, id, row, or
-  label there is never a finding. Never open `ledger.tsv` or
-  `standing.md`.
-
-  1. From the file alone, fill five slots: the task, the next action,
-     why it is next, how to verify it, and what to ask the user. An
-     empty slot is a finding, except `none` in the last slot.
-  2. For each `always` row `hq artifacts <slug>` prints, open its span
-     with `hq read <slug> <path>`. Report any point where the Now step
-     contradicts it.
-  3. Read a standing id the cursor cites with `hq standing <slug>
-     <id>`, never from the block.
-  4. Name each cursor line the next session does not act on. The
-     next session acts on a line when it executes, checks, obeys, or
-     answers it, or needs it to understand such a line. It does not
-     act on history, a done Plan item, an open item's detail beyond
-     its done condition, a closed approach, a superseded item, or a
-     ruling already applied or recorded in a Standing item. A line
-     that cites evidence ids is one it acts on. One finding covers a
-     run of adjacent lines of one kind, and gives the section, the
-     first and last words, and the reason. Never name a line the Now
-     step, an open Plan item, or an open question depends on, nor an
-     environment fact the Now step or an open Plan item uses.
-  5. Last, name a live decision that only records a step - a commit,
-     a verdict, one site's reading, or a spike's answer - such
-     as `Crash repaired (3f2a9c1)` or `4be01c2 verify PASS`, a live
-     decision about a thread `hq list --done` lists, and a live
-     artifact row for done work the cursor does not name: a past
-     cycle's probe or output directory, or a spike or verify file
-     whose verdict a Standing item or another file holds. Confirm
-     each with `hq standing <slug> <id>` or `hq artifacts <slug>`.
-     Give the id or path and the fix, `hq supersede <slug> <id>
-     --reason "<why>"` or `hq stamp <slug> <path> --archive --reason
-     "<why>"`. Never name a decision the cursor cites or whose ruling
-     still holds, an `always` or `edit` row, or a row the Now step or
-     an open Plan item uses.
+  code to settle. Name the tier and the reason before launching.
 
 ### Report
 
-Whatever else the turn contains, its final message repeats, word for
-word, the path-and-size line and the `resume:` line that `finish`
-printed. It tells the user to kill this session and start a fresh one
-before running the resume line.
+Step 6 of `hq help write` holds the Report rule: what the turn's final
+message repeats from the `finish` output. It binds whatever else the
+turn contains.
 
 ## read
 
@@ -312,11 +257,11 @@ questions do not stop it. A target with no conforming header is
 converted by `reference/adoption.md`, and the check stops there.
 Otherwise run the write path:
 
-1. `begin`.
+1. `begin --check`.
 2. Steps 2 to 4 of `hq help write`, for findings alone: what `open`
    printed, and later what the Skeptic returns. Each becomes a note, a
    stamp, or a cursor edit.
-3. The Reviewer pass.
+3. The Reviewer pass that `hq help review` prints.
 4. `finish --log "check: <n> findings applied - <what they changed>"`,
    where n counts both kinds of finding.
 
@@ -365,6 +310,7 @@ this file.
 - `hq help write`: the write steps, the command forms, and the
   cursor, ledger, Unfiled, and todo rules.
 - `hq help read`: the steps after `open`.
+- `hq help review`: the reviewer pass and the Skeptic's brief.
 - `hq help anchors`: every `--where` form.
 - `hq help kinds`: kinds, tiers, and ledger fields.
 - `hq help rules`: R1 to W2 in full.
