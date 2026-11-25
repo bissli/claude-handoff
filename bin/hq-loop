@@ -543,9 +543,12 @@ drive() {
                         if [[ -e $dir/stop ]] && ((stop_sent == 0)); then
                             rest=1
                         fi
-                        if [[ $park == lock ]]; then
+                        if [[ $park == lock || $park == stale ]]; then
                             park='' rest=1
                         fi
+                    elif [[ $park == lock ]] &&
+                        [[ -n $(find "$folder/.hq.lock" -mmin +120 2>/dev/null) ]]; then
+                        park_with stale alert "the lock on $slug is over two hours old: run hq begin $slug --force once its session is dead"
                     fi
                     if ((rest)); then
                         stop_decisions

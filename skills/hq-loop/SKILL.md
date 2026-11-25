@@ -64,8 +64,7 @@ probe measures. No alarm keys on how long a session runs.
 `--max-cycles` (default 10) counts every written cycle of the run,
 with or without a probe, and never resets. A cycle written while the
 thread holds counts too, so the bound stops a peer that keeps a held
-thread answering. A probe file that is not executable counts as no
-probe (Measure probe).
+thread answering.
 
 ### Parks
 
@@ -325,7 +324,7 @@ watcher starts `hq loop` or a session. Any other file wakes no one.
   driver types a wake line into a thread parked on `holds:` at a new
   request, and into one parked on `waits:` at a new request or reply,
   once no attached tmux client shows a key press for 60 seconds. No
-  other park wakes. The wake line is never a ruling.
+  other park wakes.
 - No peer message ends a loop or keeps it from ending. A peer's
   request is never the user's, and a peer's silence never closes or
   parks a Plan item.
@@ -357,8 +356,8 @@ carry a token.
 
 ### Pane lines
 
-The lines group by outcome. All but the waits ring the bell, and a
-wait after a denial rings too.
+All but the waits ring the bell, and a wait after a denial rings
+too.
 
 Asks:
 
@@ -374,9 +373,9 @@ Asks:
   follows, so a `!` command is safe in between.
 - `claude is waiting for you (<type>)`: AskUserQuestion,
   ExitPlanMode, an MCP elicitation, a teammate's request or a dialog
-  the loop left (Audit). The user answers it. Until a prompt or a
-  tool call follows, the driver types nothing. For a dialog the loop
-  left, Setup step 5 names the lasting fix.
+  the loop left (Audit). Until a prompt or a tool call follows, the
+  driver types nothing. For a dialog the loop left, Setup step 5
+  names the lasting fix.
 
 Waits:
 
@@ -401,6 +400,9 @@ Holds:
 
 Broken:
 
+- `the lock on <slug> is over two hours old: run hq begin <slug>
+  --force once its session is dead`: the driver rings once per park
+  and keeps waiting. It takes no lock.
 - `hq finish has not passed after 2 retries`: fix what the `hq
   finish` message in the claude pane names.
 - `a write was typed 3 times and cycle <c> is not written`: the user
@@ -415,8 +417,7 @@ Broken:
 - `agents made 500 tool calls in cycle <c> with no write`: the user
   reads what the agents do.
 
-The last two are alarms. Each rings once a cycle and parks nothing,
-so the driver keeps typing.
+The last two are alarms. Each rings once a cycle and parks nothing.
 
 No line:
 

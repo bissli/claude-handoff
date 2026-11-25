@@ -11,7 +11,7 @@ import time
 from typing import Any
 
 import pytest
-from handoff import cli
+from handoff import cli, storage
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 COMPLETION = ROOT / 'bin' / 'hq-completion.bash'
@@ -853,6 +853,40 @@ def test_foreign_lock_parks_and_the_tick_rechecks(tmp_path):
         time.sleep(1)
         assert drive.typed() == [READ]
         (drive.folder / '.hq.lock').unlink()
+        assert _wait_for(lambda: len(drive.typed()) == 2, limit=12)
+        assert drive.typed()[1] == _loop_text('NUDGE_TEXT')
+    finally:
+        drive.close()
+
+
+def test_foreign_lock_past_the_begin_expiry_rings_once(tmp_path):
+    """Verify a foreign-lock park rings once when the lock passes the age
+    at which hq begin takes it over, and resumes once the lock is gone.
+
+    Mutation: the stale tick row dropped; its age drifted from
+    storage.TWO_HOURS; or stale left out of the lock-gone resume.
+    Oracle: lock mtimes five minutes either side of storage.TWO_HOURS,
+    and the stub tmux's bells and typed lines.
+    """
+    drive = _Drive(tmp_path, 10)
+    try:
+        drive.start()
+        lock = drive.folder / '.hq.lock'
+        lock.write_text('slug=auth-refresh\nsession=S2\n')
+        young = time.time() - storage.TWO_HOURS + 300
+        os.utime(lock, (young, young))
+        drive.emit('PostToolUse main S1 0 0')
+        drive.stop()
+        assert _wait_for(lambda: '[1/10] waits on the lock of S2' in drive.said())
+        time.sleep(11)
+        assert drive.rang('two hours old') == 0
+        old = time.time() - storage.TWO_HOURS - 300
+        os.utime(lock, (old, old))
+        assert _wait_for(lambda: drive.rang('two hours old') == 1, limit=12)
+        time.sleep(11)
+        assert drive.rang('two hours old') == 1
+        assert drive.typed() == [READ]
+        lock.unlink()
         assert _wait_for(lambda: len(drive.typed()) == 2, limit=12)
         assert drive.typed()[1] == _loop_text('NUDGE_TEXT')
     finally:
