@@ -339,6 +339,9 @@ hq arc:
 - A cycle that only repaired the record says which fact it restored.
 - A check writes check: <n> findings applied - <what they changed>.
 
+The reviewer pass, the Skeptic, runs at /handoff check, and on a
+write only when the user's call carries --check.
+
 Ledger tiers. read_before is a tier, and stamp seeds it from the
 kind: a spec seeds always, a draft edit, all else never.
 

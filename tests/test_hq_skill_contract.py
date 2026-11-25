@@ -25,7 +25,7 @@ from handoff import cli, help_text, markdown
 _HQ_CALL = 'hq'
 # Flags in the skill that belong to other tools, never to hq.py.
 _FOREIGN_FLAGS = {
-    '--help', '--no-check', '--oneline', '--porcelain', '--show-toplevel'}
+    '--check', '--help', '--oneline', '--porcelain', '--show-toplevel'}
 # Exit-2 usage slips whose text is the whole remedy: they name the
 # token the parser rejected, on a command that wrote nothing.
 _USAGE_ONLY_PRINTS = {

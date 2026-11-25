@@ -111,7 +111,8 @@ How late the session is never decides it.
 `/handoff write [slug]` and `/handoff read [slug]`, typed by the user,
 override the question. A verb the agent picks itself, as when it
 answers a nudge, goes through the question. A first argument that
-matches a verb in the table is that verb, never a slug.
+matches a verb in the table is that verb, never a slug. `--check`
+anywhere in the call is a flag, never a verb or slug.
 
 Guess neither the verb nor the target. Where either is ambiguous, say
 so, list the candidates, and stop. Touch nothing.
@@ -261,8 +262,8 @@ Run these steps in order.
    marker, by the printed rules. Carry forward every line this session
    did not settle. Leave the header line and everything below the
    marker alone.
-5. Run the Reviewer pass below. Each finding that survives the
-   re-check becomes a `note`, a `stamp`, a `supersede`, or a cursor
+5. At `/handoff check`, or when the user's call carries `--check`,
+   run the Reviewer pass below. Each finding that survives the re-check becomes a `note`, a `stamp`, a `supersede`, or a cursor
    edit in this cycle. Return to step 2 for it. A cursor line a
    surviving finding names moves out by the printed rules.
 6. Run `hq finish <slug> --log "<one line for the Log>"`. It exits 1
@@ -282,14 +283,12 @@ hq finish auth-refresh \
 
 ### Reviewer pass
 
-With the file on disk, and before `finish`, spawn the Skeptic below.
+The agent never runs the pass unasked. With the file on disk, and before `finish`, spawn the Skeptic below.
 It returns one numbered item per finding, `<n>. <finding>`. Re-check
 each finding in the write session, then stop. Run the command a
 finding gives once its re-check holds. Never loop back to the
 Skeptic. A question it raises for the user goes under `## Open
-questions`. Do not stop for it. Only `--no-check` from the user,
-anywhere in the call, skips this pass. The agent never grants itself
-the skip.
+questions`. Do not stop for it.
 
 - Skeptic (Agent tool, at the executing tier the host's agent rules
   name, else type `general-purpose` with model `sonnet`). Use the
@@ -341,7 +340,7 @@ the skip.
 Whatever else the turn contains, its final message repeats, word for
 word, the path-and-size line and the `resume:` line that `finish`
 printed. It tells the user to kill this session and start a fresh one
-before running the resume line. This holds with `--no-check` too.
+before running the resume line.
 
 ## read
 
@@ -375,7 +374,7 @@ Otherwise run the write path:
 2. Steps 2 to 4 of the write path, for findings alone: what `open`
    printed, and later what the Skeptic returns. Each becomes a note, a
    stamp, or a cursor edit.
-3. The Reviewer pass. Only the user's `--no-check` skips it.
+3. The Reviewer pass.
 4. `finish --log "check: <n> findings applied - <what they changed>"`,
    where n counts both kinds of finding.
 

@@ -58,9 +58,9 @@ The second also sends a desktop notification through the terminal.
 | `/handoff list`         | every open handoff in the repo, newest first |
 | `/handoff check [slug]` | review one handoff in place and fix it       |
 | `/handoff done <slug>`  | end the thread; `--undo` reopens it          |
-| `/handoff --no-check`   | write without the reviewer pass              |
+| `/handoff --check`      | write with the reviewer pass                 |
 
-A write ends with a reviewer pass: a fresh agent reads the file cold and reports what a resuming session could not act on. Only the user's `--no-check` skips it. After the write, the session is killed and a fresh one runs the printed `resume:` line.
+A check, or a write the user calls with `--check`, ends with a reviewer pass: a fresh agent reads the file cold and reports what a resuming session could not act on. After the write, the session is killed and a fresh one runs the printed `resume:` line.
 
 A thread's folder, `.handoff/<slug>/`, holds:
 
