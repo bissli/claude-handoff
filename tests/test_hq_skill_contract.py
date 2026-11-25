@@ -130,6 +130,25 @@ def _fenced_commands(text):
             yield cmd.split('<<')[0].strip()
 
 
+def _indented_commands(text):
+    """Yield each hq command a help topic shows as an example, joined
+    across backslash continuations and cut before any heredoc marker.
+
+    An example line opens with exactly four spaces and `hq `. A heredoc
+    body or a continuation line yields nothing on its own.
+    """
+    buf = ''
+    for line in text.splitlines():
+        if not buf and not re.match(r' {4}hq ', line):
+            continue
+        buf += line.strip()
+        if buf.endswith('\\'):
+            buf = buf[:-1] + ' '
+            continue
+        cmd, buf = buf, ''
+        yield cmd.split('<<')[0].strip()
+
+
 def _package_trees():
     """Return (file name, parsed tree) for each module of the handoff package.
     """
@@ -257,13 +276,15 @@ def test_every_flag_named_by_either_side_is_known_to_the_other():
 
 
 def test_every_command_example_in_the_skill_parses():
-    """Each fenced hq.py example in the skill or a reference file parses
-    as written, and the skill keeps one for each verb of the write path.
+    """Each hq.py example in the skill, a reference file, or the write
+    help topic parses as written, and the skill and that topic together
+    keep one for each verb of the write path.
 
     Mutation: an example such as `note <slug> --batch -`, which the parser
     rejects while the kind slot carries choices, or a verb shown with a
     flag it lacks, or the begin/stamp/note/supersede/finish examples
-    trimmed out of the skill so the agent composes them unaided.
+    trimmed out of both the skill and hq help write, so the agent
+    composes them unaided.
     Oracle: parse_known_args on the exact tokens after the slug
     placeholder is filled; the only leftover is a note body main() has an
     empty slot for.
@@ -271,9 +292,12 @@ def test_every_command_example_in_the_skill_parses():
     parser = cli.build_parser()
     texts = [SKILL.read_text()] + [
         p.read_text() for p in sorted(REFERENCE_DIR.glob('*.md'))]
+    write_commands = list(_indented_commands(help_text.HELP_TOPICS['write']))
     commands = [c for t in texts for c in _fenced_commands(t)]
-    skill_verbs = {c.split()[1] for c in _fenced_commands(SKILL.read_text())}
-    assert {'begin', 'stamp', 'note', 'supersede', 'finish'} <= skill_verbs
+    commands += write_commands
+    shown = list(_fenced_commands(SKILL.read_text())) + write_commands
+    shown_verbs = {c.split()[1] for c in shown}
+    assert {'begin', 'stamp', 'note', 'supersede', 'finish'} <= shown_verbs
     for cmd in commands:
         argv = shlex.split(cmd.replace('<slug>', 'demo'))[1:]
         try:

@@ -263,10 +263,88 @@ at where the folder was.
   HANDOFF.md outside a cycle: a rewrite outside one trips block sha
   mismatch at open, and begin archives the file as c<NN>.hand.md.""",
     'write': """\
-hq help write - the cursor, ledger, Unfiled, and todo rules of a cycle
+hq help write - the steps, command forms, and rules of a write cycle
 
-hq begin prints these writing rules after its work list. Each binds
-this cycle.
+hq begin prints these steps and writing rules after its work list.
+Each binds this cycle. Run the steps in order.
+
+1. hq begin <slug> takes the lock and prints the work list, whose
+   'cycle N begun by <session> on <host>' line names the cycle. Act
+   on each work-list item in steps 2 and 3. A note, stamp, or
+   supersede refusal ending 'run hq begin <slug> --force to take
+   over' means another session holds the lock. Stop and tell the
+   user, and run that only when the user confirms that session is
+   dead.
+2. Run one hq note per item settled this session that a later cycle
+   must follow or know, or one --batch call for all of them. A call
+   that settles only this step goes in the finish --log line, and in
+   the commit subject where the cycle commits. Run
+   hq supersede <slug> <old-id> <new-id> for each ruling that
+   reverses an earlier one.
+3. Place each file this session made before its first stamp. Only a
+   file that outlives the session, or is stamped, is bound by this
+   step. What the thread learned goes under notes/. What it made
+   goes under specs/, drafts/, or outputs/, by kind. A throwaway
+   script goes under probes/. No file sits loose at the top level of
+   .handoff/<slug>/. A thread pinned with hq work-dir keeps the
+   specs, drafts, and outputs it makes in that directory instead,
+   each stamped by its ~ or absolute path with --kind spec or --kind
+   draft to gate it (hq work-dir --help). Then run one hq stamp per
+   artifact created, re-read, or moved, or one --batch call. A
+   refusal names the way out: a successor, an archive reason, or
+   leaving the row gated.
+4. Rewrite the cursor, from ## Task down to the first <!-- hq:
+   marker, by the cursor rules below. Carry forward every line this
+   session did not settle. Leave the header line and everything
+   below the marker alone.
+5. The reviewer pass, the Skeptic, runs at /handoff check, and on a
+   write only when the user's call carries --check. On any other
+   write, skip this step. The skill's Reviewer pass section holds
+   the brief. Each finding that survives the re-check becomes a
+   note, a stamp, a supersede, or a cursor edit in this cycle.
+   Return to step 2 for it. A cursor line a surviving finding names
+   moves out by the cursor rules below.
+6. Run hq finish <slug> --log "<one line for the Log>". It exits 1
+   at the first blocking line. Do what that line says and re-run. An
+   advisory: line never blocks, and neither does a :? in the read
+   block. On success it prints the size line, '<path>  N cursor
+   lines  N tokens (cursor a, read b, artifacts c, standing d)', a
+   read first: line, and resume: /handoff <slug>. The turn's final
+   message repeats the size line and the resume: line word for word,
+   and tells the user to kill this session and start a fresh one
+   before running the resume line.
+
+Command forms. stamp and note also take --batch: one item per stdin
+line, with the same arguments minus the slug. Stamp forms:
+
+    hq stamp <slug> specs/SPEC.md \\
+      --where "3. Retry" --label "refresh contract; s3 is the retry schedule"
+    hq stamp <slug> ~/code/poller/scripts/auth.py \\
+      --kind draft --label "poller; the 401 branch is under edit"
+    hq stamp <slug> specs/SPEC.md \\
+      --successor specs/SPEC-v2.md
+    hq stamp <slug> --batch <<'ROWS'
+    specs/SPEC.md --where "3. Retry" --label "the contract"
+    notes/idp-quirks.md --read-before edit --label "staging IdP quirks"
+    ROWS
+
+Note and supersede forms:
+
+    hq note <slug> decision \\
+      --headline "Refresh in-process, no sidecar" "One caller; latency is fine."
+    hq note <slug> --batch <<'ROWS'
+    constraint --headline "Never log token values" "Not even at debug."
+    dead-end --headline "httpx event hooks" "A hook cannot retry the request."
+    evidence --grade measured --open --headline "Staging IdP caps refresh at 5/min" source: notes/idp-quirks.md
+    ROWS
+    hq supersede <slug> d17 d23
+    hq supersede <slug> e03 --reason "the IdP lifted the cap"
+
+The pair that brackets a cycle:
+
+    hq begin <slug>
+    hq finish <slug> \\
+      --log "token store and refresh endpoint written"
 
 Write for a reader with no memory of this session and full access to
 the repo: short technical documentation in complete sentences, with
@@ -338,9 +416,6 @@ hq arc:
 - Write out what a standing id says. A bare id reads as nothing.
 - A cycle that only repaired the record says which fact it restored.
 - A check writes check: <n> findings applied - <what they changed>.
-
-The reviewer pass, the Skeptic, runs at /handoff check, and on a
-write only when the user's call carries --check.
 
 Ledger tiers. read_before is a tier, and stamp seeds it from the
 kind: a spec seeds always, a draft edit, all else never.

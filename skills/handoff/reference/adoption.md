@@ -79,7 +79,7 @@ Everything else:
   stamped `--read-before edit` when the cursor points at it. Touch no
   sibling file except to add.
 
-## 4. Continue at Write path step 1
+## 4. Continue at the Write path
 
 `begin` sees the conforming header with no `ledger.tsv`, runs
 `adopt`, prints `hq begin: ran adopt on existing HANDOFF.md`, and
@@ -88,7 +88,7 @@ opens cycle 2; the hand-written file is cycle 1, archived as
 and prints what still needs judgment. Each line and its move:
 
 - `label: <text>` - one per seeded label; settle each with a `stamp`
-  in write step 3.
+  in step 3 of `hq help write`.
 - `read_before=<x>: <n>` - counts by tier.
 - `gated (n): <names>` - the rows the read block will carry.
 - `where dropped: <path> '<anchor>'` - an `s<n>` or `section <n>` the

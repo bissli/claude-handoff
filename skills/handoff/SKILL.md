@@ -145,7 +145,7 @@ required.
    (review, fix, cleanup), a date, a version, a round, or a ticket id.
    Those go in the Task line. The slug is unique under `.handoff/`.
 
-When rule 2 or 3 picked the target, step 1 below runs
+When rule 2 or 3 picked the target, the write path below runs
 `hq begin <slug> --worked`. Rules 1 and 4 never pass it.
 
 What the target holds decides how `begin` starts. The write path below
@@ -197,83 +197,12 @@ Wire refresh_token() into poll() at scripts/auth.py:88, in the 401 branch.
 <!-- hq:read 68645f0c76e2 -->
 ```
 
-### Command forms
-
-`stamp` and `note` also take `--batch`: one item per stdin line, with
-the same arguments minus the slug. Stamp forms:
-
-```
-hq stamp <slug> specs/SPEC.md \
-  --where "3. Retry" --label "refresh contract; s3 is the retry schedule"
-hq stamp <slug> ~/code/poller/scripts/auth.py \
-  --kind draft --label "poller; the 401 branch is under edit"
-hq stamp <slug> specs/SPEC.md \
-  --successor specs/SPEC-v2.md
-hq stamp <slug> --batch <<'ROWS'
-specs/SPEC.md --where "3. Retry" --label "the contract"
-notes/idp-quirks.md --read-before edit --label "staging IdP quirks"
-ROWS
-```
-
-Note and supersede forms:
-
-```
-hq note <slug> decision \
-  --headline "Refresh in-process, no sidecar" "One caller; latency is fine."
-hq note <slug> --batch <<'ROWS'
-constraint --headline "Never log token values" "Not even at debug."
-dead-end --headline "httpx event hooks" "A hook cannot retry the request."
-evidence --grade measured --open --headline "Staging IdP caps refresh at 5/min" source: notes/idp-quirks.md
-ROWS
-hq supersede <slug> d17 d23
-hq supersede <slug> e03 --reason "the IdP lifted the cap"
-```
-
 ### Write path
 
-Run these steps in order.
-
-1. Run `hq begin <slug>`. It takes the lock and prints the work list.
-   The list's `cycle N begun by <session> on <host>` line names the
-   cycle. Then it prints the writing rules (`hq help write`), which
-   bind this cycle. Act on each work-list item in steps 2 and 3.
-   A lock refusal (exit 1) means another session is inside a cycle
-   under two hours old. The two refusals are `hq begin: lock held by
-   <session> on <host> since <time>; use --force to take over` and
-   `hq begin: lock file unreadable; use --force to take over`. Stop
-   and tell the user. Run `begin --force` only when the user confirms
-   that session is dead. `note`, `stamp`, and `supersede` print the
-   same two refusals under their own names, ending `run hq begin
-   <slug> --force to take over`. Stop the same way, and run that only
-   on the same confirmation. `begin` takes over a lock older than two
-   hours without `--force`.
-2. Run one `hq note` per item settled this session that a later
-   cycle must follow or know, or one `--batch` call for all of them.
-   A call that settles only this step goes in the `finish --log`
-   line, and in the commit subject where the cycle commits. Run
-   `hq supersede <slug> <old-id> <new-id>` for each ruling that
-   reverses an earlier one.
-3. Place each file this session made where `## The folder` says,
-   before its first stamp. Then run one `hq stamp` per artifact
-   created, re-read, or moved, or one `--batch` call. A refusal names
-   the way out: a successor, an archive reason, or leaving the row
-   gated.
-4. Rewrite the cursor, from `## Task` down to the first `<!-- hq:`
-   marker, by the printed rules. Carry forward every line this session
-   did not settle. Leave the header line and everything below the
-   marker alone.
-5. At `/handoff check`, or when the user's call carries `--check`,
-   run the Reviewer pass below. Each finding that survives the re-check becomes a `note`, a `stamp`, a `supersede`, or a cursor
-   edit in this cycle. Return to step 2 for it. A cursor line a
-   surviving finding names moves out by the printed rules.
-6. Run `hq finish <slug> --log "<one line for the Log>"`. It exits 1
-   at the first blocking line. Do what that line says and re-run. An
-   `advisory:` line never blocks, and neither does a `:?` in the read
-   block. On success it prints `<path>  N cursor lines  N tokens
-   (cursor a, read b, artifacts c, standing d)`, a `read first:` size
-   line, and `resume: /handoff <slug>`.
-
-The pair that brackets a cycle:
+Run `hq begin <slug>`. It takes the lock and prints the work list,
+then the steps, command forms, and rules of `hq help write`. Run the
+printed steps in order. Each binds this cycle. The last one runs
+`hq finish`:
 
 ```
 hq begin auth-refresh
@@ -281,9 +210,22 @@ hq finish auth-refresh \
   --log "token store and refresh endpoint written"
 ```
 
+A lock refusal (exit 1) means another session is inside a cycle
+under two hours old. The two refusals are `hq begin: lock held by
+<session> on <host> since <time>; use --force to take over` and
+`hq begin: lock file unreadable; use --force to take over`. Stop
+and tell the user. Run `begin --force` only when the user confirms
+that session is dead. `note`, `stamp`, and `supersede` print the
+same two refusals under their own names, ending `run hq begin
+<slug> --force to take over`. Stop the same way, and run that only
+on the same confirmation. `begin` takes over a lock older than two
+hours without `--force`.
+
 ### Reviewer pass
 
-The agent never runs the pass unasked. With the file on disk, and before `finish`, spawn the Skeptic below.
+The pass is step 5 of `hq help write`, and the agent never runs it
+unasked. With the file on disk, and before `finish`, spawn the
+Skeptic below.
 It returns one numbered item per finding, `<n>. <finding>`. Re-check
 each finding in the write session, then stop. Run the command a
 finding gives once its re-check holds. Never loop back to the
@@ -371,7 +313,7 @@ converted by `reference/adoption.md`, and the check stops there.
 Otherwise run the write path:
 
 1. `begin`.
-2. Steps 2 to 4 of the write path, for findings alone: what `open`
+2. Steps 2 to 4 of `hq help write`, for findings alone: what `open`
    printed, and later what the Skeptic returns. Each becomes a note, a
    stamp, or a cursor edit.
 3. The Reviewer pass.
@@ -420,7 +362,8 @@ finished cycle, and the `begin` and `finish` pair that files it.
 `reference/adoption.md` and `reference/example-handoff.md` sit beside
 this file.
 
-- `hq help write`: the cursor, ledger, Unfiled, and todo rules.
+- `hq help write`: the write steps, the command forms, and the
+  cursor, ledger, Unfiled, and todo rules.
 - `hq help read`: the steps after `open`.
 - `hq help anchors`: every `--where` form.
 - `hq help kinds`: kinds, tiers, and ledger fields.
