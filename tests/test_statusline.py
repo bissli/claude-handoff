@@ -2,7 +2,6 @@
 
 import json
 import os
-import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -11,26 +10,27 @@ sys.path.insert(0, os.path.join(HERE, '..', 'scripts'))
 import statusline as sl  # noqa: E402  (path must be set before this resolves)
 
 
-def test_past_escalation_the_line_names_the_multiple_of_the_handoff_point(
-        tmp_path, monkeypatch):
-    """Verify the red line reads context over the handoff point, one decimal.
+def test_the_gauge_color_changes_at_each_threshold(tmp_path, monkeypatch):
+    """Verify green below the handoff point, amber from it, red from escalation.
 
-    Mutation: dividing by the escalation point in place of the handoff
-    point, or dropping the multiple so 1.2x and 3.0x read alike.
-    Oracle: hand-computed - handoff 262K, escalation 291K: 310K reads
-    1.2x (1.1x against escalation) and 786K reads 3.0x.
+    Mutation: > in place of >= at either threshold, or the two branches
+    swapped so the escalation point turns the line amber.
+    Oracle: inputs at each threshold and one token below it, handoff
+    262,000 and escalation 291,000.
     """
     monkeypatch.setattr(sl, 'STATE_DIR', str(tmp_path))
     (tmp_path / 's.json').write_text(
         json.dumps({'handoff': 262_000, 'escalate': 291_000}))
 
-    def visible(context):
-        return re.sub(r'\x1b\[[0-9;]*m', '', sl.render({
+    def color(context):
+        return sl.render({
             'session_id': 's',
             'model': {'display_name': 'Opus 5'},
             'workspace': {'project_dir': '/x/proj'},
             'context_window': {'total_input_tokens': context},
-            }))
+            })[:5]
 
-    assert visible(310_000) == '310K/262K 1.2x over  Opus 5 proj'
-    assert visible(786_000).startswith('786K/262K 3.0x over')
+    assert color(261_999) == sl.GREEN
+    assert color(262_000) == sl.YELLOW
+    assert color(290_999) == sl.YELLOW
+    assert color(291_000) == sl.RED

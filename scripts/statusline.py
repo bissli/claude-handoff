@@ -15,10 +15,7 @@ directory::
     248K/262K  Opus 5.5 proj:auth-token
 
 and turns amber at the handoff point, red once a handoff begun there
-would have finished. Past that point it names the multiple of the
-handoff point::
-
-    310K/262K 1.2x over  Opus 5.5 proj
+would have finished.
 
 Notes
 -----
@@ -147,7 +144,7 @@ def render(payload: dict[str, Any]) -> str:
 
     size = f'{context // 1000}K/{handoff_at // 1000}K'
     if context >= escalate_at:
-        return f'{RED}{size} {context / handoff_at:.1f}x over{RESET}  {tail}'
+        return f'{RED}{size}{RESET}  {tail}'
     if context >= handoff_at:
         return f'{YELLOW}{size} handoff now{RESET}  {tail}'
     return f'{GREEN}{size}{RESET}  {tail}'
