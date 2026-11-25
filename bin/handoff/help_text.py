@@ -120,8 +120,12 @@ in each:
   the first sentence of its body. A decision, dead end, or evidence
   item prints its headline. +Nc counts the characters held back.
   Evidence prints only when the cursor cites it, and one line counts
-  the rest. Every other item prints as [id] headline, with no cap.
-  hq standing <slug> <id> prints any item in full. Ids are d
+  the rest. A decision the cursor does not cite prints only when the
+  last 100 cycles recorded it, and one line counts the older ones.
+  Every constraint and dead end prints, as [id] headline when not
+  expanded. hq standing <slug> --kind <kind> --grep <word> finds an
+  item the block leaves out. hq standing <slug> <id> prints any item
+  in full. Ids are d
   decision, c constraint, x dead end, e evidence. (cN) is the cycle
   that recorded the item.
 - Log line: <branch>@<sha> +N, where N counts the paths git reported
@@ -450,7 +454,8 @@ Cursor rules:
   without.
 - An item recorded with note or under ## Unfiled is not repeated in
   State, because the Standing block carries it. A line that cites
-  evidence ids stays, since uncited evidence leaves the block.
+  evidence, or a decision over 100 cycles old, stays, since the block
+  leaves both out unless the cursor cites them.
 - Cite a c or x id in brackets, [c07]. A bare one reads as a cycle.
   A range, [e01-e05], cites nothing.
 - No line ceiling binds the cursor. A block may hold text back,

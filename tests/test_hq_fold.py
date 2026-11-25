@@ -90,6 +90,39 @@ def test_a_cited_id_or_this_cycles_item_renders_whole(tmp_path):
     assert folded == {'d02', 'd06', 'x03'}
 
 
+def test_an_uncited_decision_past_the_window_leaves_the_block(tmp_path):
+    """A decision 100 cycles old prints nothing unless the cursor cites it.
+
+    Mutation: the window off by one either way; the window applied to a
+    constraint or dead end; a cited old decision hidden with the rest;
+    or the count line dropped or pointed at the wrong kind.
+    Oracle: hand-computed for cycle 150 - c50 is the 100th cycle back
+    and leaves, c51 stays, the cited c10 stays whole, and the c1
+    constraint and dead end stay.
+    """
+    folder = tmp_path / 'slug'
+    folder.mkdir()
+    (folder / 'ledger.tsv').write_text(ledger.LEDGER_HEADER + '\n')
+    standing = ''.join(
+        f'- [{item_id}] (c{cycle}) **Item {item_id}** Body.\n'
+        for item_id, cycle in (
+            ('c01', 1), ('x01', 1), ('d01', 10), ('d02', 50),
+            ('d03', 51)))
+    text = render.assemble_handoff(
+        folder,
+        cursor_text='## Task\nKeep d01 in force.\n',
+        header_line='Written: 2026-09-24 | Cycle: 150',
+        log_body='',
+        live={},
+        walk=[],
+        standing_text=standing,
+        cycle=150)
+    lines = markdown.split_handoff(text)['blocks']['standing'].splitlines()
+    shown = {ln[1:4] for ln in lines if ln.startswith('[')}
+    assert shown == {'c01', 'x01', 'd01', 'd03'}
+    assert '+1 older decision - hq standing slug --kind decision --grep <word>' in lines
+
+
 def test_a_row_is_whole_when_always_stamped_this_cycle_or_named(
         tmp_path, monkeypatch):
     """Four live rows print in full, one prints its path, one is counted.

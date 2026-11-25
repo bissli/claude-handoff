@@ -7,6 +7,7 @@ import re
 from handoff import ledger, markdown, paths, standing, storage
 
 _LABEL_RESIDENT = 120
+_DECISION_WINDOW = 100
 
 
 def render_read(
@@ -266,6 +267,7 @@ def render_standing(
     superseded_ids: set[str],
     slug: str,
     whole_ids: set[str],
+    old_decision_ids: set[str] | frozenset[str] = frozenset(),
 ) -> str:
     """Render the hq:standing block body.
 
@@ -279,6 +281,9 @@ def render_standing(
         Handoff slug for the hq command a held-back line ends in.
     whole_ids : set[str]
         Ids of the items that render whole.
+    old_decision_ids : set[str] or frozenset[str], default empty
+        Ids of the decisions that print nothing, counted like uncited
+        evidence. An id also in ``whole_ids`` prints whole.
 
     Returns
     -------
@@ -286,9 +291,11 @@ def render_standing(
         Block body, each kind under its heading and newest cycle first
         within it. A live item in ``whole_ids`` prints whole, and every
         other live item as ``[id] headline``. Evidence outside
-        ``whole_ids`` prints nothing and is counted on one closing line
-        of its group. A closing line naming ``hq standing <slug> <id>``
-        follows when any item printed as ``[id] headline``.
+        ``whole_ids``, and each id in ``old_decision_ids``, prints
+        nothing and is counted on one closing line of its group, which
+        names the ``hq standing`` grep that finds it. A closing line
+        naming ``hq standing <slug> <id>`` follows when any item printed
+        as ``[id] headline``.
 
     Notes
     -----
@@ -322,7 +329,8 @@ def render_standing(
         out.append(heading)
         uncited_cnt = 0
         for item in group:
-            if item['id'] not in whole_ids and prefix == 'e':
+            if (item['id'] not in whole_ids
+                and (prefix == 'e' or item['id'] in old_decision_ids)):
                 uncited_cnt += 1
                 continue
             if item['id'] not in whole_ids:
@@ -344,11 +352,16 @@ def render_standing(
                     line.rstrip(), len(held),
                     f'hq standing {slug} {item["id"]}')
             out.append(line.rstrip())
-        if uncited_cnt:
+        if uncited_cnt and prefix == 'e':
             noun = 'item' if uncited_cnt == 1 else 'items'
             out.append(
                 f'+{uncited_cnt} live evidence {noun}'
                 f' - hq standing {slug} --kind evidence --grep <word>')
+        elif uncited_cnt:
+            noun = 'decision' if uncited_cnt == 1 else 'decisions'
+            out.append(
+                f'+{uncited_cnt} older {noun}'
+                f' - hq standing {slug} --kind decision --grep <word>')
     if folded:
         out.append(f'hq standing {slug} <id> prints any item above whole')
     return '\n'.join(out)
@@ -617,7 +630,9 @@ def assemble_handoff(
     standing_text : str
         Current text of standing.md.
     cycle : int
-        Cycle being filed, whose items and stamps render whole.
+        Cycle being filed, whose items and stamps render whole. A
+        decision it does not cite prints only when recorded within the
+        last ``_DECISION_WINDOW`` cycles, counting this one.
 
     Returns
     -------
@@ -656,7 +671,12 @@ def assemble_handoff(
         item['id'] for item in s_items
         if item['id'] in cited
         or (item.get('cycle') == str(cycle) and item['prefix'] != 'e')}
-    standing_body = render_standing(s_items, s_sup, folder.name, whole_ids)
+    old_decision_ids = {
+        item['id'] for item in s_items
+        if item['prefix'] == 'd'
+        and int(item.get('cycle') or 0) <= cycle - _DECISION_WINDOW}
+    standing_body = render_standing(
+        s_items, s_sup, folder.name, whole_ids, old_decision_ids)
     _sh = '## Standing\n' + standing_body
     standing_block = (
         f'<!-- hq:standing {markdown.block_sha(_sh)} -->\n'
