@@ -2,12 +2,12 @@
 
 **A Claude Code plugin that says, in session and while there is still room, when a conversation has grown expensive enough to hand off, and ships the `/handoff` skill that hands it off.**
 
-Claude Code re-sends the whole conversation on every API call, so each turn costs more than the one before it. At the end of each turn the plugin reads the session transcript, prices the cycle, and warns at the context where handing off costs less than carrying on. `/handoff` writes the session's state to `.handoff/<slug>/`, and a fresh session reads it back and resumes.
+Claude Code re-sends the whole conversation on every API call, so each turn costs more than the one before it. At the end of each turn the plugin reads the session transcript and warns once the context has grown a fixed work budget past the cycle's first call. `/handoff` writes the session's state to `.handoff/<slug>/`, and a fresh session reads it back and resumes.
 
 ```
-218K/256K [========--] handoff in 2  ~$0.38/t opus-5-5 myproject
-262K/256K [==========] handoff now  ~$0.46/t opus-5-5 myproject
-310K/256K  1.2x over  ~$0.55/t opus-5-5 myproject
+218K/262K  Opus 5.5 myproject
+265K/262K handoff now  Opus 5.5 myproject
+310K/262K over  Opus 5.5 myproject
 ```
 
 ## The problem
@@ -96,7 +96,7 @@ The measure is an opt-in add-on. The `/hq-loop <slug>` skill writes `.handoff/<s
 
 ### The handoff point
 
-The warning sits at the context where a cycle's cost per call of work is lowest, priced from the session's own transcript: the fresh-session floor, the resume it read, the measured growth rate, and the cache TTL. Running on re-reads a growing context on every call. Handing off pays the resume and the write again. A longer resume, faster growth, or a dearer cache write moves the point out, and the dollar price of a model never moves it. The point never sits closer than one handoff write to the context where Claude Code compacts on its own. `scripts/budget.py` holds the formula and the price table. The hook says nothing on a Haiku session. [Design](docs/design.md) covers the cost model, the formula, the detection rules, and the nudge.
+The warning sits at F + W: F is the billed context of the cycle's first call, and W is the work budget, 200,000 tokens unless `HQ_WORK_BUDGET` names another count. Every cycle gets the same room for work, however large its resume. The point never sits closer than one handoff write to the context where Claude Code compacts on its own. `scripts/budget.py` holds the rule. [Design](docs/design.md) covers the cost model, the rule, the detection rules, and the nudge.
 
 ## Status line
 
@@ -111,7 +111,7 @@ A plugin cannot set the status line, so this block goes into `~/.claude/settings
 }
 ```
 
-The glob follows the installed copy across upgrades, and `sort -V` picks the newest version. For a git clone, the command names `/path/to/clone/scripts/statusline.py` instead. The line reads the growth rate and both thresholds from the file the Stop hook writes each turn, so the gauge and the warning agree. It turns amber at the handoff point and red one handoff write past it. Once the session enters a handoff thread, the thread's slug follows the directory: `myproject:login-timeout`.
+The glob follows the installed copy across upgrades, and `sort -V` picks the newest version. For a git clone, the command names `/path/to/clone/scripts/statusline.py` instead. The line shows the context against the handoff point, both in tokens. It reads both thresholds from the file the Stop hook writes each turn, so the gauge and the warning agree, and it shows no gauge before the session's first Stop. It turns amber at the handoff point and red one handoff write past it. Once the session enters a handoff thread, the thread's slug follows the directory: `myproject:login-timeout`.
 
 ## Hooks
 

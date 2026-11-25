@@ -1,38 +1,31 @@
 #!/usr/bin/env python3
-"""Status line showing the live handoff point and what a turn now costs.
+"""Status line showing context against the cycle's handoff point.
 
 Claude Code hands this command a JSON payload on stdin whose
 ``context_window.total_input_tokens`` is the billed context of the last
-API call: cache reads plus cache writes plus uncached input. That is the
-number cost tracks, since every call re-reads the whole conversation.
+API call: cache reads plus cache writes plus uncached input.
 
 The line reads::
 
-    248K/256K [=========-] handoff in 1  ~$0.44/t opus-5-5 proj
+    248K/262K  Opus 5.5 proj
 
 and, once the session is on a handoff thread, names it after the
 directory::
 
-    248K/256K [=========-] handoff in 1  ~$0.44/t opus-5-5 proj:auth-token
+    248K/262K  Opus 5.5 proj:auth-token
 
 and turns amber at the handoff point, red once a handoff begun there
-would have finished, so the moment to hand off is visible several turns
-out.
+would have finished.
 
 Notes
 -----
 - Claude Code has no plugin surface for a status line, so unlike the Stop
   hook this script cannot install itself. Point ``statusLine.command`` in
   settings.json at it; the project README gives the exact block.
-- The growth rate and both thresholds come from the state file the Stop
-  hook writes each turn, so the gauge and the warning never disagree.
-  Re-deriving them here would mean re-reading the transcript on a line
-  that repaints continuously - and would re-derive them from a rate the
-  hook has already latched, which is what must not move: a threshold
-  computed fresh on every repaint counts down to a handoff, announces
-  it, then reports room again.
-- Every threshold comes from :mod:`budget`, shared with the hook, so the
-  gauge cannot drift from the warning it is meant to anticipate.
+- Both thresholds come from the state file the Stop hook writes each
+  turn, so the gauge and the warning never disagree. Before the first
+  Stop the line shows no gauge, since the line repaints continuously
+  and reads no transcript to find the cycle's first call.
 - Ordered by what has to survive truncation. A status line sharing a
   narrow pane is cut from the right, so the two numbers that carry the
   decision lead and the directory - which the shell prompt already shows
@@ -40,15 +33,10 @@ Notes
   qualifies: it is the field a reader can most afford to lose.
 - The slug comes from a one-line file ``hq`` writes when a session
   enters a thread, for the reason the thresholds come from the hook's
-  state file: the line repaints continuously and reads no transcript.
-- Past the escalation point the bar is replaced by the multiple of the
-  handoff point, not filled in. A saturated bar reads the same at 1.2x
-  as at 3x, which is exactly the range where the reader needs to tell
-  them apart.
+  state file.
 """
 
 import json
-import math
 import os
 import sys
 from typing import Any
@@ -65,59 +53,31 @@ GREEN = '\x1b[32m'
 YELLOW = '\x1b[33m'
 RED = '\x1b[31m'
 
-BAR_CELLS = 10
 
-BAR_FILL = '='
-BAR_TRACK = '-'
-
-
-def session_state(session: str, tier: str) -> tuple[int, int, int]:
-    """Read the growth rate and the two thresholds a session is held to.
+def session_state(session: str) -> tuple[int, int]:
+    """Read the two thresholds the Stop hook stored for a session.
 
     Parameters
     ----------
     session : str
         Session id from the status line payload.
-    tier : str
-        Price tier from ``budget.model_tier``.
 
     Returns
     -------
-    tuple[int, int, int]
-        Estimated tokens added per assistant call, the handoff point, and
-        the escalation point, both in tokens.
-
-    Notes
-    -----
-    - Before the first Stop there is no state, so the handoff point is
-      priced for a fresh cycle that opened no handoff, at the fallback
-      growth rate and the 1-hour write price Claude Code writes at. The
-      first Stop replaces it with the cycle's own measurements.
-    - A file without an escalation point takes the handoff point plus
-      one handoff write, the figure the hook latches first.
+    tuple[int, int]
+        The handoff point and the escalation point, in tokens, or
+        ``(0, 0)`` before the session's first Stop. A file with no
+        escalation point takes the handoff point plus one handoff write.
     """
     safe = session.replace('/', '_')
-    per_call, handoff, escalate = budget.FALLBACK_GROWTH_PER_CALL, 0, 0
     try:
         with open(os.path.join(STATE_DIR, f'{safe}.json')) as handle:
             state = json.load(handle)
-        per_call = max(1, int(state['growth_per_call']))
         handoff = int(state.get('handoff') or 0)
         escalate = int(state.get('escalate') or 0)
-    except (OSError, ValueError, KeyError, TypeError):
-        pass
-    if handoff <= 0:
-        fresh = budget.Cycle(
-            floor=budget.FRESH_SESSION_TOKENS,
-            floor_written=budget.FRESH_SESSION_TOKENS,
-            resume_context=budget.FRESH_SESSION_TOKENS,
-            resume_sum=budget.FRESH_SESSION_TOKENS,
-            resume_output=0,
-            one_hour=budget.DEFAULT_ONE_HOUR)
-        handoff = budget.handoff_point(fresh, per_call, tier)
-    if escalate <= 0:
-        escalate = handoff + budget.HANDOFF_WRITE_TOKENS
-    return per_call, handoff, escalate
+    except (OSError, ValueError, TypeError, AttributeError):
+        return 0, 0
+    return handoff, escalate or handoff + budget.HANDOFF_WRITE_TOKENS
 
 
 def session_thread(session: str) -> str:
@@ -177,35 +137,17 @@ def render(payload: dict[str, Any]) -> str:
     thread = session_thread(session)
     if thread:
         where = f'{where}:{thread}'
-    plain = f'{DIM}{where}  {label}{RESET}'
-    if context <= 0:
-        return plain
+    tail = f'{DIM}{label} {where}{RESET}'
+    handoff_at, escalate_at = session_state(session)
+    if context <= 0 or handoff_at <= 0:
+        return tail
 
-    tier = budget.model_tier(str(model.get('id') or ''))
-    if tier is None:
-        return plain
-    per_call, handoff_at, escalate_at = session_state(session, tier)
-    per_turn = per_call * budget.CALLS_PER_TURN
-
-    cost = budget.cost_per_turn(context, tier)
     size = f'{context // 1000}K/{handoff_at // 1000}K'
-    tail = f'{DIM}~${cost:.2f}/t {tier} {where}{RESET}'
-
     if context >= escalate_at:
-        # No bar past the escalation point: it would read the same at
-        # 1.2x as at 3x, and telling those apart is the whole job from
-        # here on.
-        return (f'{RED}{size}  {context / handoff_at:.1f}x over{RESET}'
-                f'  {tail}')
-
-    filled = min(int(context / handoff_at * BAR_CELLS), BAR_CELLS)
-    bar = BAR_FILL * filled + BAR_TRACK * (BAR_CELLS - filled)
+        return f'{RED}{size} over{RESET}  {tail}'
     if context >= handoff_at:
-        color, note = YELLOW, 'handoff now'
-    else:
-        left = math.ceil((handoff_at - context) / max(per_turn, 1))
-        color, note = GREEN, f'handoff in {left}'
-    return f'{color}{size} [{bar}] {note}{RESET}  {tail}'
+        return f'{YELLOW}{size} handoff now{RESET}  {tail}'
+    return f'{GREEN}{size}{RESET}  {tail}'
 
 
 def main() -> int:

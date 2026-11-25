@@ -124,7 +124,7 @@ def test_nudge_fires_at_the_point_and_stays_silent_one_token_below(
     """Verify the threshold is inclusive and nothing fires below it.
 
     Mutation: >= narrowed to > at the context test, < widened to <=, or
-    the handoff point read from the escalation slot of load_state's tuple.
+    the handoff point read from another slot of load_state's tuple.
     Oracle: two transcripts straddling the stored handoff point by one
     token, with the emitted text naming both figures in thousands.
     """
@@ -456,8 +456,9 @@ def test_notice_speaks_before_the_first_stop_stores_a_point(
     /clear, which has no stored point until its first Stop, never hears
     the notice however far it runs.
     Oracle: no stored point, and a transcript that grows from 20K by 2K
-    a call to 418K, far past the point its own growth rate sets.
+    a call to 418K, far past its 220K point, the 20K floor plus W.
     """
+    monkeypatch.delenv('HQ_WORK_BUDGET', raising=False)
     work, _ = _arm_loop(tmp_path, monkeypatch, mark=7)
     state = pathlib.Path(context_budget.STATE_DIR) / f'{_SESSION}.json'
     state.unlink()

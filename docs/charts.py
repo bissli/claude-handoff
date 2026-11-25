@@ -11,22 +11,12 @@ reader's theme.
 
 Notes
 -----
-- Cache-read prices and the calls-per-turn rate are imported from
-  ``scripts/budget.py``, so a price change reaches the charts at the
-  same moment it reaches the hooks.
-- ``BASE_INPUT_PER_MTOK`` is the undiscounted input price, which the
-  cache-discount chart needs and the runtime never does.
 - Series colors (blue for Opus, orange for Fable, gray for full-price
   context lines) were validated for color-blind separation against
   GitHub's light (#ffffff) and dark (#0d1117) page surfaces.
 """
-import sys
 from dataclasses import dataclass
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'scripts'))
-
-import budget  # noqa: E402  (path must be set before this import resolves)
 
 # Undiscounted input price per million tokens, for the full-price
 # comparison the cache-discount chart draws.
@@ -34,6 +24,13 @@ BASE_INPUT_PER_MTOK = {
     'opus-5-5': 4.0,
     'fable-5-1': 10.0,
     }
+
+CACHE_READ_PER_MTOK = {
+    'opus-5-5': 0.20,
+    'fable-5-1': 0.25,
+    }
+
+CALLS_PER_TURN = 8.8
 
 FONT = 'system-ui, -apple-system, Segoe UI, sans-serif'
 WIDTH = 800
@@ -118,14 +115,14 @@ def dollars_per_turn(context_tokens: float, tier: str) -> float:
     context_tokens : float
         Billed context carried into the turn.
     tier : str
-        Key of ``budget.PRICES_PER_MTOK``.
+        Key of ``CACHE_READ_PER_MTOK``.
 
     Returns
     -------
     float
         Dollars for one turn, at that tier's cache-read price.
     """
-    return budget.cost_per_turn(context_tokens, tier)
+    return context_tokens / 1e6 * CACHE_READ_PER_MTOK[tier] * CALLS_PER_TURN
 
 
 def fmt(value: float) -> str:
@@ -368,7 +365,7 @@ def chart_cache_discount(t: Theme) -> str:
                                 anchor='middle'))
 
         full = (500_000 / 1e6 * BASE_INPUT_PER_MTOK[tier]
-                * budget.CALLS_PER_TURN)
+                * CALLS_PER_TURN)
         cached = dollars_per_turn(500_000, tier)
         body.extend((series_el([(sx(0), sy(0)), (sx(500), sy(full))], t.gray), series_el([(sx(0), sy(0)), (sx(500), sy(cached))], color), dot_el(sx(500), sy(full), t.gray, t.surface), dot_el(sx(500), sy(cached), color, t.surface), text_el(px1 + 10, sy(full) - 2, 'full price', t.secondary, 11), text_el(px1 + 10, sy(full) + 12, f'${full:.2f}', t.primary, 12, weight='600'), text_el(px1 + 10, sy(cached) - 2, 'cached', t.secondary, 11), text_el(px1 + 10, sy(cached) + 12, f'${cached:.2f}', t.primary, 12, weight='600')))
     body.extend(text_el(48, sy(dollars) + 4, f'${dollars}', t.muted,
@@ -415,7 +412,7 @@ def session_costs(tier: str, target_k: float | None) -> list[float]:
     Parameters
     ----------
     tier : str
-        Key of ``budget.PRICES_PER_MTOK``.
+        Key of ``CACHE_READ_PER_MTOK``.
     target_k : float or None
         Hand off when context reaches this many thousand tokens; None
         never hands off.

@@ -33,8 +33,8 @@ Notes
   context the budget hook stored. That figure dates from the last Stop,
   so it lags the turn in progress, and a ``/clear`` issues a new
   session id that has none.
-  The handoff point itself is latched per session and does not go
-  stale, so it still comes from the stored state.
+  The handoff point holds for the whole cycle, so it still comes from
+  the stored state.
 - A folder holding a live .hq.lock is inside an open cycle, so the
   agent is already doing what the message would ask. The age rule is
   hq's own: a lock its session abandoned stops silencing the nudge at
@@ -144,15 +144,12 @@ def main() -> int:
         session = str(payload.get('session_id') or 'unknown').replace('/', '_')
         state_path = os.path.join(context_budget.STATE_DIR, f'{session}.json')
         handoff_at = context_budget.load_state(state_path)[2]
-        context, model, per_call, cycle = context_budget.read_transcript(
+        context, floor = context_budget.read_transcript(
             str(payload.get('transcript_path') or ''))
-        tier = context_budget.budget.model_tier(model)
-        if loop and cycle is not None and tier is not None:
+        if loop and floor and not handoff_at:
             # A /clear issues a new session id, which has no stored
             # point until its first Stop, and that turn may never end.
-            handoff_at = context_budget.latched(
-                context_budget.budget.handoff_point(cycle, per_call, tier),
-                handoff_at)
+            handoff_at = context_budget.budget.handoff_point(floor)
         if not handoff_at:
             return 0
         if context < handoff_at:

@@ -53,11 +53,11 @@ def test_the_thread_is_named_after_the_directory_never_instead_of_it(
     it. Either loses the field the line has always carried, and the one
     ahead survives truncation at the slug's expense.
     Oracle: hand-computed - a session on auth-token in /x/myproject
-    renders a line ending 'opus myproject:auth-token'.
+    renders a line ending 'Opus 5 myproject:auth-token'.
     """
     (tmp_path / f'{_SESSION}.thread').write_text('auth-token\n')
     line = _visible(_SESSION, '/x/myproject', tmp_path, monkeypatch)
-    assert line.endswith('opus myproject:auth-token')
+    assert line.endswith('Opus 5 myproject:auth-token')
 
 
 def test_a_cd_into_the_handoff_folder_does_not_rename_the_directory(
@@ -70,7 +70,7 @@ def test_a_cd_into_the_handoff_folder_does_not_rename_the_directory(
     back, so the field reports the thread twice and the project never.
     Oracle: differential - one session rendered from the project root
     and from .handoff/auth-token under it must give the same line, and
-    that line is the hand-computed 'opus myproject:auth-token'.
+    that line is the hand-computed 'Opus 5 myproject:auth-token'.
     """
     (tmp_path / f'{_SESSION}.thread').write_text('auth-token\n')
     home = _visible(_SESSION, '/x/myproject', tmp_path, monkeypatch,
@@ -78,7 +78,7 @@ def test_a_cd_into_the_handoff_folder_does_not_rename_the_directory(
     wandered = _visible(_SESSION, '/x/myproject/.handoff/auth-token',
                         tmp_path, monkeypatch, project='/x/myproject')
     assert home == wandered
-    assert wandered.endswith('opus myproject:auth-token')
+    assert wandered.endswith('Opus 5 myproject:auth-token')
 
 
 def test_a_session_on_no_thread_renders_the_line_it_always_did(
@@ -92,7 +92,7 @@ def test_a_session_on_no_thread_renders_the_line_it_always_did(
     absent, the absent form matched against the pre-feature text.
     """
     bare = _visible(_SESSION, '/x/myproject', tmp_path, monkeypatch)
-    assert bare.endswith('opus myproject')
+    assert bare.endswith('Opus 5 myproject')
     (tmp_path / f'{_SESSION}.thread').write_text('auth-token\n')
     assert _visible(_SESSION, '/x/myproject', tmp_path, monkeypatch) != bare
 
@@ -192,7 +192,7 @@ def test_done_takes_the_session_off_the_thread_it_finished(
     assert cli.main(['done', 'auth-refresh']) == 0
     assert not (tmp_path / f'{_SESSION}.thread').exists()
     line = _visible(_SESSION, '/x/myproject', tmp_path, monkeypatch)
-    assert line.endswith('opus myproject')
+    assert line.endswith('Opus 5 myproject')
 
 
 def test_done_on_a_neighbor_leaves_the_session_where_it_is(
