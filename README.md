@@ -7,7 +7,7 @@ Claude Code re-sends the whole conversation on every API call, so each turn cost
 ```
 218K/262K  Opus 5.5 myproject
 265K/262K handoff now  Opus 5.5 myproject
-310K/262K over  Opus 5.5 myproject
+310K/262K 1.2x over  Opus 5.5 myproject
 ```
 
 ## The problem
