@@ -630,6 +630,13 @@ def verb_finish(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> i
         print(
             f'{payload_tokens - int(prev_tokens):+d} tok'
             f' since c{manifest[-1]["cycle"]}')
+    inbox = folder / '.inbox'
+    replies = sorted(
+        p.name for p in inbox.glob('re-*') if p.is_file()) if inbox.is_dir() else []
+    for name in replies:
+        print(
+            f'inbox reply left: .inbox/{name} - delete it if this cycle'
+            ' carried it, else carry it at the next write')
     rf_rows, rf_spans, _, rf_tokens = render.read_first_data(folder, live)
     anchored = sum(
         1 for r in rf_rows

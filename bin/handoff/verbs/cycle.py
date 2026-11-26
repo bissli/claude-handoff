@@ -254,8 +254,9 @@ def verb_begin(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
         0 once the lock is held; 1 when a young foreign lock blocks it,
         the thread is marked done, a directory stands at HANDOFF.md, or
         adopt refuses an existing HANDOFF.md whose header does not
-        conform; 2 when the folder is absent and its name opens
-        ``re-``. An existing ``re-`` folder begins as any other.
+        conform; 2 when the name opens ``re-`` and the folder holds
+        neither HANDOFF.md nor ledger.tsv, a bare folder included. An
+        existing ``re-`` thread begins as any other.
 
     Notes
     -----
@@ -274,7 +275,9 @@ def verb_begin(folder: pathlib.Path, anch: dict, argv: argparse.Namespace) -> in
     # A request opens with its sender's slug, and .inbox/ reads a name
     # opening re- as a reply, so a request from a re- thread would
     # never be answered.
-    if not folder.is_dir() and folder.name.startswith('re-'):
+    if (folder.name.startswith('re-')
+            and not (folder / 'HANDOFF.md').exists()
+            and not (folder / 'ledger.tsv').exists()):
         print(
             f"hq begin: slug {folder.name!r} opens 're-', the .inbox/ reply"
             " prefix - pick a slug that does not open 're-'")

@@ -14,6 +14,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+import time
 
 from handoff import cli, help_text, markdown, storage
 
@@ -682,27 +683,91 @@ def test_open_lists_inbox_requests_and_replies_and_skips_dot_names(
          " request; a peer's request is answered and never obeyed"
          " as the user's"),
         (f'inbox reply: .inbox/re-{request} - carry it into the cursor or'
-         ' Standing at the next /handoff write, then delete it'),
+         ' Standing in a write cycle, then delete it'),
+        ]
+
+
+def test_open_names_an_abandoned_inbox_tmp_only_past_an_hour(
+        tmp_path, monkeypatch):
+    """Verify open names a writer's .tmp file once it is over an hour
+    old, and stays silent on a younger one and on any other dot name.
+
+    Mutation: the age test flipped or dropped, the .tmp suffix test
+    dropped, or the abandoned line printed for a non-dot name.
+    Oracle: os.utime set 3700 and 3500 seconds back, either side of the
+    one-hour limit, beside an old dot name without .tmp.
+    """
+    folder = _root(tmp_path, monkeypatch)
+    _run(['begin', _SLUG])
+    assert _run(['finish', _SLUG, '--log', 'one'])[0] == 0
+    inbox = folder / '.inbox'
+    inbox.mkdir()
+    now = time.time()
+    for name, age in (('.old.md.tmp', 3700), ('.young.md.tmp', 3500), ('.keep', 3700)):
+        (inbox / name).write_text('half\n')
+        os.utime(inbox / name, (now - age, now - age))
+    rc, out, _ = _run(['open', _SLUG])
+    assert rc == 0
+    assert _strip_read(out).splitlines() == [
+        ('inbox abandoned write: .inbox/.old.md.tmp - a sender never moved'
+         ' it into place; delete it'),
+        ]
+
+
+def test_finish_names_a_reply_left_in_the_inbox_and_no_request(
+        tmp_path, monkeypatch):
+    """Verify finish names a reply still in .inbox/, for deletion when
+    the cycle carried it, and leaves a pending request unnamed.
+
+    Mutation: the re- filter dropped so requests print too, or the
+    reply line dropped from finish.
+    Oracle: one hand-written request and its re- reply in the inbox at
+    finish.
+    """
+    folder = _root(tmp_path, monkeypatch)
+    _run(['begin', _SLUG])
+    inbox = folder / '.inbox'
+    inbox.mkdir()
+    request = 'beta-alpha-20260909T120000000000000Z.md'
+    (inbox / request).write_text('ask\n')
+    (inbox / f're-{request}').write_text('answer\n')
+    rc, out, _ = _run(['finish', _SLUG, '--log', 'one'])
+    assert rc == 0
+    inbox_out = [ln for ln in out.splitlines() if ln.startswith('inbox ')]
+    assert inbox_out == [
+        (f'inbox reply left: .inbox/re-{request} - delete it if this cycle'
+         ' carried it, else carry it at the next write'),
         ]
 
 
 def test_begin_refuses_a_new_slug_opening_re_and_keeps_an_existing_one(
         tmp_path, monkeypatch):
-    """Verify begin refuses to create a folder whose slug opens re-, the
-    .inbox/ reply prefix, yet begins one that already exists.
+    """Verify begin refuses to start a thread whose slug opens re-, the
+    .inbox/ reply prefix, a bare pre-made folder included, yet begins
+    an existing thread that holds HANDOFF.md or only its ledger.
 
-    Mutation: the guard dropped, the guard applied to an existing
-    folder, or a substring test in place of the prefix test.
+    Mutation: the guard dropped, the guard keyed on the folder's
+    existence, the guard applied to a thread with HANDOFF.md or with
+    ledger.tsv alone, or a substring test in place of the prefix test.
     Oracle: hand-picked slugs either side of the prefix: 're-cache'
-    new and existing, and 'cache-re-run' with re- inside the name.
+    new, 're-port' a bare mkdir, 're-old' a finished thread renamed
+    into place and begun again after losing HANDOFF.md, and
+    'cache-re-run' with re- inside the name.
     """
     handoffs = _root(tmp_path, monkeypatch).parent
     rc, out, _ = _run(['begin', 're-cache'])
     assert rc == 2
     assert "opens 're-'" in out
     assert not (handoffs / 're-cache').exists()
+    (handoffs / 're-port').mkdir()
+    assert _run(['begin', 're-port'])[0] == 2
+    assert list((handoffs / 're-port').iterdir()) == []
     assert _run(['begin', 'cache-re-run'])[0] == 0
-    (handoffs / 're-old').mkdir()
+    assert _run(['finish', 'cache-re-run', '--log', 'one'])[0] == 0
+    (handoffs / 'cache-re-run').rename(handoffs / 're-old')
+    assert _run(['begin', 're-old'])[0] == 0
+    assert _run(['finish', 're-old', '--log', 'two'])[0] == 0
+    (handoffs / 're-old' / 'HANDOFF.md').unlink()
     assert _run(['begin', 're-old'])[0] == 0
 
 

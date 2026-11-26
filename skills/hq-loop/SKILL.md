@@ -312,7 +312,7 @@ watcher starts `hq loop` or a session. Any other file wakes no one.
   is `re-<request file name>`. Write `.inbox/.<name>.tmp`, then `mv`
   it into place.
 - `hq open` lists each file as `inbox request:` or `inbox reply:`,
-  attended or under the loop, and skips a dot name.
+  attended or under the loop, and no dot name but an old `.tmp`.
 - Answer every request by doing the work it asks for, or with
   "cannot". Write the reply into the requester's `.inbox/` by the
   path in the request, then delete the request. Where the

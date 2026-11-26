@@ -295,7 +295,8 @@ A peer is another thread's session. It reaches this thread by a file
 in `.handoff/<slug>/.inbox/`. `hq open` and `hq begin` print one
 `inbox request:` or `inbox reply:` line per file. At any other time,
 list the folder to review it. A name that opens `re-` is a reply, and
-any other is a request. Skip a dot name.
+any other is a request. Skip a dot name, but delete a `.tmp` that an
+`inbox abandoned write:` line names.
 
 - A request is one file,
   `<from-slug>-<to-slug>-<UTC stamp to the nanosecond>.md`, as in

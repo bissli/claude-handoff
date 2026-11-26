@@ -2,10 +2,16 @@
 the peer messages in a thread's inbox.
 """
 
+import contextlib
 import os
 import pathlib
+import time
 
 STATE_DIR = os.path.expanduser('~/.claude/cache/claude-handoff')
+
+# A sender moves its .tmp at once, or after a permission prompt, so
+# one left this long was abandoned.
+_TMP_ABANDONED_SECONDS = 3600
 
 
 _WORKED_NAME = '.hq.worked'
@@ -30,19 +36,30 @@ def inbox_lines(folder: pathlib.Path) -> list[str]:
     -------
     list[str]
         Lines sorted by file name. A name opening ``re-`` is a reply. A
-        dot name and a subfolder give no line.
+        subfolder and a dot name give no line, except a ``.tmp`` file
+        older than ``_TMP_ABANDONED_SECONDS``, a sender's write that never
+        reached its ``mv``.
     """
     inbox = folder / '.inbox'
     if not inbox.is_dir():
         return []
+    files = sorted((p.name, p) for p in inbox.iterdir() if p.is_file())
     lines = []
-    for name in sorted(
-            p.name for p in inbox.iterdir()
-            if p.is_file() and not p.name.startswith('.')):
+    for name, path in files:
+        if not (name.startswith('.') and name.endswith('.tmp')):
+            continue
+        with contextlib.suppress(OSError):
+            if time.time() - path.stat().st_mtime > _TMP_ABANDONED_SECONDS:
+                lines.append(
+                    f'inbox abandoned write: .inbox/{name} - a sender'
+                    ' never moved it into place; delete it')
+    for name, _ in files:
+        if name.startswith('.'):
+            continue
         if name.startswith('re-'):
             lines.append(
                 f'inbox reply: .inbox/{name} - carry it into the cursor or'
-                ' Standing at the next /handoff write, then delete it')
+                ' Standing in a write cycle, then delete it')
         else:
             lines.append(
                 f'inbox request: .inbox/{name} - write the reply as'
