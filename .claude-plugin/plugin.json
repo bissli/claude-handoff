@@ -1,6 +1,6 @@
 {
   "name": "claude-handoff",
-  "version": "0.12.3",
+  "version": "0.12.4",
   "description": "Carries one task across many Claude Code sessions: each session hands off to .handoff/<slug>/ at a work budget, the next resumes, and hq loop runs the cycle unattended",
   "author": {
     "name": "bissli"
